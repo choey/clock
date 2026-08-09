@@ -549,16 +549,56 @@ def resolve_zone(token, at):
 
 
 def resolve_zones(zone_list, at):
-    """Turn the comma-separated list into faces, left to right."""
+    """Turn the comma-separated list into (token, zone) pairs, left to right.
+
+    The token is carried along because merge_zones labels a face with the
+    spellings that asked for it, not just the zone it landed on.
+    """
     if not zone_list:
-        return [None]
+        return [("", None)]
     out = []
     for token in zone_list.split(","):
         token = token.strip(" \t")
         if not token:
             raise ClockError(f'empty zone in "{zone_list}"')
-        out.append(resolve_zone(token, at))
+        out.append((token, resolve_zone(token, at)))
     return out
+
+
+def zone_label(abbr, tokens):
+    """The name written over one face.
+
+    Just the abbreviation, unless more than one spelling collapsed onto this
+    face -- then each spelling that reads differently is named too, because
+    that is the only place the ambiguity is visible. PDT,PDT asked the same
+    question twice and gets one plain answer.
+    """
+    if len(tokens) < 2:
+        return abbr
+    return "/".join([abbr] + [t for t in tokens if t.upper() != abbr.upper()])
+
+
+def merge_zones(zones, now):
+    """Collapse zones that show the same wall clock at `now` into one face.
+
+    Keyed on abbreviation and offset, the same test country_zone uses: however
+    two tokens were spelled, and whether or not one resolves onto the other,
+    they are one clock if they read alike. That is a property of the instant,
+    not of the zones -- PDT and PT are one clock in July and two in January --
+    so this regroups every frame rather than once at startup, and a grid
+    crossing a daylight-saving boundary splits itself as it happens.
+    """
+    out, index = [], {}
+    for token, zone in zones:
+        t = in_zone(now, zone)
+        key = (f"{t:%Z}", int(t.utcoffset().total_seconds()))
+        if key not in index:
+            index[key] = len(out)
+            out.append((key[0], [], zone))
+        _, tokens, _ = out[index[key]]
+        if token and not any(token.upper() == seen.upper() for seen in tokens):
+            tokens.append(token)
+    return [(zone_label(abbr, tokens), zone) for abbr, tokens, zone in out]
 
 
 def in_zone(t, zone):
@@ -573,14 +613,8 @@ def truncate(s, n):
 
 
 def digital(t):
-    """The readout under one face, e.g. "PDT: 09:53:07.123".
-
-    The clock part is always 12 characters, so the label gets whatever is left;
-    in a grid an over-long line would shove every column to its right out of
-    true.
-    """
-    label = truncate(f"{t:%Z}", COLS - 14)
-    return truncate(f"{label}: {t:%H:%M:%S}.{t.microsecond // 1000:03d}", COLS)
+    """The clock under one face, always 12 characters."""
+    return f"{t:%H:%M:%S}.{t.microsecond // 1000:03d}"
 
 
 def chunk_count(n, per_row):
@@ -589,25 +623,28 @@ def chunk_count(n, per_row):
 
 
 def frame_height(chunks):
-    """The rows a grid occupies: each chunk is a face plus its digital line,
-    and chunks are separated by one blank row."""
-    return chunks * (ROWS + 1) + (chunks - 1)
+    """The rows a grid occupies: each chunk is a face, its zone name and its
+    digital line, and chunks are separated by one blank row."""
+    return chunks * (ROWS + 2) + (chunks - 1)
 
 
-def frame(zones, now, per_row):
-    """Draw the whole grid: zones left to right, wrapping every per_row.
+def frame(faces, now, per_row):
+    """Draw the whole grid: faces left to right, wrapping every per_row.
 
     A short last row is left-aligned so the column gutters stay lined up.
     """
     gap = " " * GAP
     rows = []
-    for ci in range(chunk_count(len(zones), per_row)):
-        chunk = zones[ci * per_row : (ci + 1) * per_row]
+    for ci in range(chunk_count(len(faces), per_row)):
+        chunk = faces[ci * per_row : (ci + 1) * per_row]
         if ci > 0:
             rows.append("")
-        times = [in_zone(now, z) for z in chunk]
-        faces = [face(t) for t in times]
-        rows.extend(gap.join(row) for row in zip(*faces))
+        times = [in_zone(now, z) for _, z in chunk]
+        drawn = [face(t) for t in times]
+        rows.extend(gap.join(row) for row in zip(*drawn))
+        rows.append(
+            gap.join(f"{truncate(label, COLS):^{COLS}}" for label, _ in chunk)
+        )
         rows.append(gap.join(f"{digital(t):^{COLS}}" for t in times))
     return rows
 
@@ -734,9 +771,10 @@ def run(argv):
                 # handler would interact with the sleep below and drift out of
                 # step with the Go port's loop.
                 cols, lines = term_size()
-                per_row = fit_per_row(want_per_row, len(zones), cols)
-                fit_height(chunk_count(len(zones), per_row), lines)
-                rows = frame(zones, now, per_row)
+                faces = merge_zones(zones, now)
+                per_row = fit_per_row(want_per_row, len(faces), cols)
+                fit_height(chunk_count(len(faces), per_row), lines)
+                rows = frame(faces, now, per_row)
 
                 # rewind over the rows drawn last time, repaint in one write.
                 # CLEAR_EOL wipes a longer previous line, CLEAR_BELOW a taller

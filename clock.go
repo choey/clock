@@ -626,13 +626,27 @@ func resolveZone(token string, at time.Time) (*time.Location, error) {
 	return nil, unknownZone(token)
 }
 
-// resolveZones turns the comma-separated list into faces, left to right.
-func resolveZones(list string, at time.Time) ([]*time.Location, error) {
+// request is one zone as it was asked for: the token the user typed, and where
+// it landed. The token is carried along because mergeZones labels a face with
+// the spellings that asked for it, not just the zone it landed on.
+type request struct {
+	token string
+	loc   *time.Location
+}
+
+// dial is one face after merging: the name written over it, and its zone.
+type dial struct {
+	label string
+	loc   *time.Location
+}
+
+// resolveZones turns the comma-separated list into requests, left to right.
+func resolveZones(list string, at time.Time) ([]request, error) {
 	if list == "" {
-		return []*time.Location{time.Local}, nil
+		return []request{{"", time.Local}}, nil
 	}
 	tokens := strings.Split(list, ",")
-	out := make([]*time.Location, 0, len(tokens))
+	out := make([]request, 0, len(tokens))
 	for _, tok := range tokens {
 		tok = strings.Trim(tok, " \t")
 		if tok == "" {
@@ -642,9 +656,74 @@ func resolveZones(list string, at time.Time) ([]*time.Location, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, loc)
+		out = append(out, request{tok, loc})
 	}
 	return out, nil
+}
+
+// zoneLabel is the name written over one face: just the abbreviation, unless
+// more than one spelling collapsed onto this face -- then each spelling that
+// reads differently is named too, because that is the only place the ambiguity
+// is visible. PDT,PDT asked the same question twice and gets one plain answer.
+func zoneLabel(abbr string, tokens []string) string {
+	if len(tokens) < 2 {
+		return abbr
+	}
+	parts := []string{abbr}
+	for _, t := range tokens {
+		if !strings.EqualFold(t, abbr) {
+			parts = append(parts, t)
+		}
+	}
+	return strings.Join(parts, "/")
+}
+
+// mergeZones collapses zones that show the same wall clock at now into one
+// face. Keyed on abbreviation and offset, the same test countryZone uses:
+// however two tokens were spelled, and whether or not one resolves onto the
+// other, they are one clock if they read alike. That is a property of the
+// instant, not of the zones -- PDT and PT are one clock in July and two in
+// January -- so this regroups every frame rather than once at startup, and a
+// grid crossing a daylight-saving boundary splits itself as it happens.
+func mergeZones(zones []request, now time.Time) []dial {
+	type group struct {
+		abbr   string
+		tokens []string
+		loc    *time.Location
+	}
+	var groups []*group
+	index := map[string]*group{}
+
+	for _, z := range zones {
+		t := now.In(z.loc)
+		abbr, off := t.Zone()
+		key := fmt.Sprintf("%s|%d", abbr, off)
+		g, seen := index[key]
+		if !seen {
+			g = &group{abbr: abbr, loc: z.loc}
+			index[key] = g
+			groups = append(groups, g)
+		}
+		if z.token == "" {
+			continue
+		}
+		dup := false
+		for _, prev := range g.tokens {
+			if strings.EqualFold(prev, z.token) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			g.tokens = append(g.tokens, z.token)
+		}
+	}
+
+	out := make([]dial, len(groups))
+	for i, g := range groups {
+		out[i] = dial{zoneLabel(g.abbr, g.tokens), g.loc}
+	}
+	return out
 }
 
 // center pads s to w columns, the extra space going on the right. Counts runes,
@@ -675,8 +754,8 @@ func truncate(s string, n int) string {
 // digital renders the readout under one face, e.g. "PDT: 09:53:07.123". The
 // clock part is always 12 characters, so the label gets whatever is left; in a
 // grid an over-long line would shove every column to its right out of true.
-func digital(label string, t time.Time) string {
-	return truncate(truncate(label, colsN-14)+": "+t.Format("15:04:05.000"), colsN)
+func digital(t time.Time) string {
+	return t.Format("15:04:05.000")
 }
 
 // chunkCount is how many rows of faces perRow produces.
@@ -684,48 +763,50 @@ func chunkCount(n, perRow int) int {
 	return (n + perRow - 1) / perRow
 }
 
-// frameHeight counts the rows a grid occupies: each chunk is a face plus its
-// digital line, and chunks are separated by one blank row.
+// frameHeight counts the rows a grid occupies: each chunk is a face, its zone
+// name and its digital line, and chunks are separated by one blank row.
 func frameHeight(chunks int) int {
-	return chunks*(rowsN+1) + (chunks - 1)
+	return chunks*(rowsN+2) + (chunks - 1)
 }
 
-// frame draws the whole grid: zones left to right, wrapping every perRow. A
+// frame draws the whole grid: faces left to right, wrapping every perRow. A
 // short last row is left-aligned so the column gutters stay lined up.
-func frame(zones []*time.Location, now time.Time, perRow int) []string {
+func frame(faces []dial, now time.Time, perRow int) []string {
 	sep := strings.Repeat(" ", gap)
-	chunks := chunkCount(len(zones), perRow)
+	chunks := chunkCount(len(faces), perRow)
 	rows := make([]string, 0, frameHeight(chunks))
 
 	for ci := 0; ci < chunks; ci++ {
 		hi := (ci + 1) * perRow
-		if hi > len(zones) {
-			hi = len(zones)
+		if hi > len(faces) {
+			hi = len(faces)
 		}
-		chunk := zones[ci*perRow : hi]
+		chunk := faces[ci*perRow : hi]
 
 		if ci > 0 {
 			rows = append(rows, "")
 		}
 
 		times := make([]time.Time, len(chunk))
-		faces := make([][]string, len(chunk))
-		for i, loc := range chunk {
-			times[i] = now.In(loc)
-			faces[i] = face(times[i])
+		drawn := make([][]string, len(chunk))
+		for i, d := range chunk {
+			times[i] = now.In(d.loc)
+			drawn[i] = face(times[i])
 		}
 		for r := 0; r < rowsN; r++ {
-			parts := make([]string, len(faces))
-			for i := range faces {
-				parts[i] = faces[i][r]
+			parts := make([]string, len(drawn))
+			for i := range drawn {
+				parts[i] = drawn[i][r]
 			}
 			rows = append(rows, strings.Join(parts, sep))
 		}
+		labels := make([]string, len(chunk))
 		digits := make([]string, len(chunk))
-		for i := range chunk {
-			name, _ := times[i].Zone()
-			digits[i] = center(digital(name, times[i]), colsN)
+		for i, d := range chunk {
+			labels[i] = center(truncate(d.label, colsN), colsN)
+			digits[i] = center(digital(times[i]), colsN)
 		}
+		rows = append(rows, strings.Join(labels, sep))
 		rows = append(rows, strings.Join(digits, sep))
 	}
 	return rows
@@ -907,14 +988,15 @@ func run() error {
 		// Python one, where a signal handler would interact with sleep()
 		// under PEP 475 and drift out of step.
 		cols, lines := termSize()
-		perRow, err := fitPerRow(wantPerRow, len(zones), cols)
+		faces := mergeZones(zones, now)
+		perRow, err := fitPerRow(wantPerRow, len(faces), cols)
 		if err != nil {
 			return err
 		}
-		if err := fitHeight(chunkCount(len(zones), perRow), lines); err != nil {
+		if err := fitHeight(chunkCount(len(faces), perRow), lines); err != nil {
 			return err
 		}
-		rows := frame(zones, now, perRow)
+		rows := frame(faces, now, perRow)
 
 		// rewind over the rows drawn last time, then repaint in one write.
 		// clearEOL wipes a longer previous line, clearBelow a taller previous

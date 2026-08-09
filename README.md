@@ -1,8 +1,8 @@
 # clock
 
-A terminal clock: one analog face per time zone, digital readout underneath,
-wrapped into a grid. Two independent implementations — Python and Go — that
-render byte-for-byte identical output.
+A terminal clock: one analog face per time zone, its name and digital readout
+underneath, wrapped into a grid. Two independent implementations — Python and
+Go — that render byte-for-byte identical output.
 
 ```
 ⠀⠀⠀⠀⢀⣠⡴⠒⠋⠉⠉⣿⠉⠉⠙⠒⢦⣄⡀⠀⠀⠀⠀
@@ -16,7 +16,8 @@ render byte-for-byte identical output.
 ⠀⠱⡅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⢄⠀⠀⢨⠎⠀
 ⠀⠀⠈⠢⣄⠀⡀⠀⠀⠀⠀06⠀⠀⠀⢀⠈⣠⠔⠁⠀⠀
 ⠀⠀⠀⠀⠀⠙⠳⠤⣀⣀⣀⣿⣀⣀⣀⠤⠞⠋⠀⠀⠀⠀⠀
-   EDT: 11:07:23.400
+          EDT
+     11:07:23.400
 ```
 
 ## Running
@@ -79,11 +80,13 @@ side by side in July and the difference shows:
 
 ```
 $ clock PST,PT,PDT
-   PST: 12:00:00.000         PDT: 13:00:00.000         PDT: 13:00:00.000
+          PST                     PDT/PT
+     12:00:00.000              13:00:00.000
 ```
 
-`PST` stays on −08:00 while `PT` has moved to `PDT`. In January all three read
-differently again, with `PT` back on `PST`.
+`PST` stays on −08:00 while `PT` has moved to `PDT` — and `PT` and `PDT`, being
+the same clock in July, have merged into one face. In January they separate
+again, with `PT` back on `PST`.
 
 Two of these carry a judgement call. `CST` is the US Central reading, −06:00,
 not China — for China use `CN` or `Asia/Shanghai`. And `HDT` is −09:00, the
@@ -98,6 +101,19 @@ clock: US spans 8 time zones; name one: America/New_York, America/Chicago, ...
 
 Countries whose zones merely agree — Germany lists both `Europe/Berlin` and the
 `Europe/Busingen` enclave — collapse to one and resolve without complaint.
+
+### Duplicates
+
+Two zones showing the same wall clock are one face, whatever you called them:
+`PDT,PDT`, `UK,BST` and `ET,America/New_York` each draw once. The face is
+labelled with the abbreviation, and when more than one spelling collapsed onto
+it, with those spellings too — `UK,BST` reads `BST/UK`, while `PDT,PDT` was
+never ambiguous and stays plain `PDT`.
+
+Whether two zones agree is a property of the instant, not of the zones, so the
+grouping is redone every frame. `PT` and `PDT` are one face in July and two in
+January, and a clock left running across the boundary splits itself as it
+happens.
 
 ### ZIP code accuracy
 
@@ -165,11 +181,11 @@ defaults. A whole frame is then
 
 ```
 width  = perRow * COLS + (perRow - 1) * GAP
-height = rows * (ROWS + 1) + (rows - 1)
+height = rows * (ROWS + 2) + (rows - 1)
 ```
 
-so one clock is 23x12, three across is 75x12, four zones at `-n 2` is 49x25,
-and five zones at `-n 2` is 49x38.
+so one clock is 23x13, three across is 75x13, four zones at `-n 2` is 49x27,
+and five zones at `-n 2` is 49x41.
 
 ## Terminal requirements
 

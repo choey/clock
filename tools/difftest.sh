@@ -74,6 +74,8 @@ for zones in "" ET ET,PT,UTC local UTC EST MST GMT CET Asia/Kathmandu Etc/GMT+5 
 	Europe/Berlin,Asia/Tokyo,ET,PT,UTC,JP JP GB DE FR IN NZ US AU RU CA \
 	94110 941 10001 99546 00501 PST PDT EDT CDT CST MDT HDT AKST AKDT ZZ QQ \
 	PST,PT,EST,ET MST,MT,HST,HT \
+	PDT,PDT PDT,pdt PDT,PT PT,PDT UTC,UTC,UTC UK,BST PST,PT,PDT \
+	ET,America/New_York local,local ET,ET,PT,PT,UTC \
 	"ET , PT" "ET,,PT" "/etc/passwd" "../../etc/passwd" "Europe/Bogus" \
 	1234 1 123456 AET,ACT,AWT,NZT,IST,JST,KST,SGT,HKT,BST,UK,AKT,HT; do
 	check "$SUMMER" 200 60 "$zones"

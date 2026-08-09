@@ -51,7 +51,8 @@ usage: clock [-n N | --per-row N] [ZONES]
 A zone is an IANA name (Europe/Berlin), a regional abbreviation (ET CT MT PT
 AKT HT BST IST JST AET ...), a 2-letter country code (JP, GB), or a US ZIP
 code (94110). ET/CT/MT/PT follow daylight saving, so they read EST or EDT
-depending on the date; EST/MST/HST are the fixed zones that never shift.
+depending on the date; EST/EDT/PST/PDT and the rest are the fixed offsets,
+which never shift.
 
 Press q or Ctrl+C to quit.
 
@@ -379,18 +380,26 @@ var zoneAliases = []struct{ name, zone string }{
 	{"UK", "Europe/London"},
 }
 
-// zoneHints catch the half of each daylight-saving pair that names a fixed
-// offset rather than a place. Consulted only when everything else has failed.
-var zoneHints = []struct{ name, try string }{
-	{"AKDT", "AKT"},
-	{"AKST", "AKT"},
-	{"CDT", "CT"},
-	{"CST", "CT"},
-	{"EDT", "ET"},
-	{"HDT", "HT"},
-	{"MDT", "MT"},
-	{"PDT", "PT"},
-	{"PST", "PT"},
+// zoneFixed catches the half of each daylight-saving pair that names an offset
+// rather than a place: nowhere is on PDT in January, so these cannot be looked
+// up in the tz database. Each becomes a fixed-offset clock that never shifts,
+// which is precisely what the name means -- PST is Los Angeles in winter, and
+// stays there in July while PT moves to PDT. EST, MST and HST are absent
+// because the tz database already carries them as fixed zones, and CST is the
+// US reading; China is CN or Asia/Shanghai.
+var zoneFixed = []struct {
+	name   string
+	offset int
+}{
+	{"AKDT", -8 * 3600},
+	{"AKST", -9 * 3600},
+	{"CDT", -5 * 3600},
+	{"CST", -6 * 3600},
+	{"EDT", -4 * 3600},
+	{"HDT", -9 * 3600},
+	{"MDT", -6 * 3600},
+	{"PDT", -7 * 3600},
+	{"PST", -8 * 3600},
 }
 
 func aliasNames() string {
@@ -566,20 +575,14 @@ func zipZone(token string) (*time.Location, error) {
 }
 
 func unknownZone(token string) error {
-	up := strings.ToUpper(token)
-	for _, h := range zoneHints {
-		if h.name == up {
-			return fmt.Errorf(
-				"\"%s\" names a daylight-saving offset, not a place; try %s", token, h.try)
-		}
-	}
 	return fmt.Errorf("unknown zone \"%s\"; use an IANA name (Europe/Berlin), "+
 		"an abbreviation (%s), a 2-letter country code (JP), or a US ZIP code",
 		token, aliasNames())
 }
 
 // resolveZone turns one token into a location. Order matters: the alias table
-// is consulted before the tz database only for names the database lacks, and
+// is consulted before the tz database only for names the database lacks, the
+// fixed-offset table only after it so that real zones win, and
 // "local" and "" are intercepted because Go and Python disagree about both --
 // LoadLocation("Local") works where ZoneInfo("Local") raises, and
 // LoadLocation("") quietly returns UTC where ZoneInfo("") raises.
@@ -605,6 +608,11 @@ func resolveZone(token string, at time.Time) (*time.Location, error) {
 	}
 	if loc, err := time.LoadLocation(token); err == nil {
 		return loc, nil
+	}
+	for _, f := range zoneFixed {
+		if f.name == up {
+			return time.FixedZone(f.name, f.offset), nil
+		}
 	}
 	if isCountryCode(up) {
 		loc, err := countryZone(up, at)

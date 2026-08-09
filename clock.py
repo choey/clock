@@ -12,7 +12,7 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 # The clock needs a POSIX terminal: cbreak mode via termios, and select() on
@@ -43,7 +43,8 @@ usage: clock [-n N | --per-row N] [ZONES]
 A zone is an IANA name (Europe/Berlin), a regional abbreviation (ET CT MT PT
 AKT HT BST IST JST AET ...), a 2-letter country code (JP, GB), or a US ZIP
 code (94110). ET/CT/MT/PT follow daylight saving, so they read EST or EDT
-depending on the date; EST/MST/HST are the fixed zones that never shift.
+depending on the date; EST/EDT/PST/PDT and the rest are the fixed offsets,
+which never shift.
 
 Press q or Ctrl+C to quit.
 
@@ -334,18 +335,23 @@ ZONE_ALIASES = (
     ("UK", "Europe/London"),
 )
 
-# The half of each daylight-saving pair that names a fixed offset rather than a
-# place. Consulted only when everything else has failed.
-ZONE_HINTS = (
-    ("AKDT", "AKT"),
-    ("AKST", "AKT"),
-    ("CDT", "CT"),
-    ("CST", "CT"),
-    ("EDT", "ET"),
-    ("HDT", "HT"),
-    ("MDT", "MT"),
-    ("PDT", "PT"),
-    ("PST", "PT"),
+# The half of each daylight-saving pair that names an offset rather than a
+# place: nowhere is on PDT in January, so these cannot be looked up in the tz
+# database. Each becomes a fixed-offset clock that never shifts, which is
+# precisely what the name means -- PST is Los Angeles in winter, and stays
+# there in July while PT moves to PDT. EST, MST and HST are absent because the
+# tz database already carries them as fixed zones, and CST is the US reading;
+# China is CN or Asia/Shanghai. Sorted, same order as clock.go's table.
+ZONE_FIXED = (
+    ("AKDT", -8 * 3600),
+    ("AKST", -9 * 3600),
+    ("CDT", -5 * 3600),
+    ("CST", -6 * 3600),
+    ("EDT", -4 * 3600),
+    ("HDT", -9 * 3600),
+    ("MDT", -6 * 3600),
+    ("PDT", -7 * 3600),
+    ("PST", -8 * 3600),
 )
 
 # US ZIP prefixes to time zones, run-length encoded as fixed four-byte records
@@ -496,12 +502,6 @@ def country_zone(cc, at):
 
 
 def unknown_zone(token):
-    up = token.upper()
-    for name, try_this in ZONE_HINTS:
-        if name == up:
-            return ClockError(
-                f'"{token}" names a daylight-saving offset, not a place; try {try_this}'
-            )
     return ClockError(
         f'unknown zone "{token}"; use an IANA name (Europe/Berlin), '
         f"an abbreviation ({alias_names()}), a 2-letter country code (JP), "
@@ -513,7 +513,8 @@ def resolve_zone(token, at):
     """Turn one token into a tzinfo, or None meaning the system's local zone.
 
     Order matters: the alias table is consulted before the tz database only for
-    names the database lacks, and "local" and "" are intercepted because Python
+    names the database lacks, the fixed-offset table only after it so that real
+    zones win, and "local" and "" are intercepted because Python
     and Go disagree about both -- ZoneInfo("Local") raises where
     LoadLocation("Local") works, and ZoneInfo("") raises where LoadLocation("")
     quietly returns UTC.
@@ -537,6 +538,9 @@ def resolve_zone(token, at):
         return ZoneInfo(token)
     except Exception:
         pass
+    for name, offset in ZONE_FIXED:
+        if name == up:
+            return timezone(timedelta(seconds=offset), name)
     if len(up) == 2 and "A" <= up[0] <= "Z" and "A" <= up[1] <= "Z":
         found = country_zone(up, at)
         if found is not None:

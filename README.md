@@ -61,6 +61,7 @@ Resolved in this order, first match winning:
 | `ET` `CT` `MT` `PT` | `America/New_York` and friends | follows daylight saving, so it reads `EST` in winter and `EDT` in summer |
 | `AKT` `HT` `BST` `UK` `IST` `JST` `KST` `SGT` `HKT` `AET` `ACT` `AWT` `NZT` | the obvious place | same |
 | `Europe/Berlin` `UTC` `EST` `MST` `HST` `GMT` `CET` `Etc/GMT+5` | itself | any name the tz database knows |
+| `PST` `PDT` `EDT` `CST` `CDT` `MDT` `AKST` `AKDT` `HDT` | that exact offset | a fixed clock that never shifts |
 | `JP` `GB` `DE` | that country's zone | 2-letter ISO code, via `zone.tab` |
 | `94110` `941` | the zone that ZIP is in | US only |
 | `local` | your system zone | |
@@ -71,8 +72,22 @@ that never shifts**, while **`ET` is the eastern US, which does**. Same for
 `MST` vs `MT` and `HST` vs `HT`. `GMT` and `CET` are likewise left alone —
 aliasing `GMT` to `Europe/London` would make it read `BST` every July.
 
-`EDT`, `PST`, `PDT`, `CST` and the rest name an offset rather than a place, so
-they are not zones at all; the clock says so and points at the regional form.
+`PST`, `PDT`, `EDT` and the rest name an offset rather than a place — nowhere
+is on `PDT` in January — so the tz database has nothing to look up. They become
+fixed-offset clocks instead, which is exactly what the names mean. Put a pair
+side by side in July and the difference shows:
+
+```
+$ clock PST,PT,PDT
+   PST: 12:00:00.000         PDT: 13:00:00.000         PDT: 13:00:00.000
+```
+
+`PST` stays on −08:00 while `PT` has moved to `PDT`. In January all three read
+differently again, with `PT` back on `PST`.
+
+Two of these carry a judgement call. `CST` is the US Central reading, −06:00,
+not China — for China use `CN` or `Asia/Shanghai`. And `HDT` is −09:00, the
+Aleutian daylight zone, since Hawaii itself never leaves `HST`.
 
 A country that genuinely spans zones asks you to pick:
 

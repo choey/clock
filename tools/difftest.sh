@@ -73,6 +73,8 @@ echo "== zones =="
 for zones in "" ET ET,PT,UTC local UTC EST MST GMT CET Asia/Kathmandu Etc/GMT+5 \
 	Europe/Berlin,Asia/Tokyo,ET,PT,UTC,JP JP GB DE FR IN NZ US AU RU CA \
 	94110 941 10001 99546 00501 PST PDT EDT CDT CST MDT HDT AKST AKDT ZZ QQ \
+	79835 79821 79855 798 799 96799 96701 967 37301 37387 373 \
+	86504 86503 860 49635 49630 498 00000 99999 \
 	PST,PT,EST,ET MST,MT,HST,HT \
 	PDT,PDT PDT,pdt PDT,PT PT,PDT UTC,UTC,UTC UK,BST PST,PT,PDT \
 	ET,America/New_York local,local ET,ET,PT,PT,UTC \
@@ -156,6 +158,16 @@ if [ "$go_runs" = "$py_runs" ]; then
 	[ -z "$verbose" ] || printf 'ok   zip runs match (%s records)\n' "$((${#go_runs} / 4))"
 else
 	echo 'FAIL zip runs differ between clock.go and clock.py'
+	fail=$((fail + 1))
+fi
+
+go_exc=$(sed -n 's/^const zipExceptions = "\(.*\)".*/\1/p' clock.go)
+py_exc=$(sed -n 's/^ZIP_EXCEPTIONS = "\(.*\)".*/\1/p' clock.py)
+if [ "$go_exc" = "$py_exc" ]; then
+	pass=$((pass + 1))
+	[ -z "$verbose" ] || printf 'ok   zip exceptions match (%s records)\n' "$((${#go_exc} / 6))"
+else
+	echo 'FAIL zip exceptions differ between clock.go and clock.py'
 	fail=$((fail + 1))
 fi
 

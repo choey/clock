@@ -117,21 +117,33 @@ happens.
 
 ### ZIP code accuracy
 
-The table stores one zone per 3-digit prefix, decided by majority of the ZIP
-codes under it, so a prefix split across a zone boundary rounds to whichever
-side holds more of them. Thirty prefixes are split; the ones most likely to
-bite:
+Give all five digits and the answer is exact. The 3-digit prefix table stores
+one zone per prefix, decided by majority of the ZIP codes under it, so a prefix
+straddling a zone boundary rounds to whichever side holds more — 30 prefixes do,
+covering 233 ZIP codes that the majority gets wrong. Those 233 are stored
+individually, and a 5-digit lookup consults them first:
 
-- `798` — El Paso is Mountain, but the rest of the prefix is Central and wins
-  by a single ZIP code. Use `MT` or `79901`.
-- `860` `865` — the Navajo Nation observes daylight saving and the rest of
-  Arizona does not; both prefixes round to their majority.
-- `967` — `96799`, American Samoa, resolves to Honolulu rather than Pago Pago.
-- `373` — Tennessee's Central/Eastern line, decided 39 votes to 38.
-- `324` `401` `426` `427` `465` `475` `479` `498` `499` `575`–`588` `677`–`692`
-  `835` `979` `995` — other boundary prefixes.
+```
+$ clock 79835        # Canutillo, TX — El Paso County
+   MDT               # right: the exception table names it
+$ clock 798          # the prefix alone
+   CDT               # the majority, which is Van Horn's side of the line
+```
 
-`tools/genzips.py` prints the full list every time it regenerates the table.
+Verified against the source: of 33,791 ZIP codes, 233 (0.69%) resolve wrongly
+from the prefix alone, and **none** resolve wrongly from all five digits.
+
+The worst case a prefix gets wrong is `96799`, American Samoa, an hour behind
+Honolulu; `86504` and `865` differ only in summer, since the Navajo Nation
+observes daylight saving where the rest of Arizona does not.
+
+One gap remains. The tables come from Census ZCTA centroids, which exist only
+for ZIP codes with a delivery area — PO-box and single-building ZIPs have none,
+so they are absent from both tables and fall back to their prefix's majority.
+Those are the only 5-digit ZIPs that can still come out wrong.
+
+`tools/genzips.py` regenerates both tables and prints every straddling prefix
+with its vote breakdown.
 
 ## How it works
 
@@ -226,6 +238,10 @@ edit them by hand.
 pip install timezonefinder
 tools/genzips.py
 ```
+
+The Census archive it downloads is cached in `tools/cache/` (gitignored) and
+reused on every later run, so only the first regeneration touches the network.
+Pass a path to read a local copy instead.
 
 The ZIP data derives from US Census ZCTA Gazetteer centroids (a US Government
 work, public domain) resolved through

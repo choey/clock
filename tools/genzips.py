@@ -6,8 +6,11 @@ It writes both files in one pass, which is what keeps the two embedded literals
 from drifting apart.
 
     pip install timezonefinder
-    tools/genzips.py                    # downloads the Census file
-    tools/genzips.py path/to/gaz.txt    # or reuses a local copy
+    tools/genzips.py                    # downloads to tools/cache/, once
+    tools/genzips.py path/to/gaz.txt    # or reads a local copy instead
+
+The download is cached in tools/cache/ (gitignored) and reused on every later
+run, so regenerating costs nothing but the timezonefinder pass.
 
 Data: US Census ZCTA Gazetteer centroids (a US Government work, public domain)
 resolved through timezonefinder, whose boundaries come from
@@ -16,9 +19,9 @@ timezone-boundary-builder (ODbL). The output is roughly forty range boundaries
 the generated comment and in the README.
 
 Accuracy: one zone per 3-digit prefix, decided by majority of the ZCTAs under
-it. Prefixes that straddle a zone boundary therefore round to whichever side
-holds more ZIP codes. Every such prefix is printed at the end; that report is
-the documentation of what the table gets wrong.
+it, plus an exception list naming every individual ZIP that majority gets
+wrong. A 5-digit ZIP is therefore always right; a 3-digit prefix is right only
+for the side that won. Every straddling prefix is printed at the end.
 """
 
 import io
@@ -84,15 +87,30 @@ LETTER = {zone: letter for letter, zones in CANONICAL.items() for zone in zones}
 UNASSIGNED = "-"
 
 
+CACHE = Path(__file__).resolve().parent / "cache"
+
+
 def gazetteer(source):
-    """Yield (zcta, lat, lon) from the Census gazetteer."""
+    """Yield (zcta, lat, lon) from the Census gazetteer.
+
+    The download lands in tools/cache/ and is reused from then on: it is a
+    static yearly release, and regenerating should not re-fetch a megabyte from
+    census.gov every time. The directory is gitignored -- the archive is
+    upstream data, not something to vendor into the repo.
+    """
     if source:
         text = Path(source).read_text(encoding="utf-8", errors="replace")
     else:
-        sys.stderr.write(f"downloading {GAZETTEER_URL}\n")
-        with urllib.request.urlopen(GAZETTEER_URL) as response:
-            blob = response.read()
-        with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+        cached = CACHE / GAZETTEER_URL.rsplit("/", 1)[-1]
+        if not cached.exists():
+            sys.stderr.write(f"downloading {GAZETTEER_URL}\n")
+            with urllib.request.urlopen(GAZETTEER_URL) as response:
+                blob = response.read()
+            CACHE.mkdir(parents=True, exist_ok=True)
+            cached.write_bytes(blob)
+        else:
+            sys.stderr.write(f"reusing {cached}\n")
+        with zipfile.ZipFile(cached) as archive:
             name = next(n for n in archive.namelist() if n.endswith(".txt"))
             text = archive.read(name).decode("utf-8", errors="replace")
 
@@ -107,7 +125,11 @@ def gazetteer(source):
 
 
 def vote(source):
-    """Tally zone letters per 3-digit prefix, and per-prefix vote breakdowns."""
+    """Tally zone letters per 3-digit prefix, and per-prefix vote breakdowns.
+
+    Also returns every ZCTA's own letter, which is what the exception pass
+    diffs against the prefix winners.
+    """
     try:
         from timezonefinder import TimezoneFinder
     except ImportError:
@@ -116,6 +138,7 @@ def vote(source):
     finder = TimezoneFinder()
     votes = defaultdict(Counter)
     lowest = {}
+    letters = {}
     for zcta, lat, lon in gazetteer(source):
         zone = finder.timezone_at(lat=lat, lng=lon)
         if zone is None:
@@ -130,11 +153,12 @@ def vote(source):
         votes[prefix][LETTER[zone]] += 1
         if prefix not in lowest or zcta < lowest[prefix][0]:
             lowest[prefix] = (zcta, LETTER[zone])
-    return votes, lowest
+        letters[zcta] = LETTER[zone]
+    return votes, lowest, letters
 
 
-def encode(votes, lowest):
-    """Fixed-width run-length encoding: "NNNc" per run start, sorted."""
+def winners_by_prefix(votes, lowest):
+    """The letter each 3-digit prefix rounds to."""
     winners = {}
     for prefix, tally in votes.items():
         top = tally.most_common()
@@ -142,7 +166,11 @@ def encode(votes, lowest):
             winners[prefix] = lowest[prefix][1]  # tie: the lowest ZIP decides
         else:
             winners[prefix] = top[0][0]
+    return winners
 
+
+def encode(winners):
+    """Fixed-width run-length encoding: "NNNc" per run start, sorted."""
     runs = []
     previous = None
     for n in range(1000):
@@ -151,6 +179,17 @@ def encode(votes, lowest):
             runs.append(f"{n:03d}{letter}")
             previous = letter
     return "".join(runs)
+
+
+def encode_exceptions(winners, letters):
+    """Fixed-width "NNNNNc" per ZIP the prefix gets wrong, sorted.
+
+    Only the losers of a straddling prefix appear, so the table stays a few
+    hundred records rather than a full 5-digit map of every ZIP in the country.
+    Sorted so both clocks can binary-search it as a flat string.
+    """
+    wrong = [z for z, letter in letters.items() if letter != winners[z[:3]]]
+    return "".join(f"{z}{letters[z]}" for z in sorted(wrong))
 
 
 def splice(path, pattern, replacement):
@@ -164,8 +203,10 @@ def splice(path, pattern, replacement):
 
 def main():
     source = sys.argv[1] if len(sys.argv) > 1 else None
-    votes, lowest = vote(source)
-    runs = encode(votes, lowest)
+    votes, lowest, letters = vote(source)
+    winners = winners_by_prefix(votes, lowest)
+    runs = encode(winners)
+    exceptions = encode_exceptions(winners, letters)
 
     root = Path(__file__).resolve().parent.parent
     splice(
@@ -178,9 +219,25 @@ def main():
         r'^ZIP_RUNS = ".*"  # zip-runs: .*$',
         f'ZIP_RUNS = "{runs}"  # zip-runs: generated by tools/genzips.py',
     )
+    splice(
+        root / "clock.go",
+        r'^const zipExceptions = ".*" // zip-exceptions: .*$',
+        f'const zipExceptions = "{exceptions}" '
+        "// zip-exceptions: generated by tools/genzips.py",
+    )
+    splice(
+        root / "clock.py",
+        r'^ZIP_EXCEPTIONS = ".*"  # zip-exceptions: .*$',
+        f'ZIP_EXCEPTIONS = "{exceptions}"  '
+        "# zip-exceptions: generated by tools/genzips.py",
+    )
 
     prefixes = len(votes)
     print(f"{prefixes} prefixes -> {len(runs) // 4} runs, {len(runs)} characters")
+    print(
+        f"{len(exceptions) // 6} ZIPs the prefixes get wrong -> "
+        f"{len(exceptions)} characters"
+    )
     print("wrote clock.go and clock.py")
 
     split = sorted(p for p, tally in votes.items() if len(tally) > 1)

@@ -120,8 +120,8 @@ happens.
 Give all five digits and the answer is exact. The 3-digit prefix table stores
 one zone per prefix, decided by majority of the ZIP codes under it, so a prefix
 straddling a zone boundary rounds to whichever side holds more — 30 prefixes do,
-covering 233 ZIP codes that the majority gets wrong. Those 233 are stored
-individually, and a 5-digit lookup consults them first:
+covering 233 ZIP codes that the majority gets wrong. Those 233 are named
+individually in a second table, which a 5-digit lookup consults first:
 
 ```
 $ clock 79835        # Canutillo, TX — El Paso County

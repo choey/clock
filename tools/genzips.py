@@ -118,8 +118,14 @@ def gazetteer(source):
         fields = line.split("\t")
         if len(fields) < 7:
             continue
+        zcta = fields[0].strip()
+        # Both tables slice ZCTAs at fixed offsets -- three for the prefix, two
+        # for the suffix -- so anything but five digits would silently shift
+        # every record after it. Drop it rather than encode a corrupt table.
+        if len(zcta) != 5 or not zcta.isdigit():
+            continue
         try:
-            yield fields[0].strip(), float(fields[5]), float(fields[6])
+            yield zcta, float(fields[5]), float(fields[6])
         except ValueError:
             continue
 
@@ -182,14 +188,34 @@ def encode(winners):
 
 
 def encode_exceptions(winners, letters):
-    """Fixed-width "NNNNNc" per ZIP the prefix gets wrong, sorted.
+    """Group the ZIPs a prefix gets wrong under one header each.
 
-    Only the losers of a straddling prefix appear, so the table stays a few
-    hundred records rather than a full 5-digit map of every ZIP in the country.
-    Sorted so both clocks can binary-search it as a flat string.
+    A record is "PPPcNN" -- prefix, zone letter, then how many two-digit
+    suffixes follow -- and then that many suffixes, ascending:
+
+        373C38 01 02 07 ...        (spaces for clarity only)
+
+    Only the losers of a straddling prefix appear, and the prefix is written
+    once for all of them rather than repeated on every ZIP, which is where the
+    saving over a flat 5-digit table comes from. Grouping on (prefix, letter)
+    rather than prefix alone costs nothing today -- every straddling prefix has
+    exactly one exception letter -- but keeps the format working if a future
+    regeneration turns up a prefix split three ways.
+
+    Groups longer than 99 are chunked into consecutive records, so a two-digit
+    count can never overflow however the source data shifts.
     """
-    wrong = [z for z, letter in letters.items() if letter != winners[z[:3]]]
-    return "".join(f"{z}{letters[z]}" for z in sorted(wrong))
+    wrong = sorted(z for z, letter in letters.items() if letter != winners[z[:3]])
+    groups = {}
+    for zcta in wrong:
+        groups.setdefault((zcta[:3], letters[zcta]), []).append(zcta[3:])
+
+    out = []
+    for (prefix, letter), suffixes in sorted(groups.items()):
+        for start in range(0, len(suffixes), 99):
+            chunk = suffixes[start : start + 99]
+            out.append(f"{prefix}{letter}{len(chunk):02d}" + "".join(chunk))
+    return "".join(out), len(wrong)
 
 
 def splice(path, pattern, replacement):
@@ -206,7 +232,7 @@ def main():
     votes, lowest, letters = vote(source)
     winners = winners_by_prefix(votes, lowest)
     runs = encode(winners)
-    exceptions = encode_exceptions(winners, letters)
+    exceptions, wrong_count = encode_exceptions(winners, letters)
 
     root = Path(__file__).resolve().parent.parent
     splice(
@@ -235,8 +261,7 @@ def main():
     prefixes = len(votes)
     print(f"{prefixes} prefixes -> {len(runs) // 4} runs, {len(runs)} characters")
     print(
-        f"{len(exceptions) // 6} ZIPs the prefixes get wrong -> "
-        f"{len(exceptions)} characters"
+        f"{wrong_count} ZIPs the prefixes get wrong -> {len(exceptions)} characters"
     )
     print("wrote clock.go and clock.py")
 

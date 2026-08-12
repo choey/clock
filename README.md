@@ -170,11 +170,22 @@ without the snap a dot sitting near a half-dot boundary lands in different
 cells in the two renders.
 
 **Repaint.** The whole frame is built as a single string and written in one
-call, then the next frame rewinds over it with `ESC[<n>A`. `ESC[K` on each row
-clears a longer previous line and `ESC[J` at the end clears a taller previous
-frame, so the grid reshapes cleanly when the window is resized. Keystrokes are
-swallowed (cbreak, `ISIG` left on) so a stray Return can't scroll the frame
-out from under the rewind.
+call. On a terminal the clock takes the alternate screen (`ESC[?1049h`) and
+paints each frame from its top corner with `ESC[H`; `ESC[K` on each row clears
+a longer previous line and `ESC[J` at the end clears a taller previous frame,
+so the grid reshapes cleanly when the window changes. Keystrokes are swallowed
+(cbreak, `ISIG` left on) so a stray Return can't scroll the frame.
+
+Painting from a fixed corner rather than rewinding with `ESC[<n>A` is what
+makes a resize safe. A rewind counts the rows *written*, assuming each occupies
+one physical line — but narrow the window and the terminal rewraps the frame
+already on screen, so those rows become two lines each, the rewind lands inside
+the old frame, and its upper half is left behind smeared into the new one.
+`ESC[J` only ever clears downwards, so it cannot mop that up. Owning a screen
+makes the frame's position independent of whatever happened to the last one.
+
+Piped output has no resize to survive and keeps the rewind, which is also what
+lets `tools/difftest.sh` compare the two implementations byte for byte.
 
 ## Tuning
 
@@ -213,8 +224,12 @@ window, it says which and stops — note that a too-tall grid is fixed by
 *raising* `--per-row`, the opposite of a too-narrow one. When it can't measure
 at all, e.g. piped to a file, it renders exactly what you asked for.
 
-A `kill -9` skips the terminal restore and leaves echo off; `stty sane` fixes
-it.
+Because the clock runs on the alternate screen, quitting restores whatever was
+on screen before it and the last frame does not linger — the same as `less` or
+`vim`. Redirect to a file to keep a frame.
+
+A `kill -9` skips the terminal restore and leaves echo off and the alternate
+screen active; `stty sane` and `printf '\033[?1049l'` fix it.
 
 ## Development
 

@@ -26,6 +26,9 @@ const (
 	showCursor = "\x1b[?25h"
 	clearEOL   = "\x1b[K"
 	clearBelow = "\x1b[J"
+	home       = "\x1b[H"
+	enterAlt   = "\x1b[?1049h"
+	leaveAlt   = "\x1b[?1049l"
 
 	// 19ms, not 20: coprime to 10, so the millisecond ones digit cycles through
 	// all ten values instead of sitting still. Reads as a live clock.
@@ -866,6 +869,14 @@ func frame(faces []dial, now time.Time, perRow int) []string {
 	return rows
 }
 
+// isTerminal reports whether f is a character device, i.e. a terminal rather
+// than a pipe or a file. Matches Python's sys.stdout.isatty() for the cases
+// that matter here.
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
 // winsize is the TIOCGWINSZ payload; package syscall declares the ioctl but
 // not, on darwin, the struct.
 type winsize struct {
@@ -1023,6 +1034,20 @@ func run() error {
 	defer quietTerminal()()
 	keys := readKeys()
 
+	// On a terminal, take the alternate screen and paint from its top corner.
+	// Relative rewind cannot survive a resize: the terminal rewraps the frame
+	// already on screen, so rows that were one physical line become two, the
+	// ESC[nA lands inside the old frame, and its upper half is left behind --
+	// clearBelow only ever clears downwards. Homing to a screen we own makes
+	// the frame's position independent of what happened to the last one. Piped
+	// output keeps the rewind, which costs nothing there and keeps the byte
+	// stream the difftest compares unchanged.
+	fullScreen := isTerminal(os.Stdout)
+
+	if fullScreen {
+		fmt.Print(enterAlt)
+		defer fmt.Print(leaveAlt)
+	}
 	fmt.Print(hideCursor)
 	defer fmt.Print(showCursor)
 
@@ -1052,15 +1077,27 @@ func run() error {
 		}
 		rows := frame(faces, now, perRow)
 
-		// rewind over the rows drawn last time, then repaint in one write.
-		// clearEOL wipes a longer previous line, clearBelow a taller previous
-		// frame -- the grid reshapes itself when the window is resized.
+		// Repaint in one write. clearEOL wipes a longer previous line,
+		// clearBelow a taller previous frame, so the grid reshapes itself
+		// when the window changes.
 		var b strings.Builder
-		if height > 0 {
-			fmt.Fprintf(&b, "\x1b[%dA", height)
-		}
-		for _, r := range rows {
-			b.WriteString(r + clearEOL + "\n")
+		if fullScreen {
+			// no trailing newline: a frame exactly as tall as the window
+			// would otherwise scroll itself off by one line
+			b.WriteString(home)
+			for i, r := range rows {
+				if i > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString(r + clearEOL)
+			}
+		} else {
+			if height > 0 {
+				fmt.Fprintf(&b, "\x1b[%dA", height)
+			}
+			for _, r := range rows {
+				b.WriteString(r + clearEOL + "\n")
+			}
 		}
 		b.WriteString(clearBelow)
 		fmt.Print(b.String())

@@ -31,6 +31,9 @@ HIDE_CURSOR = "\x1b[?25l"
 SHOW_CURSOR = "\x1b[?25h"
 CLEAR_EOL = "\x1b[K"
 CLEAR_BELOW = "\x1b[J"
+HOME = "\x1b[H"
+ENTER_ALT = "\x1b[?1049h"
+LEAVE_ALT = "\x1b[?1049l"
 
 USAGE = """clock - analog terminal clocks
 
@@ -801,7 +804,18 @@ def run(argv):
     zones = resolve_zones(zone_list, frozen or datetime.now(timezone.utc))
 
     signal.signal(signal.SIGTERM, _terminate)
-    sys.stdout.write(HIDE_CURSOR)
+
+    # On a terminal, take the alternate screen and paint from its top corner.
+    # Relative rewind cannot survive a resize: the terminal rewraps the frame
+    # already on screen, so rows that were one physical line become two, the
+    # ESC[nA lands inside the old frame, and its upper half is left behind --
+    # CLEAR_BELOW only ever clears downwards. Homing to a screen we own makes
+    # the frame's position independent of what happened to the last one. Piped
+    # output keeps the rewind, which costs nothing there and keeps the byte
+    # stream the difftest compares unchanged.
+    full_screen = sys.stdout.isatty()
+
+    sys.stdout.write((ENTER_ALT if full_screen else "") + HIDE_CURSOR)
     height = 0
     try:
         with quiet_terminal() as interactive:
@@ -819,15 +833,21 @@ def run(argv):
                 fit_height(chunk_count(len(faces), per_row), lines)
                 rows = frame(faces, now, per_row)
 
-                # rewind over the rows drawn last time, repaint in one write.
-                # CLEAR_EOL wipes a longer previous line, CLEAR_BELOW a taller
-                # previous frame -- the grid reshapes itself on a resize.
-                rewind = f"\x1b[{height}A" if height else ""
-                sys.stdout.write(
-                    rewind
-                    + "".join(r + CLEAR_EOL + "\n" for r in rows)
-                    + CLEAR_BELOW
-                )
+                # Repaint in one write. CLEAR_EOL wipes a longer previous
+                # line, CLEAR_BELOW a taller previous frame, so the grid
+                # reshapes itself when the window changes.
+                if full_screen:
+                    # no trailing newline: a frame exactly as tall as the
+                    # window would otherwise scroll itself off by one line
+                    body = "\n".join(r + CLEAR_EOL for r in rows)
+                    sys.stdout.write(HOME + body + CLEAR_BELOW)
+                else:
+                    rewind = f"\x1b[{height}A" if height else ""
+                    sys.stdout.write(
+                        rewind
+                        + "".join(r + CLEAR_EOL + "\n" for r in rows)
+                        + CLEAR_BELOW
+                    )
                 sys.stdout.flush()
                 height = len(rows)
 
@@ -839,7 +859,7 @@ def run(argv):
     except KeyboardInterrupt:
         pass
     finally:
-        sys.stdout.write(SHOW_CURSOR)
+        sys.stdout.write(SHOW_CURSOR + (LEAVE_ALT if full_screen else ""))
         sys.stdout.flush()
 
 

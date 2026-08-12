@@ -30,6 +30,7 @@ import sys
 import urllib.request
 import zipfile
 from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 
 GAZETTEER_URL = (
@@ -38,11 +39,17 @@ GAZETTEER_URL = (
 )
 
 # Every zone timezonefinder can return for a US ZIP centroid, folded onto the
-# letters clock.go and clock.py know. Fine-grained zones collapse onto the
-# canonical one they have agreed with since 1970 -- America/Detroit has kept
-# Eastern time throughout, so a Detroit ZIP is an "E" -- while zones that
+# letters clock.go and clock.py know. Fine-grained zones collapse onto the one
+# they agree with *today* -- a Detroit ZIP is an "E" -- while zones that
 # genuinely differ stay apart: Phoenix skips daylight saving, and Adak runs an
 # hour behind Anchorage.
+#
+# Today, not always: many of these agreed only recently. Indiana kept no
+# daylight saving until 2006, Kentucky/Monticello left Central for Eastern in
+# 2000, North Dakota/Beulah left Mountain for Central in 2010. The folding is
+# therefore a claim about the present that check_folding() re-tests on every
+# run, and it makes these tables wrong for historical dates -- which the clocks
+# never show.
 CANONICAL = {
     "A": (
         "America/Anchorage",
@@ -163,6 +170,73 @@ def vote(source):
     return votes, lowest, letters
 
 
+def zip_zone_targets(root):
+    """The letter -> zone map the clocks actually use, read from clock.py.
+
+    Not duplicated here: a third copy is a third thing to drift. genzips writes
+    into clock.py anyway, so reading the map back out keeps one source.
+    """
+    body = re.search(
+        r"ZIP_ZONES = \{(.*?)\}", root.joinpath("clock.py").read_text(encoding="utf-8"), re.S
+    )
+    if not body:
+        sys.exit("genzips: cannot find ZIP_ZONES in clock.py")
+    return dict(re.findall(r'"(.)":\s*"([A-Za-z_/]+)"', body.group(1)))
+
+
+def check_folding(targets):
+    """Re-test the claim CANONICAL makes: each zone still agrees with its letter.
+
+    One letter stands for a dozen zones, which holds only while they keep the
+    same rules. They have not always: Indiana had no daylight saving until 2006,
+    Kentucky/Monticello left Central in 2000, North Dakota/Beulah left Mountain
+    in 2010. Should a state break away again, every ZIP folded onto that letter
+    would quietly serve the wrong hour -- so fail here, at generation, rather
+    than let it reach a clock face.
+
+    Note what this does *not* cover. A change to daylight-saving rules alone --
+    a state stopping, or the country abolishing the switch -- needs no
+    regeneration at all: the tables store zone names, and the rules come from
+    whatever tzdata the machine running the clock has. Only a change to which
+    zone a place belongs to, or a split within a letter, needs new tables.
+    """
+    from zoneinfo import ZoneInfo
+
+    start = datetime.now(dt_timezone.utc)
+    probes = [start + timedelta(hours=6 * i) for i in range(4 * 400)]  # ~13 months
+
+    problems = []
+    for letter, zones in sorted(CANONICAL.items()):
+        if letter not in targets:
+            sys.exit(
+                f"genzips: letter {letter!r} is in CANONICAL but not in "
+                "ZIP_ZONES; add it to both clocks"
+            )
+        target_name = targets[letter]
+        target = ZoneInfo(target_name)
+        for name in zones:
+            if name == target_name:
+                continue
+            zone = ZoneInfo(name)
+            for probe in probes:
+                if probe.astimezone(zone).utcoffset() != probe.astimezone(target).utcoffset():
+                    problems.append((name, target_name, probe.date()))
+                    break
+
+    if problems:
+        lines = "\n".join(
+            f"  {name} parts from {target} on {when}" for name, target, when in problems
+        )
+        sys.exit(
+            "genzips: these zones no longer track the letter they fold onto, so "
+            "folding them would serve the wrong hour:\n" + lines + "\n"
+            "Give the divergent one its own letter in CANONICAL, and add that "
+            "letter to zipZones/ZIP_ZONES in both clocks."
+        )
+    folded = sum(len(z) for z in CANONICAL.values())
+    print(f"folding checked: {folded} zones track their letter for the next 13 months")
+
+
 def winners_by_prefix(votes, lowest):
     """The letter each 3-digit prefix rounds to."""
     winners = {}
@@ -229,12 +303,13 @@ def splice(path, pattern, replacement):
 
 def main():
     source = sys.argv[1] if len(sys.argv) > 1 else None
+    root = Path(__file__).resolve().parent.parent
+    check_folding(zip_zone_targets(root))
     votes, lowest, letters = vote(source)
     winners = winners_by_prefix(votes, lowest)
     runs = encode(winners)
     exceptions, wrong_count = encode_exceptions(winners, letters)
 
-    root = Path(__file__).resolve().parent.parent
     splice(
         root / "clock.go",
         r'^const zipRuns = ".*" // zip-runs: .*$',

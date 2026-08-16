@@ -6,6 +6,7 @@ so the second hand sweeps smoothly rather than stepping. Press q (or Ctrl+C)
 to quit.
 """
 
+import collections
 import contextlib
 import math
 import os
@@ -37,26 +38,59 @@ LEAVE_ALT = "\x1b[?1049l"
 
 USAGE = """clock - analog terminal clocks
 
-usage: clock [-n N | --per-row N] [ZONES]
+usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]]
+             [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
+             [ZONES]
 
   ZONES              comma-separated; default is your local zone
   -n, --per-row N    clocks per row before wrapping (default 3, reduced to fit)
+  --color[=WHEN]     colour the hands: always, auto (default), never
+  --no-color         same as --color=never
+  --day[=WHEN]       weekday on the readout: always, auto (default), never
+  --no-day           same as --day=never
+  --halign WHERE     the grid across the window: left, center (default), right
+  --valign WHERE     the grid down the window: top, center (default), bottom
+  --hpad SPACE       between clocks: even (default), or a share of the width
+  --vpad SPACE       between rows: even (default), or a share of the height
   -h, --help         this message
 
-A zone is an IANA name (Europe/Berlin), a regional abbreviation (ET CT MT PT
+A zone is an IANA name (Europe/Berlin), the city off the end of one where
+that is unambiguous (Berlin, Jakarta), a regional abbreviation (ET CT MT PT
 AKT HT BST IST JST AET ...), a 2-letter country code (JP, GB), or a US ZIP
 code (94110). ET/CT/MT/PT follow daylight saving, so they read EST or EDT
 depending on the date; EST/EDT/PST/PDT and the rest are the fixed offsets,
 which never shift.
 
+The hands are coloured on a terminal and plain when redirected; NO_COLOR
+turns the colour off everywhere. Auto puts a weekday on the readouts only
+when the clocks on screen disagree about the date. An even fill spreads the
+clocks over the whole window; --hpad 10% sets the gaps instead, as a share of
+the window, and then the alignment decides where the grid sits.
+
+Space holds the frame still, for a screenshot, and h lists the keys.
 Press q or Ctrl+C to quit.
 
 examples:
   clock
   clock ET,PT,UTC
   clock -n 2 ET,PT,UTC
+  clock Berlin,Jakarta
   clock Europe/Berlin,Asia/Tokyo,94110 --per-row 2
 """
+
+# The key list h puts under the grid. In the order the keys are reached for
+# rather than alphabetically, and kept in the same order as clock.go's table.
+HOTKEYS = (
+    ("space", "hold the frame"),
+    ("h", "hide this list"),
+    ("q", "quit, or Ctrl+C"),
+)
+HOTKEY_COL = 7  # where the descriptions start, so the keys get a gutter
+
+# Said once at the bottom of the window, then dropped: a clock that has taken
+# the whole screen owes the reader a way back out, but only until it is read.
+FLASH = "Press q or Ctrl+C to quit"
+FLASH_SECONDS = 3.0
 
 DEFAULT_PER_ROW = 3  # faces per row before wrapping
 MAX_PER_ROW = 64  # an upper bound so a typo can't ask for a million faces
@@ -85,7 +119,14 @@ def _cell_ratio():
 
 CELL_RATIO = _cell_ratio()
 COLS = math.floor(ROWS * CELL_RATIO + 0.5)  # face width, in terminal columns
-GAP = 3  # blank columns between adjacent faces
+GAP = 3  # fewest blank columns between adjacent faces
+VGAP = 1  # fewest blank rows between rows of faces
+
+# Where the grid sits when it does not fill the window, and what --halign and
+# --valign accept. Same order as clock.go's tables, and the wording of the
+# error they raise comes off these lists.
+HALIGNS = ("left", "center", "right")
+VALIGNS = ("top", "center", "bottom")
 
 # The one instant format CLOCK_FREEZE accepts. Exactly six fractional digits,
 # exactly UTC: datetime stops at microseconds, and pinning the format keeps both
@@ -100,8 +141,11 @@ class ClockError(Exception):
 def freeze():
     """The instant to pin the clock to, or None to run live.
 
-    CLOCK_FREEZE draws exactly one frame at a fixed instant, so the Go and
-    Python renders can be diffed byte for byte. Dev hook, not in --help.
+    CLOCK_FREEZE holds the clock at a fixed instant: the hands never move, and
+    space has nothing to hold back. Redirected it draws that one frame and
+    exits, which is what lets the Go and Python renders be diffed byte for
+    byte; on a terminal it stays up, with h and q still live, so the frame can
+    be looked at and photographed. Dev hook, not in --help.
     """
     value = os.environ.get("CLOCK_FREEZE", "")
     if not value:
@@ -128,9 +172,32 @@ def freeze():
 # half a cell off it: "12" stacks exactly over "06", but never over "6".
 MARKERS = ((0, "12"), (3, "03"), (6, "06"), (9, "09"))
 MARKER_R = 0.70  # numeral distance from the centre, as a fraction of the radius
+HAND_TAPER = 0.15  # fraction of a thick hand's length that narrows to a point at the tip
 
-# (length as a fraction of the radius, two dots thick?), drawn shortest-first
-HANDS = ((0.50, True), (0.75, True), (0.88, False))
+# Which hand a cell belongs to, and so which colour it takes. Higher is on
+# top: the hands stack shortest-first, the reverse of the order they are drawn
+# in, because a longer hand covers a shorter one along its whole length while
+# the short one can only ever hide a slice. Left the other way round, the hour
+# hand -- the one you most want to find -- vanishes under the minute hand for
+# minutes at a time.
+LAYER_NONE, LAYER_SECOND, LAYER_MINUTE, LAYER_HOUR = 0, 1, 2, 3
+
+# Foreground SGR code per layer: red second hand as on a real dial, then cyan
+# and yellow, which stay legible on a light and a dark terminal alike. Plain
+# 8-colour codes, so they follow whatever palette the terminal is themed with.
+HAND_SGR = ("", "\x1b[31m", "\x1b[36m", "\x1b[33m")
+DEFAULT_FG = "\x1b[39m"  # foreground back to the terminal's default, nothing else
+
+# (length as a fraction of the radius, two dots thick?, layer), drawn
+# shortest-first -- which is not the order they stack in; see LAYER_* above
+HANDS = (
+    (0.50, True, LAYER_HOUR),
+    (0.75, True, LAYER_MINUTE),
+    (0.88, False, LAYER_SECOND),
+)
+
+# What --color and --day accept; auto reads the situation, the other two do not.
+WHENS = ("always", "auto", "never")
 
 # braille dot bit for (x % 2, y % 4); the block starts at U+2800
 DOT_BITS = ((0x01, 0x02, 0x04, 0x40), (0x08, 0x10, 0x20, 0x80))
@@ -151,34 +218,64 @@ def snap(v):
 
 
 class Canvas:
-    """A dot canvas that renders to braille cells, 2 dots wide by 4 tall each."""
+    """A dot canvas that renders to braille cells, 2 dots wide by 4 tall each.
+
+    Alongside the dots each cell keeps the topmost layer that dotted it, which
+    is what the colouring reads. Colour is per cell and dots are not: a cell
+    holds up to eight of them, so where two hands share a cell the cell takes
+    the upper hand's colour and a few of the lower hand's dots come along.
+    """
 
     def __init__(self, w, h):
         self.w, self.h = w, h
         self.cols = (w + 1) // 2
         self.cells = [[0] * self.cols for _ in range((h + 3) // 4)]
+        self.layers = [[LAYER_NONE] * self.cols for _ in range((h + 3) // 4)]
 
-    def set(self, x, y):
+    def set(self, x, y, layer):
         # floor(v + 0.5), not round(): round() is half-to-even here but
         # half-away-from-zero in the Go port, which would split the renders
         x, y = math.floor(snap(x) + 0.5), math.floor(snap(y) + 0.5)
         if 0 <= x < self.w and 0 <= y < self.h:
             self.cells[y // 4][x // 2] |= DOT_BITS[x % 2][y % 4]
+            if layer > self.layers[y // 4][x // 2]:
+                self.layers[y // 4][x // 2] = layer
 
-    def line(self, x0, y0, x1, y1):
+    def line(self, x0, y0, x1, y1, layer):
         # snap the endpoints too: steps comes off a rounded difference, and a
         # one-ulp wobble there changes the whole dot sequence, not just one dot
         x0, y0, x1, y1 = snap(x0), snap(y0), snap(x1), snap(y1)
         steps = max(1, math.floor(max(abs(x1 - x0), abs(y1 - y0)) + 0.5))
         for i in range(steps + 1):
             t = i / steps
-            self.set(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)
+            self.set(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, layer)
 
     def rows(self):
         return ["".join(chr(0x2800 + bits) for bits in row) for row in self.cells]
 
 
-def face(now):
+def colorize(row, layers):
+    """Wrap each run of same-layer cells in that hand's colour.
+
+    Runs rather than cells: a hand lies along a dozen cells at a stretch, and
+    one escape per cell would multiply what a frame writes for no visible
+    difference. Rows end back on the default foreground, so the gutter between
+    two faces, and whatever the terminal paints past the end of the line, stay
+    the colour they were.
+    """
+    out = []
+    current = LAYER_NONE
+    for cell, layer in zip(row, layers):
+        if layer != current:
+            out.append(DEFAULT_FG if layer == LAYER_NONE else HAND_SGR[layer])
+            current = layer
+        out.append(cell)
+    if current != LAYER_NONE:
+        out.append(DEFAULT_FG)
+    return "".join(out)
+
+
+def face(now, color):
     """Render one analog face for `now`, returning a list of cell rows."""
     rx, ry = COLS, 2 * ROWS
     # Horizontally the centre sits on a cell boundary, vertically in the middle
@@ -187,26 +284,37 @@ def face(now):
     cx, cy = rx - 0.5, ry - 0.5
     canvas = Canvas(2 * COLS, 4 * ROWS)
 
-    def spoke(angle, r0, r1, thick):
-        """Radial segment from r0 to r1, as fractions of the radius."""
+    def spoke(angle, r0, r1, thick, point, layer):
+        """Radial segment from r0 to r1, as fractions of the radius.
+
+        A thick spoke drawn with point set narrows over its last HAND_TAPER
+        share to a single dot at r1, instead of ending in a flat, two-dot-wide
+        butt.
+        """
         sin_a, cos_a = math.sin(angle), math.cos(angle)
         x0, y0 = cx + rx * r0 * sin_a, cy - ry * r0 * cos_a
         x1, y1 = cx + rx * r1 * sin_a, cy - ry * r1 * cos_a
+        tip = r1 - (r1 - r0) * HAND_TAPER if thick and point else r1
+        tx, ty = cx + rx * tip * sin_a, cy - ry * tip * cos_a
         # two dots thick straddles the axis, so the spoke centres on it
         for off in (-0.5, 0.5) if thick else (0.0,):
             dx, dy = off * cos_a, off * sin_a
-            canvas.line(x0 + dx, y0 + dy, x1 + dx, y1 + dy)
+            # the offset shrinks to nothing at the tip, not the base: that is
+            # what tapers the two edges together into a point
+            canvas.line(x0 + dx, y0 + dy, tx, ty, layer)
+        if thick and point:
+            canvas.line(tx, ty, x1, y1, layer)
 
     # rim: sample densely enough that adjacent dots touch
     steps = math.floor(4 * math.pi * max(rx, ry) + 0.5)
     for i in range(steps):
         a = 2 * math.pi * i / steps
-        canvas.set(cx + rx * math.sin(a), cy - ry * math.cos(a))
+        canvas.set(cx + rx * math.sin(a), cy - ry * math.cos(a), LAYER_NONE)
 
     # hour ticks, the quarters longer and thicker so they sit on the axes
     for h in range(12):
         major = h % 3 == 0
-        spoke(2 * math.pi * h / 12, 0.80 if major else 0.90, 1.0, major)
+        spoke(2 * math.pi * h / 12, 0.80 if major else 0.90, 1.0, major, False, LAYER_NONE)
 
     # hands: fractional seconds drive the sweep
     frac = now.microsecond / 1e6
@@ -215,8 +323,8 @@ def face(now):
         (now.minute + (now.second + frac) / 60) / 60,
         (now.second + frac) / 60,
     )
-    for (length, thick), turn in zip(HANDS, turns):
-        spoke(2 * math.pi * turn, 0, length, thick)
+    for (length, thick, layer), turn in zip(HANDS, turns):
+        spoke(2 * math.pi * turn, 0, length, thick, True, layer)
 
     rows = canvas.rows()
 
@@ -232,7 +340,12 @@ def face(now):
         row = math.floor(y + 0.5) // 4
         if 0 <= row < len(rows) and 0 <= col <= canvas.cols - len(text):
             rows[row] = rows[row][:col] + text + rows[row][col + len(text) :]
+            # the numeral took the cell's dots with it, so drop their colour
+            for i in range(col, col + len(text)):
+                canvas.layers[row][i] = LAYER_NONE
 
+    if color:
+        rows = [colorize(r, l) for r, l in zip(rows, canvas.layers)]
     return rows
 
 
@@ -260,14 +373,61 @@ def parse_count(s, what, limit):
     return n
 
 
+# What each of the four layout flags suggests when it is handed no value.
+NEEDS = {
+    "halign": "--halign center",
+    "valign": "--valign center",
+    "hpad": "--hpad 10%",
+    "vpad": "--vpad 5%",
+}
+
+
+def parse_choice(flag, val, choices):
+    """Read one of a short list of words, or reject it by name.
+
+    The message is built from the list, so a flag cannot come to accept a word
+    its own error text does not offer.
+    """
+    if val in choices:
+        return val
+    names = ", ".join(choices[:-1]) + " or " + choices[-1]
+    raise ClockError(f'--{flag} wants {names}, got "{val}"')
+
+
+def parse_pad(flag, val):
+    """Read a padding: None for the even fill, or a percentage 0-100.
+
+    Takes "10" as readily as "10%", and nothing else -- no sign, no decimal
+    point, no space, since the Go port hand-scans the same digits.
+    """
+    if val == "even":
+        return None
+    bad = ClockError(f'--{flag} wants even or a share like 10%, got "{val}"')
+    digits = val[:-1] if val.endswith("%") else val
+    if not digits or len(digits) > 3:
+        raise bad
+    n = 0
+    for c in digits:
+        if not ("0" <= c <= "9"):
+            raise bad
+        n = n * 10 + (ord(c) - ord("0"))
+    if n > 100:
+        raise bad
+    return n
+
+
 def parse_args(argv):
-    """Read the command line: one optional zone list, and -n/--per-row anywhere.
+    """Read the command line: one optional zone list, and the flags anywhere.
 
     Hand-rolled rather than argparse, which prints its own usage block, exits
     with status 2, and abbreviates long options -- none of which the Go port
     can reproduce. Both implementations run this algorithm verbatim.
     """
     per_row = DEFAULT_PER_ROW
+    color_when = "auto"
+    day_when = ""  # unset: run() picks it, since a pinned clock differs
+    halign, valign = "center", "center"
+    hpad, vpad = None, None  # None is the even fill
     positional = []
     end_of_flags = False
 
@@ -282,14 +442,46 @@ def parse_args(argv):
             raise HelpRequested
         elif a.startswith("--"):
             name, sep, val = a[2:].partition("=")
-            if name != "per-row":
+            if name == "per-row":
+                if not sep:
+                    i += 1
+                    if i >= len(argv):
+                        raise ClockError("--per-row needs a number, e.g. --per-row 2")
+                    val = argv[i]
+                per_row = parse_count(val, "--per-row", MAX_PER_ROW)
+            elif name == "color":
+                # Bare --color means always, and takes no separate argument:
+                # "clock --color ET" names a zone list, exactly as ls and git
+                # read the same flag. The value only ever follows an "=".
+                color_when = parse_choice("color", val, WHENS) if sep else "always"
+            elif name == "no-color":
+                if sep:
+                    raise ClockError("--no-color takes no value")
+                color_when = "never"
+            elif name == "day":
+                day_when = parse_choice("day", val, WHENS) if sep else "always"
+            elif name == "no-day":
+                if sep:
+                    raise ClockError("--no-day takes no value")
+                day_when = "never"
+            elif name in ("halign", "valign", "hpad", "vpad"):
+                # These four want a value, and take it either way round, as
+                # --per-row does: there is no bare form to be ambiguous with.
+                if not sep:
+                    i += 1
+                    if i >= len(argv):
+                        raise ClockError(f"--{name} needs a value, e.g. {NEEDS[name]}")
+                    val = argv[i]
+                if name == "halign":
+                    halign = parse_choice(name, val, HALIGNS)
+                elif name == "valign":
+                    valign = parse_choice(name, val, VALIGNS)
+                elif name == "hpad":
+                    hpad = parse_pad(name, val)
+                else:
+                    vpad = parse_pad(name, val)
+            else:
                 raise ClockError(f"unknown option: --{name}")
-            if not sep:
-                i += 1
-                if i >= len(argv):
-                    raise ClockError("--per-row needs a number, e.g. --per-row 2")
-                val = argv[i]
-            per_row = parse_count(val, "--per-row", MAX_PER_ROW)
         elif len(a) > 1 and a.startswith("-"):
             if a[1] != "n":
                 raise ClockError(f"unknown option: {a}")
@@ -311,7 +503,13 @@ def parse_args(argv):
             f"expected one comma-separated zone list, got {len(positional)}: "
             + " ".join(positional)
         )
-    return per_row, positional[0] if positional else ""
+    return (
+        per_row,
+        positional[0] if positional else "",
+        color_when,
+        day_when,
+        (halign, valign, hpad, vpad),
+    )
 
 
 # Fills the gaps the tz database leaves, and only those gaps. EST, MST, HST,
@@ -547,11 +745,63 @@ def country_zone(cc, at):
     )
 
 
+def suffix_zones(token):
+    """The zones whose name ends with the token as a whole path segment.
+
+    Europe/Berlin for "Berlin", and America/Indiana/Indianapolis for either
+    "Indianapolis" or "Indiana/Indianapolis". Whole segments only, so "Berl"
+    finds nothing and "York" does not answer for "New_York".
+
+    Read out of zone.tab, the same file the country codes come from, which
+    lists the canonical zones and leaves out the backward-compatibility links
+    -- so "Eastern" is not a name here, and US/Eastern still resolves the
+    ordinary way, in full.
+    """
+    data, found = zone_tab()
+    if not found:
+        return [], False
+    want = "/" + token.lower()
+    out = []
+    for line in data.split("\n"):
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) >= 3 and fields[2].lower().endswith(want):
+            out.append(fields[2])
+    return out, True
+
+
+def suffix_zone(token):
+    """One zone named by its tail alone, or None when nothing matches.
+
+    Ambiguity is refused rather than guessed at. Every city in the tz database
+    is unique today, but nothing promises it stays that way, and two clocks an
+    ocean apart is not a choice to make on the reader's behalf.
+    """
+    names, found = suffix_zones(token)
+    if not found or not names:
+        return None
+    if len(names) > 1:
+        shown, tail = names, ""
+        if len(shown) > 8:
+            tail = f" (and {len(shown) - 8} more)"
+            shown = shown[:8]
+        raise ClockError(
+            f"{token} names {len(names)} zones; name one in full: "
+            + ", ".join(shown)
+            + tail
+        )
+    try:
+        return ZoneInfo(names[0])
+    except Exception:
+        return None
+
+
 def unknown_zone(token):
     return ClockError(
-        f'unknown zone "{token}"; use an IANA name (Europe/Berlin), '
-        f"an abbreviation ({alias_names()}), a 2-letter country code (JP), "
-        "or a US ZIP code"
+        f'unknown zone "{token}"; use an IANA name (Europe/Berlin), a city '
+        f"off the end of one (Berlin, Jakarta), an abbreviation "
+        f"({alias_names()}), a 2-letter country code (JP), or a US ZIP code"
     )
 
 
@@ -591,6 +841,10 @@ def resolve_zone(token, at):
         found = country_zone(up, at)
         if found is not None:
             return found
+    # Last, so a city can never shadow a name the database itself answers to.
+    named = suffix_zone(token)
+    if named is not None:
+        return named
     raise unknown_zone(token)
 
 
@@ -652,15 +906,88 @@ def in_zone(t, zone):
     return t.astimezone() if zone is None else t.astimezone(zone)
 
 
+def utc_offset(t, zone):
+    """How far `zone` sits from UTC at t, in seconds east."""
+    return int(in_zone(t, zone).utcoffset().total_seconds())
+
+
+def order_faces(faces, now):
+    """Faces in the order their clocks read, earliest first: left to right,
+    then top to bottom.
+
+    Sorted on the offset, which is the same thing: every face renders one
+    instant, so the time one reads is that instant plus its offset, and the
+    westernmost zone is the one furthest behind. Faces that share an offset
+    keep the order they were typed in -- the sort is stable in both ports for
+    exactly that reason -- which is how UTC and GMT, two faces because they
+    are labelled differently, stay where you put them.
+
+    Redone every frame, like the merging: an offset is a property of the
+    instant, so a zone entering daylight saving slides a place along.
+    """
+    return sorted(faces, key=lambda face: utc_offset(now, face[1]))
+
+
+def center(s, w, extra_left):
+    """Centre s in w columns, the odd column going left or right as told.
+
+    Not "{:^w}", which always leans right: the frame decides, so that a face
+    centred inside a grid that has already leaned right leans left here and
+    the two cancel. Nothing wider than w is padded, and nothing is cut.
+    """
+    pad = max(0, w - len(s))
+    left = (pad + 1) // 2 if extra_left else pad // 2
+    return " " * left + s + " " * (pad - left)
+
+
 def truncate(s, n):
     """Cut s to n characters."""
     n = max(0, n)
     return s if len(s) <= n else s[:n]
 
 
-def digital(t):
-    """The clock under one face, always 12 characters."""
-    return f"{t:%H:%M:%S}.{t.microsecond // 1000:03d}"
+# Weekday names, Sunday first to match Go's time.Weekday. A table rather than
+# strftime("%a"), which follows the locale -- "lun." in a French shell -- where
+# Go's Format is fixed English. Hard-coding it keeps the two renders identical
+# on every machine.
+DAY_NAMES = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+
+# The width of "Mon 05:02:41.901", against the bare readout's 12. A face
+# narrower than this would shove the columns to its right out of true, so a
+# very low CLOCK_CELL_RATIO loses the weekday rather than the alignment.
+DAY_COLS = 16
+
+
+def show_weekday(faces, now, when):
+    """Whether the readouts carry a weekday.
+
+    Under auto, only when the faces on screen disagree about the date: a
+    weekday under every clock is noise when they all fall on the same one.
+    Nothing off screen is consulted, so the clock never asserts a date for a
+    zone it is not drawing -- name `local` in the list to compare against your
+    own day.
+
+    Up to three dates can be on screen at once, since UTC-12 to UTC+14 spans
+    26 hours and so crosses two midnights.
+
+    A face too narrow to hold the weekday loses it whatever the setting says,
+    since the alternative is a grid out of true.
+    """
+    if when == "never" or COLS < DAY_COLS or not faces:
+        return False
+    if when == "always":
+        return True
+    first = in_zone(now, faces[0][1]).date()
+    return any(in_zone(now, zone).date() != first for _, zone in faces)
+
+
+def digital(t, weekday):
+    """The clock under one face: 12 characters, or 16 with a weekday on it."""
+    clock = f"{t:%H:%M:%S}.{t.microsecond // 1000:03d}"
+    if not weekday:
+        return clock
+    # isoweekday is Mon=1..Sun=7, and % 7 turns that into Go's Sun=0
+    return f"{DAY_NAMES[t.isoweekday() % 7]} {clock}"
 
 
 def chunk_count(n, per_row):
@@ -668,31 +995,219 @@ def chunk_count(n, per_row):
     return -(-n // per_row)
 
 
-def frame_height(chunks):
+def frame_height(chunks, vgap):
     """The rows a grid occupies: each chunk is a face, its zone name and its
-    digital line, and chunks are separated by one blank row."""
-    return chunks * (ROWS + 2) + (chunks - 1)
+    digital line, with vgap blank rows between chunks."""
+    return chunks * (ROWS + 2) + vgap * (chunks - 1)
 
 
-def frame(faces, now, per_row):
+def gap_floor(span, percent, least):
+    """The gap a layout will not go below.
+
+    An even fill starts from the least the grid can be packed to and grows;
+    a percentage is that share of the whole span, and is the whole answer. A
+    span of 0 is a window that could not be measured, where a percentage of
+    nothing is nothing useful, so the least stands.
+    """
+    if percent is None or span <= 0:
+        return least
+    return span * percent // 100
+
+
+def spread(count, size, span, least, percent, align):
+    """Lay count blocks of size across span: the gap between two of them, and
+    the margin in front of the first.
+
+    An even fill counts the margins as gaps too -- count blocks make count + 1
+    spaces, two of them against the edges -- and gives each an equal share of
+    what the blocks leave. Sharing between the blocks alone would hand every
+    spare column to the gutters and press the outer clocks flat against the
+    borders, which is the one arrangement nobody wants.
+
+    The share stops at the size of a block: past that the clocks read as
+    scattered rather than as a group, so on a wide window the extra goes to
+    the margins and the clocks stay a cluster in the middle. It never drops
+    below `least` either, so a window just big enough for the grid gets the
+    packed layout rather than a squeeze.
+
+    A percentage fixes the gap outright and leaves everything else to the
+    margin, so the alignment has something to work with. An unmeasurable span
+    keeps the packed layout this clock had before any of it was adjustable:
+    least gap, no margin.
+
+    Comes back as (gap, extra, margin, leaned). A centred layout cannot halve
+    an odd slack into two margins, but a gutter can swallow the odd column
+    instead: `extra` widens one gutter by one, and the margins come out equal.
+    That only works where there is a gutter, so a single clock still has to
+    lean, and `leaned` says it did -- the caller's cue to lean the other way
+    on the next rounding, so the two cancel rather than adding up.
+    """
+    gap = gap_floor(span, percent, least)
+    if span <= 0:
+        return gap, 0, 0, False
+    if percent is None:
+        share = max(0, span - count * size) // (count + 1)
+        gap = min(max(least, share), size)
+    slack = max(0, span - count * size - gap * (count - 1))
+    extra = 0
+    if align == "center" and percent is None and count > 1 and slack % 2 == 1:
+        # A padding asked for by name is left exactly as asked for; only the
+        # even fill, which chose this gap itself, may nudge one gutter.
+        extra, slack = 1, slack - 1
+    if align == "center":
+        return gap, extra, slack // 2, slack % 2 == 1
+    return gap, 0, (slack if align in ("right", "bottom") else 0), False
+
+
+def help_rows():
+    """The key list, one row per key."""
+    return [f"{key:<{HOTKEY_COL}}{what}" for key, what in HOTKEYS]
+
+
+def fit_help(chunks, term_cols, term_rows):
+    """Whether the key list fits under the grid, blank separator included.
+
+    When it does not, h is a no-op rather than a wrapped or scrolled frame --
+    the same trade the weekday makes against a narrow face. A window that
+    cannot be measured is taken to fit, since it has nothing to break.
+    """
+    rows = help_rows()
+    if term_cols > 0 and max(len(r) for r in rows) > term_cols:
+        return False
+    # Against the packed grid, not the one on screen: an even fill would
+    # otherwise stretch to the last row and leave the list nowhere to go.
+    packed = frame_height(chunks, VGAP)
+    return term_rows <= 0 or packed + len(rows) + 1 <= term_rows
+
+
+# One frame's spacing, both axes: the blank columns between faces and rows
+# between rows of faces, the one gutter each axis widens to swallow an odd
+# column, the margins before the first of each, and which way to lean a label
+# that will not centre exactly.
+Layout = collections.namedtuple(
+    "Layout", "gap extra left vgap vextra top extra_left"
+)
+
+
+def frame(faces, now, per_row, color, help_on, day_when, lay):
     """Draw the whole grid: faces left to right, wrapping every per_row.
 
-    A short last row is left-aligned so the column gutters stay lined up.
+    A short last row keeps the gutters and margin of a full one, so the
+    columns stay lined up -- including the widened gutter, which sits at a
+    fixed place in the row rather than at whatever the last one happens to be.
     """
-    gap = " " * GAP
-    rows = []
-    for ci in range(chunk_count(len(faces), per_row)):
+    indent = " " * lay.left
+
+    def gutter(i):
+        """The i'th gap of a row: the widened one is always the last of a full
+        row, so a short row's gutters still line up with the row above."""
+        return " " * (lay.gap + (1 if lay.extra and i == per_row - 2 else 0))
+
+    def row(parts):
+        out = indent + parts[0]
+        for i, part in enumerate(parts[1:]):
+            out += gutter(i) + part
+        return out
+    weekday = show_weekday(faces, now, day_when)
+    chunks = chunk_count(len(faces), per_row)
+    rows = [""] * lay.top
+    for ci in range(chunks):
         chunk = faces[ci * per_row : (ci + 1) * per_row]
         if ci > 0:
-            rows.append("")
+            wide = 1 if lay.vextra and ci == chunks - 1 else 0
+            rows.extend([""] * (lay.vgap + wide))
         times = [in_zone(now, z) for _, z in chunk]
-        drawn = [face(t) for t in times]
-        rows.extend(gap.join(row) for row in zip(*drawn))
+        drawn = [face(t, color) for t in times]
+        rows.extend(row(list(line)) for line in zip(*drawn))
         rows.append(
-            gap.join(f"{truncate(label, COLS):^{COLS}}" for label, _ in chunk)
+            row([center(truncate(label, COLS), COLS, lay.extra_left) for label, _ in chunk])
         )
-        rows.append(gap.join(f"{digital(t):^{COLS}}" for t in times))
+        rows.append(
+            row([center(digital(t, weekday), COLS, lay.extra_left) for t in times])
+        )
+    if help_on:
+        rows.append("")
+        rows.extend(indent + row for row in help_rows())
     return rows
+
+
+def flash_rows(rows, term_cols, term_rows, halign):
+    """Put the quit hint on the last line of the window, if that line is free.
+
+    The frame is padded out to the window rather than the hint tucked under the
+    grid, so it sits on the bottom line wherever the grid happens to be. When
+    the grid already reaches that line -- valign bottom, or a window it exactly
+    fills -- there is nowhere to put the hint that would not cover a clock, so
+    it goes unsaid rather than over the top of one. Centred with the clocks and
+    hard left otherwise, since a hint under a left-hand grid belongs at the
+    left edge, not adrift in the middle.
+    """
+    if term_rows <= 0 or len(rows) >= term_rows:
+        return rows
+    if 0 < term_cols < len(FLASH):
+        return rows  # narrower than the hint: it would wrap and cost two rows
+    left = 0
+    if halign == "center" and term_cols > len(FLASH):
+        left = (term_cols - len(FLASH)) // 2
+    return rows + [""] * (term_rows - len(rows) - 1) + [" " * left + FLASH]
+
+
+def fold(text, width):
+    """Break text onto lines of at most width, on spaces where it can be.
+
+    A word with nowhere to break -- a window narrower than "--per-row" -- is
+    cut instead, since the alternative is a line that wraps itself and scrolls
+    the screen out from under the next repaint.
+    """
+    rows, line = [], ""
+    for word in text.split(" "):
+        while width > 0 and len(word) > width:
+            if line:
+                rows.append(line)
+                line = ""
+            rows.append(word[:width])
+            word = word[width:]
+        if not line:
+            line = word
+        elif len(line) + 1 + len(word) <= width:
+            line += " " + word
+        else:
+            rows.append(line)
+            line = word
+    if line:
+        rows.append(line)
+    return rows
+
+
+def complaint(text, term_cols, term_rows, halign):
+    """The frame that says why there are no clocks, when the window is too
+    small to hold them.
+
+    Folded to the window and cut to it, and placed the way the quit hint is:
+    centred with the clocks, hard left under any other alignment.
+    """
+    width = term_cols if term_cols > 0 else len(text)
+    rows = fold(text, width)
+    if term_rows > 0:
+        del rows[term_rows:]
+    if halign == "center":
+        rows = [" " * ((width - len(r)) // 2) + r for r in rows]
+    if term_rows > 0:
+        rows = [""] * ((term_rows - len(rows)) // 2) + rows
+    return rows
+
+
+def use_color(when):
+    """Whether to colour the hands.
+
+    auto colours a terminal and leaves a pipe or a file plain, so a redirected
+    frame stays the plain text the difftest compares. NO_COLOR is the
+    cross-tool convention for "never, from the environment"; an explicit
+    --color=always overrules it, since that is the point of saying always.
+    """
+    if when != "auto":
+        return when == "always"
+    return sys.stdout.isatty() and os.environ.get("NO_COLOR", "") == ""
 
 
 def env_count(name):
@@ -722,7 +1237,7 @@ def term_size():
     return cols, rows
 
 
-def fit_per_row(want, n, term_cols):
+def fit_per_row(want, n, term_cols, gap):
     """Reduce the requested faces-per-row to what the window can hold.
 
     Wrapping is what actually breaks the display: a wrapped line desynchronises
@@ -731,7 +1246,7 @@ def fit_per_row(want, n, term_cols):
     want = min(want, n)
     if term_cols <= 0:
         return want  # not a terminal: honour what was asked for
-    max_fit = (term_cols + GAP) // (COLS + GAP)
+    max_fit = (term_cols + gap) // (COLS + gap)
     if max_fit < 1:
         raise ClockError(
             f"terminal is {term_cols} columns wide and one clock face needs "
@@ -740,13 +1255,13 @@ def fit_per_row(want, n, term_cols):
     return min(want, max_fit)
 
 
-def fit_height(chunks, term_rows):
+def fit_height(chunks, term_rows, vgap):
     """Reject a grid taller than the window.
 
     Too tall scrolls, and scrolling desynchronises the rewind exactly as
     wrapping does -- but here the fix is to raise --per-row, not lower it.
     """
-    height = frame_height(chunks)
+    height = frame_height(chunks, vgap)
     if term_rows > 0 and height > term_rows:
         raise ClockError(
             f"{chunks} rows of clocks need {height} lines and this terminal "
@@ -780,11 +1295,17 @@ def quiet_terminal():
         termios.tcsetattr(fd, termios.TCSAFLUSH, saved)
 
 
-def wants_quit():
-    """True if a q is waiting on stdin. Never blocks; assumes cbreak mode."""
+def pending_keys():
+    """Whatever is waiting on stdin, or b"" if nothing is.
+
+    Never blocks, and assumes cbreak mode, where a key arrives without a
+    Return behind it. Handed back one byte at a time rather than tested for a
+    q, because two spaces in one read have to toggle the hold twice, exactly
+    as the Go port's one-byte-per-channel-send loop does.
+    """
     if not select.select([sys.stdin], [], [], 0)[0]:
-        return False
-    return b"q" in os.read(sys.stdin.fileno(), 64).lower()
+        return b""
+    return os.read(sys.stdin.fileno(), 64)
 
 
 def _terminate(_signum, _frame):
@@ -800,8 +1321,25 @@ def _terminate(_signum, _frame):
 def run(argv):
     """Everything that can fail happens before the terminal is touched."""
     frozen = freeze()
-    want_per_row, zone_list = parse_args(argv)
+    want_per_row, zone_list, color_when, day_when, geometry = parse_args(argv)
+    halign, valign, hpad, vpad = geometry
     zones = resolve_zones(zone_list, frozen or datetime.now(timezone.utc))
+
+    color = use_color(color_when)
+
+    # A pinned clock is a still of one instant, and an undated still records
+    # half of it, so the weekday goes under every face unless --day says
+    # otherwise. Live, auto keeps it for the clocks that actually disagree.
+    if not day_when:
+        day_when = "always" if frozen is not None else "auto"
+    # The instant the display is holding, or None when it runs live. Holding
+    # repaints as usual rather than idling, so a resize still reflows the grid
+    # -- it is the clock that stops, not the drawing.
+    held = None
+    help_on = False
+    # Off the wall clock, not the frame's: a clock pinned with CLOCK_FREEZE
+    # never advances, and the hint still has to give up after three seconds.
+    flash_until = time.monotonic() + FLASH_SECONDS
 
     signal.signal(signal.SIGTERM, _terminate)
 
@@ -815,12 +1353,19 @@ def run(argv):
     # stream the difftest compares unchanged.
     full_screen = sys.stdout.isatty()
 
+    # A pinned clock redirected to a file is the diff harness: one frame and
+    # out. On a terminal there is someone watching, so it stays up instead --
+    # quitting would restore the screen and take the frame with it.
+    one_shot = frozen is not None and not full_screen
+
     sys.stdout.write((ENTER_ALT if full_screen else "") + HIDE_CURSOR)
     height = 0
     try:
         with quiet_terminal() as interactive:
             while True:
                 now = frozen if frozen is not None else datetime.now(timezone.utc)
+                if held is not None:
+                    now = held
 
                 # re-measure every frame rather than trapping SIGWINCH: one
                 # ioctl per 19ms is nothing beside redrawing the faces, it also
@@ -828,10 +1373,42 @@ def run(argv):
                 # handler would interact with the sleep below and drift out of
                 # step with the Go port's loop.
                 cols, lines = term_size()
-                faces = merge_zones(zones, now)
-                per_row = fit_per_row(want_per_row, len(faces), cols)
-                fit_height(chunk_count(len(faces), per_row), lines)
-                rows = frame(faces, now, per_row)
+                faces = order_faces(merge_zones(zones, now), now)
+                try:
+                    per_row = fit_per_row(
+                        want_per_row, len(faces), cols, gap_floor(cols, hpad, GAP)
+                    )
+                    chunks = chunk_count(len(faces), per_row)
+                    fit_height(chunks, lines, gap_floor(lines, vpad, VGAP))
+                except ClockError as exc:
+                    # A window dragged smaller than the clocks need is
+                    # something the reader can undo, so say what is wrong and
+                    # keep measuring: the next frame that fits draws itself.
+                    # Redirected output has no window to resize and still
+                    # fails outright, which is what the diff harness compares.
+                    if not full_screen:
+                        raise
+                    rows = complaint(str(exc), cols, lines, halign)
+                else:
+                    # The key list is laid out under the grid rather than
+                    # spread with it, so the rows it needs come off the height
+                    # first.
+                    show_help = help_on and fit_help(chunks, cols, lines)
+                    reserved = len(help_rows()) + 1 if show_help else 0
+                    # Any lean left over from the grid is answered by the
+                    # labels leaning the other way, so the frame comes out no
+                    # more than a column off centre -- and with a gutter to
+                    # swallow the odd column, dead centre.
+                    gap_n, extra, left, leaned = spread(
+                        per_row, COLS, cols, GAP, hpad, halign
+                    )
+                    vgap, vextra, top, _ = spread(
+                        chunks, ROWS + 2, max(0, lines - reserved), VGAP, vpad, valign
+                    )
+                    lay = Layout(gap_n, extra, left, vgap, vextra, top, leaned)
+                    rows = frame(faces, now, per_row, color, show_help, day_when, lay)
+                if full_screen and time.monotonic() < flash_until:
+                    rows = flash_rows(rows, cols, lines, halign)
 
                 # Repaint in one write. CLEAR_EOL wipes a longer previous
                 # line, CLEAR_BELOW a taller previous frame, so the grid
@@ -851,10 +1428,19 @@ def run(argv):
                 sys.stdout.flush()
                 height = len(rows)
 
-                if frozen is not None:
+                if one_shot:
                     break
-                if interactive and wants_quit():
-                    break
+                if interactive:
+                    quitting = False
+                    for key in pending_keys():
+                        if key in b"qQ":
+                            quitting = True
+                        elif key == b" "[0]:
+                            held = None if held is not None else now
+                        elif key in b"hH":
+                            help_on = not help_on
+                    if quitting:
+                        break
                 time.sleep(TICK - (time.monotonic() % TICK))
     except KeyboardInterrupt:
         pass

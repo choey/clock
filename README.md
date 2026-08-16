@@ -1,26 +1,18 @@
 # clock
 
 A terminal clock: one analog face per time zone, its name and digital readout
-underneath, wrapped into a grid. Two independent implementations — Python and
-Go — that render byte-for-byte identical output.
+underneath, ordered by the time they read and spread over the window. Two
+independent implementations — Python and Go — that render byte-for-byte
+identical output.
 
+```sh
+clock 10001,PT,Jakarta,UTC --per-row 2
 ```
-$ clock UTC,10001,PT
 
-⠀⠀⠀⠀⢀⣠⡴⠒⠋⠉⠉⣿⠉⠉⠙⠒⢦⣄⡀⠀⠀⠀⠀   ⠀⠀⠀⠀⢀⣠⡴⠒⠋⠉⠉⣿⠉⠉⠙⠒⢦⣄⡀⠀⠀⠀⠀   ⠀⠀⠀⠀⢀⣠⡴⠒⠋⠉⠉⣿⠉⠉⠙⠒⢦⣄⡀⠀⠀⠀⠀
-⠀⠀⢀⡴⠋⠀⠁⠀⠀⠀⠀12⣠⠄⠀⠈⠀⠙⢦⡀⠀⠀   ⠀⠀⢀⡴⠋⠀⠁⠀⠀⠀⠀12⣠⠄⠀⠈⠀⠙⢦⡀⠀⠀   ⠀⠀⢀⡴⠋⠀⠁⠀⠀⠀⠀12⣠⠄⠀⠈⠀⠙⢦⡀⠀⠀
-⠀⣰⡋⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⡻⠀⠀⠀⠀⠀⠀⢙⣆⠀   ⠀⣰⡋⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⡻⠀⠀⠀⠀⠀⠀⢙⣆⠀   ⠀⣰⡋⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⡻⠀⠀⠀⠀⠀⠀⢙⣆⠀
-⣰⠁⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⣮⠃⠀⠀⠀⠀⠀⠀⠁⠈⣆   ⣰⠁⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⣮⣳⠏⠀⠀⠀⠀⠀⠁⠈⣆   ⣰⠁⠈⠀⠀⠀⢀⠀⠀⠀⠀⠀⣮⠃⠀⠀⠀⠀⠀⠀⠁⠈⣆
-⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢰⡏⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸   ⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢰⣟⠆⠀⠀⠀⠀⠀⠀⠀⠀⢸   ⡇⠀⠀⠀⠀⠀⠑⠫⢦⢄⡀⢰⡏⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸
-⡷⠶09⠀⠀⠀⠀⣀⡠⠤⢷⡁⠀⠀⠀⠀⠀⠀03⠶⢾   ⡷⠶09⠀⠀⠀⠀⣀⡠⠤⠻⠃⠀⠀⠀⠀⠀⠀03⠶⢾   ⡷⠶09⠀⠀⠀⠀⣀⡩⠾⠷⠁⠀⠀⠀⠀⠀⠀03⠶⢾
-⡇⠀⣀⡠⠤⠒⠊⠉⠀⠀⠀⠈⢞⡄⠀⠀⠀⠀⠀⠀⠀⠀⢸   ⡇⠀⣀⡠⠤⠒⠊⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸   ⡇⠀⣀⡠⠤⠒⠊⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸
-⠹⡈⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⡄⠀⠀⠀⠀⠀⡀⢀⠏   ⠹⡈⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⢀⠏   ⠹⡈⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⢀⠏
-⠀⠱⡅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢨⠎⠀   ⠀⠱⡅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢨⠎⠀   ⠀⠱⡅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢨⠎⠀
-⠀⠀⠈⠢⣄⠀⡀⠀⠀⠀⠀06⠀⠀⠀⢀⠀⣠⠔⠁⠀⠀   ⠀⠀⠈⠢⣄⠀⡀⠀⠀⠀⠀06⠀⠀⠀⢀⠀⣠⠔⠁⠀⠀   ⠀⠀⠈⠢⣄⠀⡀⠀⠀⠀⠀06⠀⠀⠀⢀⠀⣠⠔⠁⠀⠀
-⠀⠀⠀⠀⠀⠙⠳⠤⣀⣀⣀⣿⣀⣀⣀⠤⠞⠋⠀⠀⠀⠀⠀   ⠀⠀⠀⠀⠀⠙⠳⠤⣀⣀⣀⣿⣀⣀⣀⠤⠞⠋⠀⠀⠀⠀⠀   ⠀⠀⠀⠀⠀⠙⠳⠤⣀⣀⣀⣿⣀⣀⣀⠤⠞⠋⠀⠀⠀⠀⠀
-          UTC                       EDT                       PDT
-     05:02:41.901              01:02:41.901              22:02:41.901
-```
+![Four clocks, in a 2x2 grid: PDT, EDT, UTC and WIB](screenshot.png)
+
+On a terminal the hands are coloured apart — hour yellow, minute cyan, second
+red.
 
 ## Running
 
@@ -29,7 +21,8 @@ python3 clock.py
 go run .
 ```
 
-Press `q` (or Ctrl+C) to quit.
+Press space to hold the frame still, `h` for the key list, and `q` (or Ctrl+C)
+to quit.
 
 Go needs `go run .`, not `go run clock.go`: the three termios ioctl requests
 are the one thing that differs between the BSDs and Linux, so they live in
@@ -38,7 +31,9 @@ build-tagged `term_*.go` files, and naming a single file skips them.
 ## Usage
 
 ```
-clock [-n N | --per-row N] [ZONES]
+clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]]
+      [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
+      [ZONES]
 ```
 
 With no arguments you get one clock, in your local zone. Otherwise `ZONES` is a
@@ -55,6 +50,200 @@ clock ET,PT,UTC --per-row 2
 clock --per-row 2 ET,PT,UTC
 ```
 
+### Layout
+
+The clocks are centred in the window, across and down, and the space around
+and between them is shared out evenly — so they sit in from the edges rather
+than against them, and the grid re-settles as the window changes.
+
+| flag | takes | default |
+|---|---|---|
+| `--halign` | `left`, `center`, `right` | `center` |
+| `--valign` | `top`, `center`, `bottom` | `center` |
+| `--hpad` | `even`, or a share of the width, `10%` | `even` |
+| `--vpad` | `even`, or a share of the height, `5%` | `even` |
+
+An even fill counts the margins as gaps: three clocks make four spaces, two of
+them against the edges, and each gets an equal share of what the faces leave
+over. Sharing between the clocks alone would give every spare column to the
+gutters and press the outer clocks flat against the borders — which is the one
+arrangement nobody wants, and which no amount of guessing at a padding should
+be needed to escape.
+
+The share stops at the width of a face. Past that the clocks read as scattered
+rather than as a group, so on a wide window the extra goes to the margins and
+the clocks stay a cluster in the middle: at 300 columns two clocks sit 23
+apart with 115 either side of them, not 254 apart in opposite corners. It never
+goes below the packed 3 columns either, so a window just big enough for the
+grid gets the packed layout rather than a squeeze.
+
+Give a padding instead and the gap is that and nothing else, with everything
+over going to the margins, so the alignment decides where the grid sits:
+
+```sh
+clock --hpad 5% ET,PT,UTC               # 5% of the window between clocks
+clock --hpad 5% --halign left ET,PT,UTC # that grid, against the left edge
+clock --vpad 0 --valign top ET,PT,UTC   # rows stacked at the top, touching
+```
+
+A percentage is a share of the whole window, not of what is left over: at 100
+columns, `--hpad 10%` puts 10 columns between neighbours whatever else is on
+screen, and unlike the even fill it is neither floored at 3 nor capped at a
+face. The flags take their value either way round — `--hpad 5%` or
+`--hpad=5%`.
+
+An odd column cannot be halved into two margins — but a gutter can swallow it.
+Where the even fill leaves an odd column over, one gutter is widened by one
+instead, and the margins come out exactly equal: at 200 columns three clocks
+sit 23 and 24 apart with 42 either side, dead centre. The widened gutter is
+always the last of a full row, so a short row's clocks still line up with the
+row above.
+
+One clock has no gutter to put it in, so there the face itself sits a column
+off centre; the readout under it then leans the other way, and that row comes
+out level. A padding named with `--hpad` is left exactly as named — it is not
+nudged to make the arithmetic work — so an odd column there goes to the right
+margin, one column and no more. (A short last row is asymmetric on purpose:
+its faces keep the gutters and margin of a full row rather than re-centring
+themselves under it.)
+
+Padding is not allowed to break the frame. The faces per row still drop to what
+the width holds, counted against the padding you asked for rather than the
+default 3 columns, and a `--vpad` that would push the grid past the last line
+is refused the same way a too-tall grid always was.
+
+A window that cannot be measured — redirected to a file, say — has nothing to
+fill or centre, so it keeps the packed layout: three columns between clocks,
+one row between rows, no margins. That is what the diff harness compares, and
+what the readout example further down shows.
+
+### Order
+
+Faces are laid out in the order their clocks read, earliest first — left to
+right, then top to bottom — whatever order you typed them in. `clock
+JST,PT,UTC` draws PDT, then UTC, then JST, and the grid reads chronologically:
+each face is later than the one to its left, and the last face of a row is
+earlier than the first of the next.
+
+Sorting on the offset is the same thing. Every face renders one instant, so
+what a clock reads is that instant plus its offset, and the westernmost zone is
+the one furthest behind. Two faces on the *same* offset — `UTC` and `GMT` are
+two faces, since they are labelled differently — keep the order you typed them
+in. Like the merging, the sort is redone every frame, so a zone entering
+daylight saving slides a place along as it happens.
+
+### Different days
+
+When the faces on screen do not all fall on the same date, every readout picks
+up a weekday:
+
+```
+          PDT                       EDT                       UTC
+   Tue 22:02:41.901          Wed 01:02:41.901          Wed 05:02:41.901
+```
+
+The weekday is absolute rather than a `-1d` counted from some reference face:
+it is true on its own terms, and it does not change meaning when you reorder
+the list. It appears under every face or none, so the columns stay lined up,
+and only when there is a disagreement to point out — a row of clocks all
+reading Wednesday says nothing worth three characters.
+
+Nothing off screen is consulted. The clock compares the faces it draws against
+each other and never asserts a date for a zone you did not ask for, so `clock
+JST` on its own stays bare; name `local` alongside it to bring your own day
+into the comparison.
+
+Up to three dates can be on screen at once — UTC−12 to UTC+14 spans 26 hours,
+which crosses two midnights — one reason the readout names the day outright
+instead of counting days from somewhere.
+
+`--day` overrides the rule: `--day` (or `--day=always`) puts a weekday under
+every face whatever they read, `--no-day` (or `--day=never`) keeps it off
+entirely, and `--day=auto` is the rule above, which is the default.
+
+A pinned clock defaults to `always` instead. `CLOCK_FREEZE` makes a still of
+one instant, usually to photograph, and an undated photograph records half of
+it — so a pinned frame carries its date even when every face agrees.
+`--day=auto` asks for the live rule back.
+
+A face has to be 16 columns wide to hold `Wed 05:02:41.901`, which it is at any
+`CLOCK_CELL_RATIO` from about 1.5 up. Below that the weekday is dropped rather
+than the alignment, whatever `--day` says.
+
+### Keys
+
+| key | |
+|---|---|
+| space | hold the frame still, and again to carry on |
+| `h` | show or hide the key list, under the grid |
+| `q` | quit, as does Ctrl+C |
+
+`h` writes the same list under the clocks, so nothing has to be remembered. It
+needs four spare lines and its own width; in a window too tight for both the
+grid and the list, `h` does nothing rather than wrap or scroll the frame.
+
+For the first three seconds a clock says `Press q or Ctrl+C to quit` on the
+bottom line of the window, then drops it — a clock that has taken the whole
+screen owes you the way back out, but only until you have read it. It follows
+the clocks: centred under a centred grid, hard left under any other. If the
+grid already reaches the bottom line, with `--valign bottom` or in a window it
+exactly fills, the hint goes unsaid rather than over the top of a clock.
+
+### Holding a frame
+
+Space stops the clock where it stands; space again lets it go on. Nothing else
+changes — the frame stays on screen, the window can still be resized, and `q`
+still quits — so a screenshot taken while it is held catches a still face and a
+readout that agrees with it, down to the millisecond. Left to run, the second
+hand moves within a single screenshot's exposure and the milliseconds are a
+blur.
+
+Holding is the only way to keep a frame you can see: quitting restores the
+screen underneath, exactly as `less` does, so the clocks are gone before you
+can photograph them, and redirecting to a file keeps a frame but draws no
+clocks.
+
+For a frame you can reproduce exactly — the ones in this README, for instance —
+pin the instant instead:
+
+```sh
+CLOCK_FREEZE=2026-07-15T05:02:41.901000Z clock UTC,10001,PT
+```
+
+The hands never move, space has nothing to hold back, and `h` and `q` work as
+usual. Every readout carries its weekday, for the same reason a photograph
+wants a date on it. Redirect that same command and it draws the one frame and
+exits, which is the form the diff harness uses.
+
+### Colour
+
+The three hands are coloured apart — hour yellow, minute cyan, second red, in
+the terminal's own palette rather than fixed RGB, so they follow whatever theme
+it is wearing. The rim, the ticks and the numerals stay plain.
+
+Colour is on for a terminal and off for a pipe or a file, so a redirected frame
+stays plain text. `--color=always` keeps it when redirecting, and any of
+`--no-color`, `--color=never` or `NO_COLOR` in the environment drops it
+everywhere — though an explicit `--color=always` outranks `NO_COLOR`, since
+that is what asking for *always* means.
+
+Bare `--color` means `--color=always` and never eats the following argument,
+the same rule `ls` and `git` use: `clock --color ET` is a coloured Eastern
+clock, while `clock --color always ET` is two zone lists and an error. The
+value only ever follows an `=`.
+
+Where two hands cross, the shorter one is on top — hour over minute over
+second. A longer hand covers a shorter one along its whole length, while the
+short one can only ever hide a slice of it, so drawn the other way round the
+hour hand disappears under the minute hand for minutes at a time. The hour
+hand is the one you most want to find at a glance, and it is the one with
+nowhere to hide.
+
+Because a braille cell carries eight dots and one colour, a crossing tints
+whole cells: where the minute hand passes under the hour hand, the shared
+cells go yellow, taking a few of the minute hand's dots with them. Numerals
+win outright — a cell holding one drops its dots and its colour together.
+
 ## Zone names
 
 Resolved in this order, first match winning:
@@ -64,10 +253,39 @@ Resolved in this order, first match winning:
 | `ET` `CT` `MT` `PT` | `America/New_York` and friends | follows daylight saving, so it reads `EST` in winter and `EDT` in summer |
 | `AKT` `HT` `BST` `UK` `IST` `JST` `KST` `SGT` `HKT` `AET` `ACT` `AWT` `NZT` | the obvious place | same |
 | `Europe/Berlin` `UTC` `EST` `MST` `HST` `GMT` `CET` `Etc/GMT+5` | itself | any name the tz database knows |
+| `Berlin` `Jakarta` `New_York` `Indiana/Indianapolis` | the zone that ends in it | the city alone, where only one zone ends that way |
 | `PST` `PDT` `EDT` `CST` `CDT` `MDT` `AKST` `AKDT` `HDT` | that exact offset | a fixed clock that never shifts |
 | `JP` `GB` `DE` | that country's zone | 2-letter ISO code, via `zone.tab` |
 | `94110` `941` | the zone that ZIP is in | US only |
 | `local` | your system zone | |
+
+### The city alone
+
+An IANA name ends in the city, and the city on its own will do when only one
+zone ends that way — `Berlin` for `Europe/Berlin`, `Jakarta` for
+`Asia/Jakarta`. Case does not matter, and any whole tail of the name works, so
+`Indianapolis` and `Indiana/Indianapolis` both reach
+`America/Indiana/Indianapolis`.
+
+Whole segments only: `York` is not `New_York`, and `Berl` is not `Berlin`.
+Names come from `zone.tab`, the same file the country codes are read from,
+which lists the canonical zones and leaves out the backward-compatibility
+links — so `Eastern` is not a name here, while `US/Eastern` still resolves the
+ordinary way, in full.
+
+This is looked up last, after the tz database has had its say, so a city can
+never shadow a name the database itself answers to.
+
+Ambiguity is refused rather than guessed at:
+
+```
+$ clock Berlin
+clock: Berlin names 2 zones; name one in full: Europe/Berlin, America/Berlin
+```
+
+Every city in the tz database is unique today — all 418 zones in `zone.tab`
+end differently — but nothing promises it stays that way, and two clocks an
+ocean apart is not a choice to make on your behalf.
 
 The abbreviations only fill gaps the tz database leaves, which is why `EST` and
 `ET` are different clocks and both are right: **`EST` is the fixed −05:00 zone
@@ -154,6 +372,12 @@ with its vote breakdown.
 grid. Hour numerals are overlaid as real characters instead — a cell holds
 braille or text, never both, so a numeral hides whatever dots share its cell.
 
+**Layered hands.** Every dot remembers which hand put it there, and a cell
+takes the colour of the topmost hand with a dot in it — shortest hand on top,
+the reverse of the order they are drawn in. Escapes go per run of same-coloured
+cells rather than per cell, and each row ends back on the default foreground,
+so the gutters between faces stay uncoloured and nothing leaks past the frame.
+
 **19ms refresh, not 20.** 19 is coprime to 10, so the millisecond ones digit
 cycles through all ten values. At a flat 20ms it never moves at all, and 25ms
 would only ever show 0 and 5.
@@ -206,11 +430,14 @@ defaults. A whole frame is then
 
 ```
 width  = perRow * COLS + (perRow - 1) * GAP
-height = rows * (ROWS + 2) + (rows - 1)
+height = rows * (ROWS + 2) + (rows - 1) * VGAP
 ```
 
 so one clock is 23x13, three across is 75x13, four zones at `-n 2` is 49x27,
-and five zones at `-n 2` is 49x41.
+and five zones at `-n 2` is 49x41. `GAP` and `VGAP`, 3 and 1, are the least
+space the layout will leave between clocks: that is the size a grid packs down
+to, and what decides how many faces fit. Given a bigger window it spreads out
+from there, as [Layout](#layout) describes.
 
 ## Terminal requirements
 
@@ -221,14 +448,31 @@ obscurely; use WSL.
 You need a font with braille coverage, and a window big enough for one face
 (23 columns at the default size). The clock measures the terminal every frame
 and quietly lowers `--per-row` to whatever fits, so a narrow window rewraps
-instead of garbling. If not even one face fits, or the grid is taller than the
-window, it says which and stops — note that a too-tall grid is fixed by
-*raising* `--per-row`, the opposite of a too-narrow one. When it can't measure
-at all, e.g. piped to a file, it renders exactly what you asked for.
+instead of garbling.
+
+When not even one face fits, or the grid is taller than the window, the clocks
+give way to the reason:
+
+```
+2 rows of clocks need 27 lines and this terminal has 26;
+raise --per-row, or name fewer zones
+```
+
+It stays there, folded to whatever width there is, until the window can hold
+the clocks again — dragging a corner back is the fix, and quitting to read an
+error on a screen that is about to be restored is no help to anyone. Note that
+a too-tall grid is fixed by *raising* `--per-row`, the opposite of a too-narrow
+one. `q` and Ctrl+C still work while it is up.
+
+Redirected output has no window to drag, so there the same conditions are what
+they always were: the message goes to stderr and the clock exits 1. When it
+can't measure at all, e.g. piped to a file, it renders exactly what you asked
+for.
 
 Because the clock runs on the alternate screen, quitting restores whatever was
 on screen before it and the last frame does not linger — the same as `less` or
-`vim`. Redirect to a file to keep a frame.
+`vim`. Redirect to a file to keep a frame, or hold one with space and
+photograph it.
 
 A `kill -9` skips the terminal restore and leaves echo off and the alternate
 screen active; `stty sane` and `printf '\033[?1049l'` fix it.
@@ -236,10 +480,14 @@ screen active; `stty sane` and `printf '\033[?1049l'` fix it.
 ## Development
 
 `tools/difftest.sh` proves the two implementations agree. It pins both to a
-fixed instant with `CLOCK_FREEZE` (an undocumented dev hook: an instant like
-`2026-07-15T09:53:07.123456Z`, which draws exactly one frame and exits) and to
-a fixed window with `COLUMNS`/`LINES`, then compares stdout, stderr and exit
-status across a few hundred argument lists, terminal sizes and cell ratios. It
+fixed instant with `CLOCK_FREEZE` (an instant like
+`2026-07-15T09:53:07.123456Z`, which redirected draws exactly one frame and
+exits, and on a terminal stays up) and to a fixed window with
+`COLUMNS`/`LINES`, then compares stdout, stderr and exit status across a few
+hundred argument lists, terminal sizes and cell ratios.
+Colour is compared too, under `--color=always` — a redirected clock is plain
+otherwise — including the instants where the hands cross and the layering
+decides what shows. It
 also cross-compiles for Linux, macOS and Windows, and diffs the generated
 tables out of the two files.
 

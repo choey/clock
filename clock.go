@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -36,8 +37,10 @@ const (
 
 	rowsN            = 11   // face height, in terminal rows
 	defaultCellRatio = 2.1  // cell height / width; braille dots are square at 2
-	gap              = 3    // blank columns between adjacent faces
+	gap              = 3    // fewest blank columns between adjacent faces
+	vgap             = 1    // fewest blank rows between rows of faces
 	markerR          = 0.70 // numeral distance from the centre, as a fraction of the radius
+	handTaper        = 0.15 // fraction of a thick hand's length that narrows to a point at the tip
 
 	defaultPerRow = 3  // faces per row before wrapping
 	maxPerRow     = 64 // an upper bound so a typo can't ask for a million faces
@@ -45,26 +48,83 @@ const (
 
 const usage = `clock - analog terminal clocks
 
-usage: clock [-n N | --per-row N] [ZONES]
+usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]]
+             [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
+             [ZONES]
 
   ZONES              comma-separated; default is your local zone
   -n, --per-row N    clocks per row before wrapping (default 3, reduced to fit)
+  --color[=WHEN]     colour the hands: always, auto (default), never
+  --no-color         same as --color=never
+  --day[=WHEN]       weekday on the readout: always, auto (default), never
+  --no-day           same as --day=never
+  --halign WHERE     the grid across the window: left, center (default), right
+  --valign WHERE     the grid down the window: top, center (default), bottom
+  --hpad SPACE       between clocks: even (default), or a share of the width
+  --vpad SPACE       between rows: even (default), or a share of the height
   -h, --help         this message
 
-A zone is an IANA name (Europe/Berlin), a regional abbreviation (ET CT MT PT
+A zone is an IANA name (Europe/Berlin), the city off the end of one where
+that is unambiguous (Berlin, Jakarta), a regional abbreviation (ET CT MT PT
 AKT HT BST IST JST AET ...), a 2-letter country code (JP, GB), or a US ZIP
 code (94110). ET/CT/MT/PT follow daylight saving, so they read EST or EDT
 depending on the date; EST/EDT/PST/PDT and the rest are the fixed offsets,
 which never shift.
 
+The hands are coloured on a terminal and plain when redirected; NO_COLOR
+turns the colour off everywhere. Auto puts a weekday on the readouts only
+when the clocks on screen disagree about the date. An even fill spreads the
+clocks over the whole window; --hpad 10% sets the gaps instead, as a share of
+the window, and then the alignment decides where the grid sits.
+
+Space holds the frame still, for a screenshot, and h lists the keys.
 Press q or Ctrl+C to quit.
 
 examples:
   clock
   clock ET,PT,UTC
   clock -n 2 ET,PT,UTC
+  clock Berlin,Jakarta
   clock Europe/Berlin,Asia/Tokyo,94110 --per-row 2
 `
+
+// haligns and valigns are where the grid can sit when it does not fill the
+// window, and what --halign and --valign accept. Same order as clock.py's
+// tables, and the wording of the error they raise comes off these lists.
+var (
+	whens   = []string{"always", "auto", "never"}
+	haligns = []string{"left", "center", "right"}
+	valigns = []string{"top", "center", "bottom"}
+)
+
+// needs is the example each of the four layout flags gives when handed no
+// value at all.
+var needs = map[string]string{
+	"halign": "--halign center",
+	"valign": "--valign center",
+	"hpad":   "--hpad 10%",
+	"vpad":   "--vpad 5%",
+}
+
+// hotkeys is the key list h puts under the grid. In the order the keys are
+// reached for rather than alphabetically, and kept in the same order as
+// clock.py's table.
+var hotkeys = []struct{ key, what string }{
+	{"space", "hold the frame"},
+	{"h", "hide this list"},
+	{"q", "quit, or Ctrl+C"},
+}
+
+// hotkeyCol is where the descriptions start, so the keys get a gutter.
+const hotkeyCol = 7
+
+// flashText is said once at the bottom of the window and then dropped: a clock
+// that has taken the whole screen owes the reader a way back out, but only
+// until it is read.
+const (
+	flashText = "Press q or Ctrl+C to quit"
+	flashFor  = 3 * time.Second
+)
 
 // cellRatio is how tall a terminal cell is relative to its width. It is the
 // only knob that decides whether the face is round, and it varies by font and
@@ -85,8 +145,11 @@ var colsN = int(math.Floor(rowsN*cellRatio + 0.5))
 // pinning the format keeps both implementations rejecting the same strings.
 const freezeLayout = "2006-01-02T15:04:05.000000Z"
 
-// freeze pins the clock to a fixed instant and draws exactly one frame, so the
-// Go and Python renders can be diffed byte for byte. Dev hook, not in --help.
+// freeze pins the clock to a fixed instant: the hands never move, and space
+// has nothing to hold back. Redirected it draws that one frame and exits,
+// which is what lets the Go and Python renders be diffed byte for byte; on a
+// terminal it stays up, with h and q still live, so the frame can be looked at
+// and photographed. Dev hook, not in --help.
 func freeze() (time.Time, bool, error) {
 	v := os.Getenv("CLOCK_FREEZE")
 	if v == "" {
@@ -112,24 +175,56 @@ var markers = []struct {
 	text string
 }{{0, "12"}, {3, "03"}, {6, "06"}, {9, "09"}}
 
-// hands, drawn shortest-first
+// Which hand a cell belongs to, and so which colour it takes. Higher is on
+// top: the hands stack shortest-first, the reverse of the order they are drawn
+// in, because a longer hand covers a shorter one along its whole length while
+// the short one can only ever hide a slice. Left the other way round, the hour
+// hand -- the one you most want to find -- vanishes under the minute hand for
+// minutes at a time.
+const (
+	layerNone uint8 = iota
+	layerSecond
+	layerMinute
+	layerHour
+)
+
+// handSGR is the foreground code each layer paints with: red second hand as on
+// a real dial, then cyan and yellow, which stay legible on a light and a dark
+// terminal alike. Plain 8-colour codes, so they follow whatever palette the
+// terminal is themed with. defaultFG puts the foreground back and nothing else.
+var handSGR = [4]string{"", "\x1b[31m", "\x1b[36m", "\x1b[33m"}
+
+const defaultFG = "\x1b[39m"
+
+// hands, drawn shortest-first -- which is not the order they stack in; see
+// the layer constants above
 var hands = []struct {
 	length float64 // as a fraction of the radius
 	thick  bool    // two dots thick?
-}{{0.50, true}, {0.75, true}, {0.88, false}}
+	layer  uint8   // which colour its cells take
+}{{0.50, true, layerHour}, {0.75, true, layerMinute}, {0.88, false, layerSecond}}
 
 // braille dot bit for (x % 2, y % 4); the block starts at U+2800
 var dotBits = [2][4]uint8{{0x01, 0x02, 0x04, 0x40}, {0x08, 0x10, 0x20, 0x80}}
 
-// canvas is a dot grid that renders to braille cells, 2 dots wide by 4 tall each.
+// canvas is a dot grid that renders to braille cells, 2 dots wide by 4 tall
+// each. Alongside the dots each cell keeps the topmost layer that dotted it,
+// which is what the colouring reads. Colour is per cell and dots are not: a
+// cell holds up to eight of them, so where two hands share a cell the cell
+// takes the upper hand's colour and a few of the lower hand's dots come along.
 type canvas struct {
 	w, h, cols int
 	cells      []uint8
+	layers     []uint8
 }
 
 func newCanvas(w, h int) *canvas {
 	cols := (w + 1) / 2
-	return &canvas{w: w, h: h, cols: cols, cells: make([]uint8, cols*((h+3)/4))}
+	return &canvas{
+		w: w, h: h, cols: cols,
+		cells:  make([]uint8, cols*((h+3)/4)),
+		layers: make([]uint8, cols*((h+3)/4)),
+	}
 }
 
 // snap quantises a dot coordinate to 1e-9 before anything rounds it to a grid
@@ -144,7 +239,7 @@ func snap(v float64) float64 {
 	return math.Floor(v*1e9+0.5) / 1e9
 }
 
-func (c *canvas) set(fx, fy float64) {
+func (c *canvas) set(fx, fy float64, layer uint8) {
 	// Floor(v + 0.5), not Round(): Round is half-away-from-zero but Python's
 	// round() is half-to-even, which would split the two renders apart
 	x, y := int(math.Floor(snap(fx)+0.5)), int(math.Floor(snap(fy)+0.5))
@@ -152,9 +247,12 @@ func (c *canvas) set(fx, fy float64) {
 		return
 	}
 	c.cells[(y/4)*c.cols+x/2] |= dotBits[x%2][y%4]
+	if layer > c.layers[(y/4)*c.cols+x/2] {
+		c.layers[(y/4)*c.cols+x/2] = layer
+	}
 }
 
-func (c *canvas) line(x0, y0, x1, y1 float64) {
+func (c *canvas) line(x0, y0, x1, y1 float64, layer uint8) {
 	// snap the endpoints too: steps comes off a rounded difference, and a
 	// one-ulp wobble there changes the whole dot sequence, not just one dot
 	x0, y0, x1, y1 = snap(x0), snap(y0), snap(x1), snap(y1)
@@ -164,7 +262,7 @@ func (c *canvas) line(x0, y0, x1, y1 float64) {
 	}
 	for i := 0; i <= steps; i++ {
 		t := float64(i) / float64(steps)
-		c.set(x0+(x1-x0)*t, y0+(y1-y0)*t)
+		c.set(x0+(x1-x0)*t, y0+(y1-y0)*t, layer)
 	}
 }
 
@@ -181,9 +279,35 @@ func (c *canvas) rows() []string {
 	return out
 }
 
+// colorize wraps each run of same-layer cells in that hand's colour. Runs
+// rather than cells: a hand lies along a dozen cells at a stretch, and one
+// escape per cell would multiply what a frame writes for no visible
+// difference. Rows end back on the default foreground, so the gutter between
+// two faces, and whatever the terminal paints past the end of the line, stay
+// the colour they were.
+func colorize(row string, layers []uint8) string {
+	var b strings.Builder
+	current := layerNone
+	for i, cell := range []rune(row) {
+		if layers[i] != current {
+			current = layers[i]
+			if current == layerNone {
+				b.WriteString(defaultFG)
+			} else {
+				b.WriteString(handSGR[current])
+			}
+		}
+		b.WriteRune(cell)
+	}
+	if current != layerNone {
+		b.WriteString(defaultFG)
+	}
+	return b.String()
+}
+
 // face renders one analog face for t, returning its cell rows. Every face is
 // colsN cells wide and rowsN tall.
-func face(t time.Time) []string {
+func face(t time.Time, color bool) []string {
 	rx, ry := float64(colsN), float64(2*rowsN)
 	// Horizontally the centre sits on a cell boundary, vertically in the middle
 	// of a row. The dot grid mirrors about both, which is what makes 09 and 03
@@ -192,7 +316,9 @@ func face(t time.Time) []string {
 	c := newCanvas(2*colsN, 4*rowsN)
 
 	// spoke draws a radial segment from r0 to r1, as fractions of the radius.
-	spoke := func(angle, r0, r1 float64, thick bool) {
+	// A thick spoke drawn with point set narrows over its last handTaper share
+	// to a single dot at r1, instead of ending in a flat, two-dot-wide butt.
+	spoke := func(angle, r0, r1 float64, thick, point bool, layer uint8) {
 		sin, cos := math.Sin(angle), math.Cos(angle)
 		x0, y0 := cx+rx*r0*sin, cy-ry*r0*cos
 		x1, y1 := cx+rx*r1*sin, cy-ry*r1*cos
@@ -201,9 +327,19 @@ func face(t time.Time) []string {
 		if thick {
 			offs = []float64{-0.5, 0.5}
 		}
+		tip := r1
+		if thick && point {
+			tip = r1 - (r1-r0)*handTaper
+		}
+		tx, ty := cx+rx*tip*sin, cy-ry*tip*cos
 		for _, off := range offs {
 			dx, dy := off*cos, off*sin
-			c.line(x0+dx, y0+dy, x1+dx, y1+dy)
+			// the offset shrinks to nothing at the tip, not the base: that is
+			// what tapers the two edges together into a point
+			c.line(x0+dx, y0+dy, tx, ty, layer)
+		}
+		if thick && point {
+			c.line(tx, ty, x1, y1, layer)
 		}
 	}
 
@@ -211,7 +347,7 @@ func face(t time.Time) []string {
 	steps := int(math.Floor(4*math.Pi*math.Max(rx, ry) + 0.5))
 	for i := 0; i < steps; i++ {
 		a := 2 * math.Pi * float64(i) / float64(steps)
-		c.set(cx+rx*math.Sin(a), cy-ry*math.Cos(a))
+		c.set(cx+rx*math.Sin(a), cy-ry*math.Cos(a), layerNone)
 	}
 
 	// hour ticks, the quarters longer and thicker so they sit on the axes
@@ -221,7 +357,7 @@ func face(t time.Time) []string {
 		if major {
 			inner = 0.80
 		}
-		spoke(2*math.Pi*float64(h)/12, inner, 1.0, major)
+		spoke(2*math.Pi*float64(h)/12, inner, 1.0, major, false, layerNone)
 	}
 
 	// hands: fractional seconds drive the sweep
@@ -233,7 +369,7 @@ func face(t time.Time) []string {
 		(sec + frac) / 60,
 	}
 	for i, h := range hands {
-		spoke(2*math.Pi*turns[i], 0, h.length, h.thick)
+		spoke(2*math.Pi*turns[i], 0, h.length, h.thick, true, h.layer)
 	}
 
 	rows := c.rows()
@@ -254,8 +390,17 @@ func face(t time.Time) []string {
 		cells := []rune(rows[row])
 		copy(cells[col:], []rune(mk.text))
 		rows[row] = string(cells)
+		// the numeral took the cell's dots with it, so drop their colour
+		for i := col; i < col+len(mk.text); i++ {
+			c.layers[row*c.cols+i] = layerNone
+		}
 	}
 
+	if color {
+		for r := range rows {
+			rows[r] = colorize(rows[r], c.layers[r*c.cols:(r+1)*c.cols])
+		}
+	}
 	return rows
 }
 
@@ -284,12 +429,61 @@ func parseCount(s, what string, max int) (int, error) {
 	return n, nil
 }
 
-// parseArgs reads the command line: one optional zone list, and -n/--per-row
-// in any position. Hand-rolled rather than package flag, which insists every
+// parseChoice reads one of a short list of words, or rejects it by name. The
+// message is built from the list, so a flag cannot come to accept a word its
+// own error text does not offer.
+func parseChoice(flag, val string, choices []string) (string, error) {
+	for _, c := range choices {
+		if val == c {
+			return val, nil
+		}
+	}
+	names := strings.Join(choices[:len(choices)-1], ", ") + " or " + choices[len(choices)-1]
+	return "", fmt.Errorf("--%s wants %s, got \"%s\"", flag, names, val)
+}
+
+// parsePad reads a padding: -1 for the even fill, or a percentage 0-100. Takes
+// "10" as readily as "10%", and nothing else -- no sign, no decimal point, no
+// space, since clock.py hand-scans the same digits.
+func parsePad(flag, val string) (int, error) {
+	if val == "even" {
+		return -1, nil
+	}
+	bad := fmt.Errorf("--%s wants even or a share like 10%%, got \"%s\"", flag, val)
+	digits := strings.TrimSuffix(val, "%")
+	if digits == "" || len(digits) > 3 {
+		return 0, bad
+	}
+	n := 0
+	for _, c := range []byte(digits) {
+		if c < '0' || c > '9' {
+			return 0, bad
+		}
+		n = n*10 + int(c-'0')
+	}
+	if n > 100 {
+		return 0, bad
+	}
+	return n, nil
+}
+
+// geometry is what the four layout flags collect: where the grid sits when it
+// does not fill the window, and how much space goes between the clocks. A pad
+// of -1 is the even fill.
+type geometry struct {
+	halign, valign string
+	hpad, vpad     int
+}
+
+// parseArgs reads the command line: one optional zone list, and the flags in
+// any position. Hand-rolled rather than package flag, which insists every
 // flag precede the first positional -- "clock ET,PT -n 2" would silently
 // ignore the -n. clock.py runs the same algorithm for the same reason.
-func parseArgs(argv []string) (int, string, error) {
+func parseArgs(argv []string) (int, string, string, string, geometry, error) {
 	perRow := defaultPerRow
+	colorWhen := "auto"
+	dayWhen := "" // unset: run() picks it, since a pinned clock differs
+	geo := geometry{halign: "center", valign: "center", hpad: -1, vpad: -1}
 	var positional []string
 	endOfFlags := false
 
@@ -301,42 +495,110 @@ func parseArgs(argv []string) (int, string, error) {
 		case a == "--":
 			endOfFlags = true
 		case a == "-h" || a == "--help":
-			return 0, "", errHelp
+			return 0, "", "", "", geo, errHelp
 		case strings.HasPrefix(a, "--"):
 			name, val, haveVal := strings.Cut(a[2:], "=")
-			if name != "per-row" {
-				return 0, "", fmt.Errorf("unknown option: --%s", name)
-			}
-			if !haveVal {
-				i++
-				if i >= len(argv) {
-					return 0, "", errors.New("--per-row needs a number, e.g. --per-row 2")
+			switch name {
+			case "per-row":
+				if !haveVal {
+					i++
+					if i >= len(argv) {
+						return 0, "", "", "", geo, errors.New("--per-row needs a number, e.g. --per-row 2")
+					}
+					val = argv[i]
 				}
-				val = argv[i]
+				n, err := parseCount(val, "--per-row", maxPerRow)
+				if err != nil {
+					return 0, "", "", "", geo, err
+				}
+				perRow = n
+			case "color":
+				// Bare --color means always, and takes no separate argument:
+				// "clock --color ET" names a zone list, exactly as ls and git
+				// read the same flag. The value only ever follows an "=".
+				colorWhen = "always"
+				if haveVal {
+					w, err := parseChoice("color", val, whens)
+					if err != nil {
+						return 0, "", "", "", geo, err
+					}
+					colorWhen = w
+				}
+			case "no-color":
+				if haveVal {
+					return 0, "", "", "", geo, errors.New("--no-color takes no value")
+				}
+				colorWhen = "never"
+			case "day":
+				dayWhen = "always"
+				if haveVal {
+					w, err := parseChoice("day", val, whens)
+					if err != nil {
+						return 0, "", "", "", geo, err
+					}
+					dayWhen = w
+				}
+			case "no-day":
+				if haveVal {
+					return 0, "", "", "", geo, errors.New("--no-day takes no value")
+				}
+				dayWhen = "never"
+			case "halign", "valign", "hpad", "vpad":
+				// These four want a value, and take it either way round, as
+				// --per-row does: there is no bare form to be ambiguous with.
+				if !haveVal {
+					i++
+					if i >= len(argv) {
+						return 0, "", "", "", geo, fmt.Errorf(
+							"--%s needs a value, e.g. %s", name, needs[name])
+					}
+					val = argv[i]
+				}
+				switch name {
+				case "halign":
+					w, err := parseChoice(name, val, haligns)
+					if err != nil {
+						return 0, "", "", "", geo, err
+					}
+					geo.halign = w
+				case "valign":
+					w, err := parseChoice(name, val, valigns)
+					if err != nil {
+						return 0, "", "", "", geo, err
+					}
+					geo.valign = w
+				default:
+					n, err := parsePad(name, val)
+					if err != nil {
+						return 0, "", "", "", geo, err
+					}
+					if name == "hpad" {
+						geo.hpad = n
+					} else {
+						geo.vpad = n
+					}
+				}
+			default:
+				return 0, "", "", "", geo, fmt.Errorf("unknown option: --%s", name)
 			}
-			n, err := parseCount(val, "--per-row", maxPerRow)
-			if err != nil {
-				return 0, "", err
-			}
-			perRow = n
 		case len(a) > 1 && strings.HasPrefix(a, "-"):
 			if a[1] != 'n' {
-				return 0, "", fmt.Errorf("unknown option: %s", a)
+				return 0, "", "", "", geo, fmt.Errorf("unknown option: %s", a)
 			}
 			rest := a[2:]
 			switch {
 			case rest == "":
 				i++
 				if i >= len(argv) {
-					return 0, "", errors.New("-n needs a number, e.g. -n 2")
+					return 0, "", "", "", geo, errors.New("-n needs a number, e.g. -n 2")
 				}
 				rest = argv[i]
 			case rest[0] == '=':
-				return 0, "", errors.New("-n takes its value as \"-n N\" or \"-nN\", not \"-n=N\"")
+				return 0, "", "", "", geo, errors.New("-n takes its value as \"-n N\" or \"-nN\", not \"-n=N\"")
 			}
 			n, err := parseCount(rest, "-n", maxPerRow)
 			if err != nil {
-				return 0, "", err
+				return 0, "", "", "", geo, err
 			}
 			perRow = n
 		default:
@@ -345,13 +607,13 @@ func parseArgs(argv []string) (int, string, error) {
 	}
 
 	if len(positional) > 1 {
-		return 0, "", fmt.Errorf("expected one comma-separated zone list, got %d: %s",
+		return 0, "", "", "", geo, fmt.Errorf("expected one comma-separated zone list, got %d: %s",
 			len(positional), strings.Join(positional, " "))
 	}
 	if len(positional) == 0 {
-		return perRow, "", nil
+		return perRow, "", colorWhen, dayWhen, geo, nil
 	}
-	return perRow, positional[0], nil
+	return perRow, positional[0], colorWhen, dayWhen, geo, nil
 }
 
 // A resolved clock face is just its location. No label is stored: it comes off
@@ -631,9 +893,63 @@ func zipZone(token string) (*time.Location, error) {
 	return loc, nil
 }
 
+// suffixZones is the zones whose name ends with the token as a whole path
+// segment: Europe/Berlin for "Berlin", and America/Indiana/Indianapolis for
+// either "Indianapolis" or "Indiana/Indianapolis". Whole segments only, so
+// "Berl" finds nothing and "York" does not answer for "New_York".
+//
+// Read out of zone.tab, the same file the country codes come from, which lists
+// the canonical zones and leaves out the backward-compatibility links -- so
+// "Eastern" is not a name here, and US/Eastern still resolves the ordinary
+// way, in full.
+func suffixZones(token string) ([]string, bool) {
+	data, found := zoneTab()
+	if !found {
+		return nil, false
+	}
+	want := "/" + strings.ToLower(token)
+	var out []string
+	for _, line := range strings.Split(data, "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) >= 3 && strings.HasSuffix(strings.ToLower(fields[2]), want) {
+			out = append(out, fields[2])
+		}
+	}
+	return out, true
+}
+
+// suffixZone is the one zone named by its tail alone, or nil when nothing
+// matches. Ambiguity is refused rather than guessed at: every city in the tz
+// database is unique today, but nothing promises it stays that way, and two
+// clocks an ocean apart is not a choice to make on the reader's behalf.
+func suffixZone(token string) (*time.Location, error) {
+	names, found := suffixZones(token)
+	if !found || len(names) == 0 {
+		return nil, nil
+	}
+	if len(names) > 1 {
+		shown, tail := names, ""
+		if len(shown) > 8 {
+			tail = fmt.Sprintf(" (and %d more)", len(shown)-8)
+			shown = shown[:8]
+		}
+		return nil, fmt.Errorf("%s names %d zones; name one in full: %s%s",
+			token, len(names), strings.Join(shown, ", "), tail)
+	}
+	loc, err := time.LoadLocation(names[0])
+	if err != nil {
+		return nil, nil
+	}
+	return loc, nil
+}
+
 func unknownZone(token string) error {
 	return fmt.Errorf("unknown zone \"%s\"; use an IANA name (Europe/Berlin), "+
-		"an abbreviation (%s), a 2-letter country code (JP), or a US ZIP code",
+		"a city off the end of one (Berlin, Jakarta), an abbreviation (%s), "+
+		"a 2-letter country code (JP), or a US ZIP code",
 		token, aliasNames())
 }
 
@@ -679,6 +995,14 @@ func resolveZone(token string, at time.Time) (*time.Location, error) {
 		if loc != nil {
 			return loc, nil
 		}
+	}
+	// Last, so a city can never shadow a name the database itself answers to.
+	named, err := suffixZone(token)
+	if err != nil {
+		return nil, err
+	}
+	if named != nil {
+		return named, nil
 	}
 	return nil, unknownZone(token)
 }
@@ -783,15 +1107,42 @@ func mergeZones(zones []request, now time.Time) []dial {
 	return out
 }
 
+// utcOffset is how far loc sits from UTC at now, in seconds east.
+func utcOffset(now time.Time, loc *time.Location) int {
+	_, off := now.In(loc).Zone()
+	return off
+}
+
+// orderFaces sorts the faces into the order their clocks read, earliest
+// first: left to right, then top to bottom. Sorted on the offset, which is the
+// same thing: every face renders one instant, so the time one reads is that
+// instant plus its offset, and the westernmost zone is the one furthest
+// behind. Faces that share an offset keep the order they were typed in --
+// SliceStable, not Slice, and Python's sorted() is stable for the same reason
+// -- which is how UTC and GMT, two faces because they are labelled
+// differently, stay where you put them.
+//
+// Redone every frame, like the merging: an offset is a property of the
+// instant, so a zone entering daylight saving slides a place along.
+func orderFaces(faces []dial, now time.Time) []dial {
+	sort.SliceStable(faces, func(i, j int) bool {
+		return utcOffset(now, faces[i].loc) < utcOffset(now, faces[j].loc)
+	})
+	return faces
+}
+
 // center pads s to w columns, the extra space going on the right. Counts runes,
 // not bytes, to match Python's "{:^w}" — zone labels are ASCII today, but the
 // alias table is hand-maintained and the two must not drift.
-func center(s string, w int) string {
+func center(s string, w int, extraLeft bool) string {
 	n := utf8.RuneCountInString(s)
 	if n >= w {
 		return s
 	}
 	left := (w - n) / 2
+	if extraLeft {
+		left = (w - n + 1) / 2
+	}
 	return strings.Repeat(" ", left) + s + strings.Repeat(" ", w-n-left)
 }
 
@@ -808,11 +1159,65 @@ func truncate(s string, n int) string {
 	return string(r[:n])
 }
 
-// digital renders the readout under one face, e.g. "PDT: 09:53:07.123". The
-// clock part is always 12 characters, so the label gets whatever is left; in a
-// grid an over-long line would shove every column to its right out of true.
-func digital(t time.Time) string {
-	return t.Format("15:04:05.000")
+// dayNames is Sunday-first, indexed by time.Weekday. A table rather than a
+// formatted day, because Python's strftime("%a") follows the locale -- "lun."
+// in a French shell -- where Go's Format is fixed English. Hard-coding it
+// keeps the two renders identical on every machine.
+var dayNames = [7]string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
+
+// dayCols is the width of "Mon 05:02:41.901", against the bare readout's 12.
+// A face narrower than this would shove the columns to its right out of true,
+// so a very low CLOCK_CELL_RATIO loses the weekday rather than the alignment.
+const dayCols = 16
+
+// calDay is a calendar date, comparable with ==.
+type calDay struct {
+	year  int
+	month time.Month
+	day   int
+}
+
+func dayOf(t time.Time) calDay {
+	y, m, d := t.Date()
+	return calDay{y, m, d}
+}
+
+// showWeekday reports whether the readouts carry a weekday. Under auto, only
+// when the faces on screen disagree about the date: a weekday under every
+// clock is noise when they all fall on the same one. Nothing off screen is
+// consulted, so the clock never asserts a date for a zone it is not drawing --
+// name "local" in the list to compare against your own day.
+//
+// Up to three dates can be on screen at once, since UTC-12 to UTC+14 spans 26
+// hours and so crosses two midnights.
+//
+// A face too narrow to hold the weekday loses it whatever the setting says,
+// since the alternative is a grid out of true.
+func showWeekday(faces []dial, now time.Time, when string) bool {
+	if when == "never" || colsN < dayCols || len(faces) == 0 {
+		return false
+	}
+	if when == "always" {
+		return true
+	}
+	first := dayOf(now.In(faces[0].loc))
+	for _, d := range faces {
+		if dayOf(now.In(d.loc)) != first {
+			return true
+		}
+	}
+	return false
+}
+
+// digital renders the readout under one face: 12 characters, or 16 with a
+// weekday on it. In a grid an over-long line would shove every column to its
+// right out of true, which is what dayCols guards.
+func digital(t time.Time, weekday bool) string {
+	clock := t.Format("15:04:05.000")
+	if !weekday {
+		return clock
+	}
+	return dayNames[int(t.Weekday())] + " " + clock
 }
 
 // chunkCount is how many rows of faces perRow produces.
@@ -821,17 +1226,162 @@ func chunkCount(n, perRow int) int {
 }
 
 // frameHeight counts the rows a grid occupies: each chunk is a face, its zone
-// name and its digital line, and chunks are separated by one blank row.
-func frameHeight(chunks int) int {
-	return chunks*(rowsN+2) + (chunks - 1)
+// name and its digital line, with vgap blank rows between chunks.
+func frameHeight(chunks, vgap int) int {
+	return chunks*(rowsN+2) + vgap*(chunks-1)
+}
+
+// layout is what spread() works out for one frame: the blank columns between
+// two faces, the margin in front of the first of a row, the blank rows between
+// rows of faces, and the blank rows above the grid.
+type layout struct {
+	gap, extra, left  int  // columns between faces, the one widened gutter, margin
+	vgap, vextra, top int  // and the same down the window
+	extraLeft         bool // which way a label that will not centre leans
+}
+
+// gapFloor is the gap a layout will not go below. An even fill starts from the
+// least the grid can be packed to and grows; a percentage is that share of the
+// whole span, and is the whole answer. A span of 0 is a window that could not
+// be measured, where a percentage of nothing is nothing useful, so the least
+// stands.
+func gapFloor(span, percent, least int) int {
+	if percent < 0 || span <= 0 {
+		return least
+	}
+	return span * percent / 100
+}
+
+// spread lays count blocks of size across span, returning the gap between two
+// of them and the margin in front of the first.
+//
+// An even fill counts the margins as gaps too -- count blocks make count + 1
+// spaces, two of them against the edges -- and gives each an equal share of
+// what the blocks leave. Sharing between the blocks alone would hand every
+// spare column to the gutters and press the outer clocks flat against the
+// borders, which is the one arrangement nobody wants.
+//
+// The share stops at the size of a block: past that the clocks read as
+// scattered rather than as a group, so on a wide window the extra goes to the
+// margins and the clocks stay a cluster in the middle. It never drops below
+// least either, so a window just big enough for the grid gets the packed
+// layout rather than a squeeze.
+//
+// A percentage fixes the gap outright and leaves everything else to the
+// margin, so the alignment has something to work with. An unmeasurable span
+// keeps the packed layout this clock had before any of it was adjustable:
+// least gap, no margin.
+//
+// Comes back as (gap, extra, margin, leaned). A centred layout cannot halve an
+// odd slack into two margins, but a gutter can swallow the odd column instead:
+// extra widens one gutter by one, and the margins come out equal. That only
+// works where there is a gutter, so a single clock still has to lean, and
+// leaned says it did -- the caller's cue to lean the other way on the next
+// rounding, so the two cancel rather than adding up.
+func spread(count, size, span, least, percent int, align string) (int, int, int, bool) {
+	gap := gapFloor(span, percent, least)
+	if span <= 0 {
+		return gap, 0, 0, false
+	}
+	if percent < 0 {
+		share := 0
+		if free := span - count*size; free > 0 {
+			share = free / (count + 1)
+		}
+		gap = share
+		if gap < least {
+			gap = least
+		}
+		if gap > size {
+			gap = size
+		}
+	}
+	slack := span - count*size - gap*(count-1)
+	if slack < 0 {
+		slack = 0
+	}
+	extra := 0
+	// A padding asked for by name is left exactly as asked for; only the even
+	// fill, which chose this gap itself, may nudge one gutter.
+	if align == "center" && percent < 0 && count > 1 && slack%2 == 1 {
+		extra, slack = 1, slack-1
+	}
+	switch align {
+	case "center":
+		return gap, extra, slack / 2, slack%2 == 1
+	case "right", "bottom":
+		return gap, 0, slack, false
+	}
+	return gap, 0, 0, false
+}
+
+// ljust pads s out to w columns on the right, counting runes as Python's
+// "{:<w}" does. Never truncates.
+func ljust(s string, w int) string {
+	if n := w - utf8.RuneCountInString(s); n > 0 {
+		return s + strings.Repeat(" ", n)
+	}
+	return s
+}
+
+// helpRows is the key list, one row per key.
+func helpRows() []string {
+	rows := make([]string, len(hotkeys))
+	for i, k := range hotkeys {
+		rows[i] = ljust(k.key, hotkeyCol) + k.what
+	}
+	return rows
+}
+
+// fitHelp reports whether the key list fits under the grid, blank separator
+// included. When it does not, h is a no-op rather than a wrapped or scrolled
+// frame -- the same trade the weekday makes against a narrow face. A window
+// that cannot be measured is taken to fit, since it has nothing to break.
+func fitHelp(chunks, termCols, termRows int) bool {
+	rows := helpRows()
+	widest := 0
+	for _, r := range rows {
+		if w := utf8.RuneCountInString(r); w > widest {
+			widest = w
+		}
+	}
+	if termCols > 0 && widest > termCols {
+		return false
+	}
+	// Against the packed grid, not the one on screen: an even fill would
+	// otherwise stretch to the last row and leave the list nowhere to go.
+	return termRows <= 0 || frameHeight(chunks, vgap)+len(rows)+1 <= termRows
 }
 
 // frame draws the whole grid: faces left to right, wrapping every perRow. A
 // short last row is left-aligned so the column gutters stay lined up.
-func frame(faces []dial, now time.Time, perRow int) []string {
-	sep := strings.Repeat(" ", gap)
+func frame(faces []dial, now time.Time, perRow int, color, helpOn bool, dayWhen string, lay layout) []string {
+	indent := strings.Repeat(" ", lay.left)
+	weekday := showWeekday(faces, now, dayWhen)
 	chunks := chunkCount(len(faces), perRow)
-	rows := make([]string, 0, frameHeight(chunks))
+
+	// row joins one line of a chunk. The widened gutter is always the last of
+	// a full row rather than whatever the last one happens to be, so a short
+	// row's gutters still line up with the row above.
+	row := func(parts []string) string {
+		var b strings.Builder
+		b.WriteString(indent)
+		for i, part := range parts {
+			if i > 0 {
+				n := lay.gap
+				if lay.extra > 0 && i-1 == perRow-2 {
+					n++
+				}
+				b.WriteString(strings.Repeat(" ", n))
+			}
+			b.WriteString(part)
+		}
+		return b.String()
+	}
+	rows := make([]string, 0, lay.top+frameHeight(chunks, lay.vgap))
+	for i := 0; i < lay.top; i++ {
+		rows = append(rows, "")
+	}
 
 	for ci := 0; ci < chunks; ci++ {
 		hi := (ci + 1) * perRow
@@ -841,30 +1391,42 @@ func frame(faces []dial, now time.Time, perRow int) []string {
 		chunk := faces[ci*perRow : hi]
 
 		if ci > 0 {
-			rows = append(rows, "")
+			n := lay.vgap
+			if lay.vextra > 0 && ci == chunks-1 {
+				n++
+			}
+			for i := 0; i < n; i++ {
+				rows = append(rows, "")
+			}
 		}
 
 		times := make([]time.Time, len(chunk))
 		drawn := make([][]string, len(chunk))
 		for i, d := range chunk {
 			times[i] = now.In(d.loc)
-			drawn[i] = face(times[i])
+			drawn[i] = face(times[i], color)
 		}
 		for r := 0; r < rowsN; r++ {
 			parts := make([]string, len(drawn))
 			for i := range drawn {
 				parts[i] = drawn[i][r]
 			}
-			rows = append(rows, strings.Join(parts, sep))
+			rows = append(rows, row(parts))
 		}
 		labels := make([]string, len(chunk))
 		digits := make([]string, len(chunk))
 		for i, d := range chunk {
-			labels[i] = center(truncate(d.label, colsN), colsN)
-			digits[i] = center(digital(times[i]), colsN)
+			labels[i] = center(truncate(d.label, colsN), colsN, lay.extraLeft)
+			digits[i] = center(digital(times[i], weekday), colsN, lay.extraLeft)
 		}
-		rows = append(rows, strings.Join(labels, sep))
-		rows = append(rows, strings.Join(digits, sep))
+		rows = append(rows, row(labels))
+		rows = append(rows, row(digits))
+	}
+	if helpOn {
+		rows = append(rows, "")
+		for _, r := range helpRows() {
+			rows = append(rows, indent+r)
+		}
 	}
 	return rows
 }
@@ -875,6 +1437,107 @@ func frame(faces []dial, now time.Time, perRow int) []string {
 func isTerminal(f *os.File) bool {
 	info, err := f.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+// flashRows puts the quit hint on the last line of the window, if that line is
+// free. The frame is padded out to the window rather than the hint tucked
+// under the grid, so it sits on the bottom line wherever the grid happens to
+// be. When the grid already reaches that line -- valign bottom, or a window it
+// exactly fills -- there is nowhere to put the hint that would not cover a
+// clock, so it goes unsaid rather than over the top of one. Centred with the
+// clocks and hard left otherwise, since a hint under a left-hand grid belongs
+// at the left edge, not adrift in the middle.
+func flashRows(rows []string, termCols, termRows int, halign string) []string {
+	if termRows <= 0 || len(rows) >= termRows {
+		return rows
+	}
+	width := utf8.RuneCountInString(flashText)
+	if termCols > 0 && termCols < width {
+		return rows // narrower than the hint: it would wrap and cost two rows
+	}
+	left := 0
+	if halign == "center" && termCols > width {
+		left = (termCols - width) / 2
+	}
+	out := make([]string, 0, termRows)
+	out = append(out, rows...)
+	for len(out) < termRows-1 {
+		out = append(out, "")
+	}
+	return append(out, strings.Repeat(" ", left)+flashText)
+}
+
+// fold breaks text onto lines of at most width, on spaces where it can be. A
+// word with nowhere to break -- a window narrower than "--per-row" -- is cut
+// instead, since the alternative is a line that wraps itself and scrolls the
+// screen out from under the next repaint.
+func fold(text string, width int) []string {
+	var rows []string
+	line := ""
+	for _, word := range strings.Split(text, " ") {
+		for width > 0 && utf8.RuneCountInString(word) > width {
+			if line != "" {
+				rows = append(rows, line)
+				line = ""
+			}
+			r := []rune(word)
+			rows = append(rows, string(r[:width]))
+			word = string(r[width:])
+		}
+		switch {
+		case line == "":
+			line = word
+		case utf8.RuneCountInString(line)+1+utf8.RuneCountInString(word) <= width:
+			line += " " + word
+		default:
+			rows = append(rows, line)
+			line = word
+		}
+	}
+	if line != "" {
+		rows = append(rows, line)
+	}
+	return rows
+}
+
+// complaint is the frame that says why there are no clocks, when the window is
+// too small to hold them. Folded to the window and cut to it, and placed the
+// way the quit hint is: centred with the clocks, hard left under any other
+// alignment.
+func complaint(text string, termCols, termRows int, halign string) []string {
+	width := termCols
+	if width <= 0 {
+		width = utf8.RuneCountInString(text)
+	}
+	rows := fold(text, width)
+	if termRows > 0 && len(rows) > termRows {
+		rows = rows[:termRows]
+	}
+	if halign == "center" {
+		for i, r := range rows {
+			rows[i] = strings.Repeat(" ", (width-utf8.RuneCountInString(r))/2) + r
+		}
+	}
+	if termRows > 0 {
+		out := make([]string, 0, termRows)
+		for i := 0; i < (termRows-len(rows))/2; i++ {
+			out = append(out, "")
+		}
+		return append(out, rows...)
+	}
+	return rows
+}
+
+// useColor reports whether to colour the hands. auto colours a terminal and
+// leaves a pipe or a file plain, so a redirected frame stays the plain text
+// the difftest compares. NO_COLOR is the cross-tool convention for "never,
+// from the environment"; an explicit --color=always overrules it, since that
+// is the point of saying always.
+func useColor(when string) bool {
+	if when != "auto" {
+		return when == "always"
+	}
+	return isTerminal(os.Stdout) && os.Getenv("NO_COLOR") == ""
 }
 
 // winsize is the TIOCGWINSZ payload; package syscall declares the ioctl but
@@ -916,7 +1579,7 @@ func termSize() (int, int) {
 // fitPerRow reduces the requested faces-per-row to what the window can hold.
 // Wrapping is what actually breaks the display: a wrapped line desynchronises
 // the cursor rewind and the frame smears.
-func fitPerRow(want, n, termCols int) (int, error) {
+func fitPerRow(want, n, termCols, gap int) (int, error) {
 	if want > n {
 		want = n
 	}
@@ -938,8 +1601,8 @@ func fitPerRow(want, n, termCols int) (int, error) {
 // fitHeight rejects a grid taller than the window. Too tall scrolls, and
 // scrolling desynchronises the rewind exactly as wrapping does -- but here the
 // fix is to raise --per-row, not lower it.
-func fitHeight(chunks, termRows int) error {
-	h := frameHeight(chunks)
+func fitHeight(chunks, termRows, vgap int) error {
+	h := frameHeight(chunks, vgap)
 	if termRows > 0 && h > termRows {
 		return fmt.Errorf(
 			"%d rows of clocks need %d lines and this terminal has %d; raise --per-row, or name fewer zones",
@@ -1007,11 +1670,11 @@ func readKeys() <-chan byte {
 // os.Exit skips deferred restores, so nothing may return an error once the
 // cursor is hidden or cbreak mode is on.
 func run() error {
-	frozen, oneShot, err := freeze()
+	frozen, pinned, err := freeze()
 	if err != nil {
 		return err
 	}
-	wantPerRow, zoneList, err := parseArgs(os.Args[1:])
+	wantPerRow, zoneList, colorWhen, dayWhen, geo, err := parseArgs(os.Args[1:])
 	if errors.Is(err, errHelp) {
 		fmt.Print(usage)
 		return nil
@@ -1019,8 +1682,20 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	color := useColor(colorWhen)
+
+	// A pinned clock is a still of one instant, and an undated still records
+	// half of it, so the weekday goes under every face unless --day says
+	// otherwise. Live, auto keeps it for the clocks that actually disagree.
+	if dayWhen == "" {
+		dayWhen = "auto"
+		if pinned {
+			dayWhen = "always"
+		}
+	}
+
 	startedAt := time.Now()
-	if oneShot {
+	if pinned {
 		startedAt = frozen
 	}
 	zones, err := resolveZones(zoneList, startedAt)
@@ -1044,6 +1719,11 @@ func run() error {
 	// stream the difftest compares unchanged.
 	fullScreen := isTerminal(os.Stdout)
 
+	// A pinned clock redirected to a file is the diff harness: one frame and
+	// out. On a terminal there is someone watching, so it stays up instead --
+	// quitting would restore the screen and take the frame with it.
+	oneShot := pinned && !fullScreen
+
 	if fullScreen {
 		fmt.Print(enterAlt)
 		defer fmt.Print(leaveAlt)
@@ -1055,10 +1735,22 @@ func run() error {
 	defer t.Stop()
 
 	height := 0
+	// held is the instant the display is holding, and holding says whether it
+	// is. Holding repaints as usual rather than idling, so a resize still
+	// reflows the grid -- it is the clock that stops, not the drawing.
+	var held time.Time
+	holding := false
+	helpOn := false
+	// Off the wall clock, not the frame's: a clock pinned with CLOCK_FREEZE
+	// never advances, and the hint still has to give up after three seconds.
+	flashUntil := time.Now().Add(flashFor)
 	for {
 		now := time.Now()
-		if oneShot {
+		if pinned {
 			now = frozen
+		}
+		if holding {
+			now = held
 		}
 
 		// re-measure every frame rather than trapping SIGWINCH: one ioctl per
@@ -1067,15 +1759,49 @@ func run() error {
 		// Python one, where a signal handler would interact with sleep()
 		// under PEP 475 and drift out of step.
 		cols, lines := termSize()
-		faces := mergeZones(zones, now)
-		perRow, err := fitPerRow(wantPerRow, len(faces), cols)
+		faces := orderFaces(mergeZones(zones, now), now)
+
+		var rows []string
+		perRow, err := fitPerRow(wantPerRow, len(faces), cols, gapFloor(cols, geo.hpad, gap))
+		chunks := 0
+		if err == nil {
+			chunks = chunkCount(len(faces), perRow)
+			err = fitHeight(chunks, lines, gapFloor(lines, geo.vpad, vgap))
+		}
 		if err != nil {
-			return err
+			// A window dragged smaller than the clocks need is something the
+			// reader can undo, so say what is wrong and keep measuring: the
+			// next frame that fits draws itself. Redirected output has no
+			// window to resize and still fails outright, which is what the
+			// diff harness compares.
+			if !fullScreen {
+				return err
+			}
+			rows = complaint(err.Error(), cols, lines, geo.halign)
+		} else {
+			// The key list is laid out under the grid rather than spread with
+			// it, so the rows it needs come off the height first.
+			showHelp := helpOn && fitHelp(chunks, cols, lines)
+			reserved := 0
+			if showHelp {
+				reserved = len(helpRows()) + 1
+			}
+			body := lines - reserved
+			if body < 0 {
+				body = 0
+			}
+			// Any lean left over from the grid is answered by the labels
+			// leaning the other way, so the frame comes out no more than a
+			// column off centre -- and with a gutter to swallow the odd
+			// column, dead centre.
+			var lay layout
+			lay.gap, lay.extra, lay.left, lay.extraLeft = spread(perRow, colsN, cols, gap, geo.hpad, geo.halign)
+			lay.vgap, lay.vextra, lay.top, _ = spread(chunks, rowsN+2, body, vgap, geo.vpad, geo.valign)
+			rows = frame(faces, now, perRow, color, showHelp, dayWhen, lay)
 		}
-		if err := fitHeight(chunkCount(len(faces), perRow), lines); err != nil {
-			return err
+		if fullScreen && time.Now().Before(flashUntil) {
+			rows = flashRows(rows, cols, lines, geo.halign)
 		}
-		rows := frame(faces, now, perRow)
 
 		// Repaint in one write. clearEOL wipes a longer previous line,
 		// clearBelow a taller previous frame, so the grid reshapes itself
@@ -1115,8 +1841,13 @@ func run() error {
 			case <-sigs:
 				return nil
 			case k := <-keys:
-				if k == 'q' || k == 'Q' {
+				switch k {
+				case 'q', 'Q':
 					return nil
+				case ' ':
+					holding, held = !holding, now
+				case 'h', 'H':
+					helpOn = !helpOn
 				}
 			}
 		}

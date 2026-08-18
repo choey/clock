@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ziptz"
+version = "0.1.0"
+description = "US ZIP code to IANA time zone, standard library only"
+requires-python = ">=3.9"
+readme = "README.md"
+
+# The package is this directory: ziptz.py holds the library and __init__.py
+# hands through to it, so a clone can import the directory and a copy of
+# ziptz.py can stand alone. Spelled out because the layout is neither of the
+# two setuptools guesses at.
+[tool.setuptools]
+packages = ["ziptz"]
+
+[tool.setuptools.package-dir]
+ziptz = "."

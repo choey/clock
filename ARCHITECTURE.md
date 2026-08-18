@@ -148,22 +148,30 @@ did not, with zero exceptions across five tested values.
 ## ZIP resolution
 
 See [ZIP code accuracy](README.md#zip-code-accuracy) in the README for what
-this guarantees; this is how it's built. A lookup tries an exact 5-digit match
-first and falls back to the 3-digit prefix, and both come from two tables
-`tools/genzips.py` generates into `clock.go` and `clock.py` in the same pass —
-never edit them by hand, or the two ports drift.
+this guarantees; this is how it's built. None of it is in the clock: it is
+[`ziptz`](ziptz/), a library beside it — `ziptz.go` and `ziptz.py`, one Go
+module and one Python module, each installable on its own — and the clock
+calls `Location`/`location` and prints whatever error comes back. Go links it
+in at build time; Python imports it if it's there and says what to install if
+it isn't, since a missing ZIP table is no reason not to draw a clock.
 
-**`zipRuns`** is the prefix table: fixed 4-byte records, `"NNNc"` — the
+A lookup tries an exact 5-digit match first and falls back to the 3-digit
+prefix, and both come from two tables `tools/genzips.py` generates into
+`ziptz/ziptz.go` and `ziptz/ziptz.py` in the same pass — never edit them by
+hand, or the two ports drift.
+
+**`runs`/`RUNS`** is the prefix table: fixed 4-byte records, `"NNNc"` — the
 3-digit prefix a run starts at, then a zone letter. A run reaches to the next
 record's prefix, the last one to 999, and `-` marks a prefix the Postal
 Service hasn't assigned. Zero-padded 3-digit decimals sort lexicographically
 the same way they sort numerically, so the lookup is a binary search over the
 raw string, no integer parsing needed on either side of the port.
 
-**`zipExceptions`** is the 233 ZIPs the prefix table gets wrong, consulted
-first when all five digits are given (three digits alone can't say which ZIP
-is meant). Records are `"PPPcNN"` — prefix, zone letter, then a count of how
-many 2-digit suffixes follow — followed by that many suffixes, ascending:
+**`exceptions`/`EXCEPTIONS`** is the 233 ZIPs the prefix table gets wrong,
+consulted first when all five digits are given (three digits alone can't say
+which ZIP is meant). Records are `"PPPcNN"` — prefix, zone letter, then a
+count of how many 2-digit suffixes follow — followed by that many suffixes,
+ascending:
 
 ```
 373C38 01 02 07 ...        (spaces for clarity only)
@@ -172,13 +180,14 @@ many 2-digit suffixes follow — followed by that many suffixes, ascending:
 Writing the prefix once per group rather than once per ZIP is what keeps this
 smaller than a flat table of 5-digit records. The stride varies group to
 group, so this is a linear forward scan rather than a binary search — there
-are only about thirty groups, and it runs once per zone at startup, never per
-frame.
+are only about thirty groups, and the clock runs it once per zone at startup,
+never per frame.
 
-**`zipZones`** maps each single-letter code used in both tables to one real
-IANA zone. That folding — many actual zones collapsing onto one representative
-letter because they currently agree — is `genzips.py`'s `CANONICAL` table, and
-is exactly what can go stale if a zone's rules diverge from its letter's; see
+**`zones`/`ZONES`** maps each single-letter code used in both tables to one
+real IANA zone. That folding — many actual zones collapsing onto one
+representative letter because they currently agree — is `genzips.py`'s
+`CANONICAL` table, and is exactly what can go stale if a zone's rules diverge
+from its letter's; see
 [When to regenerate](README.md#when-to-regenerate) for that.
 
 Both tables derive from US Census ZCTA Gazetteer centroids (public domain),

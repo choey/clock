@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "Analog terminal clocks, one face per time zone"
 requires-python = ">=3.9"
 readme = "README.md"
+# ZIP tokens only; the clock starts and runs without it, and says so if a ZIP
+# code is asked for. Install it from ziptz/ in this repository: pip install ./ziptz
+dependencies = ["ziptz"]
 
 [project.scripts]
 clock = "clock:main"

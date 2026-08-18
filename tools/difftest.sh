@@ -9,6 +9,12 @@
 set -eu
 
 cd "$(dirname "$0")/.."
+
+# Both clocks resolve ZIP codes through the ziptz library in this tree rather
+# than whichever one is installed: Go through the replace directive in go.mod,
+# Python because clock.py's own directory comes first on sys.path and ziptz/
+# is a package sitting in it.
+
 out=${TMPDIR:-/tmp}/clock-difftest.$$
 mkdir -p "$out"
 trap 'rm -rf "$out"' EXIT
@@ -370,23 +376,23 @@ check 2026-07-15T09:53:07.123Z 200 60 ET
 check 2026-13-99T09:53:07.123456Z 200 60 ET
 
 echo "== embedded table parity =="
-go_runs=$(sed -n 's/^const zipRuns = "\(.*\)".*/\1/p' clock.go)
-py_runs=$(sed -n 's/^ZIP_RUNS = "\(.*\)".*/\1/p' clock.py)
+go_runs=$(sed -n 's/^const runs = "\(.*\)".*/\1/p' ziptz/ziptz.go)
+py_runs=$(sed -n 's/^RUNS = "\(.*\)".*/\1/p' ziptz/ziptz.py)
 if [ "$go_runs" = "$py_runs" ]; then
 	pass=$((pass + 1))
 	[ -z "$verbose" ] || printf 'ok   zip runs match (%s records)\n' "$((${#go_runs} / 4))"
 else
-	echo 'FAIL zip runs differ between clock.go and clock.py'
+	echo 'FAIL zip runs differ between ziptz.go and ziptz.py'
 	fail=$((fail + 1))
 fi
 
-go_exc=$(sed -n 's/^const zipExceptions = "\(.*\)".*/\1/p' clock.go)
-py_exc=$(sed -n 's/^ZIP_EXCEPTIONS = "\(.*\)".*/\1/p' clock.py)
+go_exc=$(sed -n 's/^const exceptions = "\(.*\)".*/\1/p' ziptz/ziptz.go)
+py_exc=$(sed -n 's/^EXCEPTIONS = "\(.*\)".*/\1/p' ziptz/ziptz.py)
 if [ "$go_exc" = "$py_exc" ]; then
 	pass=$((pass + 1))
 	[ -z "$verbose" ] || printf 'ok   zip exceptions match (%s records)\n' "$((${#go_exc} / 6))"
 else
-	echo 'FAIL zip exceptions differ between clock.go and clock.py'
+	echo 'FAIL zip exceptions differ between ziptz.go and ziptz.py'
 	fail=$((fail + 1))
 fi
 
@@ -402,14 +408,14 @@ else
 	fail=$((fail + 1))
 fi
 
-sed -n "s/^	'\(.\)': \"\([A-Za-z_/]*\)\",\$/\1=\2/p" clock.go >"$out/go.zip"
-sed -n 's/^    "\(.\)": "\([A-Za-z_/]*\)",$/\1=\2/p' clock.py >"$out/py.zip"
+sed -n "s/^	'\(.\)': \"\([A-Za-z_/]*\)\",\$/\1=\2/p" ziptz/ziptz.go >"$out/go.zip"
+sed -n 's/^    "\(.\)": "\([A-Za-z_/]*\)",$/\1=\2/p' ziptz/ziptz.py >"$out/py.zip"
 if [ -s "$out/go.zip" ] && cmp -s "$out/go.zip" "$out/py.zip"; then
 	pass=$((pass + 1))
 	[ -z "$verbose" ] || printf 'ok   zip letter tables match (%s entries)\n' \
 		"$(wc -l <"$out/go.zip" | tr -d ' ')"
 else
-	echo 'FAIL zip letter tables differ between clock.go and clock.py'
+	echo 'FAIL zip letter tables differ between ziptz.go and ziptz.py'
 	diff -u "$out/py.zip" "$out/go.zip" || true
 	fail=$((fail + 1))
 fi

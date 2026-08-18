@@ -30,10 +30,11 @@ build-tagged `term_*.go` files, and naming a single file skips them.
 
 ## Installation
 
-Neither implementation has a third-party dependency — the Go side is standard
-library only, and the Python side needs nothing beyond `zoneinfo`, which has
-shipped in the standard library since 3.9 — so installing is just getting one
-file onto your `PATH`.
+Neither implementation has a third-party dependency. The Go side is standard
+library only; the Python side needs nothing beyond `zoneinfo`, which has
+shipped in the standard library since 3.9. The one thing either reaches outside
+itself for is [`ziptz`](ziptz/), the ZIP-to-zone library in this repository —
+also standard library only, and also here in both languages.
 
 ```sh
 go build -o clock . && mv clock /usr/local/bin/
@@ -41,25 +42,37 @@ go build -o clock . && mv clock /usr/local/bin/
 
 builds the binary and puts it wherever you like; `go install .` does the same
 but drops it in `$GOPATH/bin` (or `$GOBIN`) under the name `clock`, which is
-on `PATH` already if you use Go tools regularly.
+on `PATH` already if you use Go tools regularly. Both find `ziptz` through the
+`replace` directive in `go.mod`, so a fresh clone builds without fetching
+anything.
 
 `clock.py` is executable on its own — it carries a `#!/usr/bin/env python3`
-shebang — so the Python side needs only a copy or a symlink, no build step:
+shebang — so the Python side needs no build step, only a copy of it and of
+`ziptz.py` beside it:
 
 ```sh
-cp clock.py /usr/local/bin/clock
+cp clock.py ziptz/ziptz.py /usr/local/bin/
+mv /usr/local/bin/clock.py /usr/local/bin/clock
 ```
 
-or, to manage it like any other Python tool instead:
+or, to manage them like any other Python tool instead:
 
 ```sh
-pip install .
+pip install ./ziptz .
 ```
 
 which puts a `clock` entry point on your `PATH` inside whatever environment
-you ran `pip` in — a virtualenv, or `pipx install .` for one isolated from
-your other Python packages. `pip install -e .` does the same but re-reads
-`clock.py` from this checkout on every run, for working on it in place.
+you ran `pip` in — a virtualenv, or `pipx install ./ziptz .` for one isolated
+from your other Python packages. `pip install -e ./ziptz -e .` does the same
+but re-reads both files from this checkout on every run, for working on them in
+place.
+
+`ziptz` carries ZIP codes and nothing else, so the Python clock treats it as
+optional: without it every zone name, abbreviation and country code still
+works, and a ZIP code says what to install rather than the clock refusing to
+start. A clone needs nothing installed either — `ziptz/` is a package, and
+`clock.py` finds its own directory first — so `python3 clock.py 94110` works
+straight out of a checkout.
 
 ## Usage
 
@@ -398,14 +411,19 @@ Verified against the source: of 33,791 ZIP codes, 233 (0.69%) resolve wrongly
 from the prefix alone, and **none** resolve wrongly from all five digits.
 
 The worst case a prefix gets wrong is `96799`, American Samoa, an hour behind
-Honolulu; `86504` and `865` differ only in summer, since the Navajo Nation
-observes daylight saving where the rest of Arizona does not.
+Honolulu; the mildest is `86502`, which resolves to Phoenix where its prefix
+rounds to Denver — the same time all winter, an hour apart all summer, since
+Arizona skips daylight saving and the Navajo Nation around it does not.
 
 One gap remains: PO-box and single-building ZIPs have no delivery-area data to
 place them precisely, so even given in full they fall back to their prefix's
 answer. See [ARCHITECTURE.md](ARCHITECTURE.md#zip-resolution) for how the two
 lookup tables are built and encoded, and [When to
 regenerate](#when-to-regenerate) for when they need to be.
+
+The tables and the two lookups over them are not part of the clock: they are
+[`ziptz`](ziptz/), a library in this repository, in Go and in Python, usable
+and installable on its own.
 
 ## Tuning
 
@@ -528,15 +546,23 @@ hundreds of argument lists, terminal sizes and cell ratios — including the
 even sizes. Colour is compared too, under `--color=always` — a redirected
 clock is plain otherwise — including the instants where the hands cross and
 the layering decides what shows. It also cross-compiles for Linux, macOS and
-Windows, and diffs the generated tables out of the two files.
+Windows, and diffs the generated tables out of the two `ziptz` files.
 
 ```sh
 tools/difftest.sh -v
 ```
 
-`tools/genzips.py` regenerates the ZIP table, writing `clock.go` and `clock.py`
-in the same pass — which is what keeps the two literals from drifting. Never
-edit them by hand.
+`ziptz` has tests of its own — `ziptz_test.go` and `test_ziptz.py`, written
+case for case against each other — and `make test` runs those and the difftest
+together.
+
+```sh
+make test
+```
+
+`tools/genzips.py` regenerates the ZIP table, writing `ziptz/ziptz.go` and
+`ziptz/ziptz.py` in the same pass — which is what keeps the two literals from
+drifting. Never edit them by hand.
 
 ```sh
 pip install timezonefinder
@@ -574,7 +600,7 @@ genzips: these zones no longer track the letter they fold onto, so folding
 them would serve the wrong hour:
   America/Phoenix parts from America/Denver on 2026-08-12
 Give the divergent one its own letter in CANONICAL, and add that letter to
-zipZones/ZIP_ZONES in both clocks.
+zones/ZONES in both ziptz libraries.
 ```
 
 The ZIP data derives from US Census ZCTA Gazetteer centroids (a US Government

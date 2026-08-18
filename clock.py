@@ -38,20 +38,24 @@ LEAVE_ALT = "\x1b[?1049l"
 
 USAGE = """clock - analog terminal clocks
 
-usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]]
+usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
              [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
              [ZONES]
 
-  ZONES              comma-separated; default is your local zone
+  ZONES              comma-separated zone names, described below; default is
+                      your local zone
   -n, --per-row N    clocks per row before wrapping (default 3, reduced to fit)
-  --color[=WHEN]     colour the hands: always, auto (default), never
+  --color[=WHEN]     colour the hands: always, auto (default), never or off
   --no-color         same as --color=never
   --day[=WHEN]       weekday on the readout: always, auto (default), never
   --no-day           same as --day=never
+  -q, --quiet        skip the "press q to quit" hint shown at startup
   --halign WHERE     the grid across the window: left, center (default), right
   --valign WHERE     the grid down the window: top, center (default), bottom
   --hpad SPACE       between clocks: even (default), or a share of the width
+                      like 10%
   --vpad SPACE       between rows: even (default), or a share of the height
+                      like 5%
   -h, --help         this message
 
 A zone is an IANA name (Europe/Berlin), the city off the end of one where
@@ -67,7 +71,7 @@ when the clocks on screen disagree about the date. An even fill spreads the
 clocks over the whole window; --hpad 10% sets the gaps instead, as a share of
 the window, and then the alignment decides where the grid sits.
 
-Space holds the frame still, for a screenshot, and h lists the keys.
+Space holds the frame still, for a screenshot, and h or ? opens the key list.
 Press q or Ctrl+C to quit.
 
 examples:
@@ -78,17 +82,19 @@ examples:
   clock Europe/Berlin,Asia/Tokyo,94110 --per-row 2
 """
 
-# The key list h puts under the grid. In the order the keys are reached for
-# rather than alphabetically, and kept in the same order as clock.go's table.
+# The key list h or ? puts up in a modal. In the order the keys are reached
+# for rather than alphabetically, and kept in the same order as clock.go's
+# table.
 HOTKEYS = (
     ("space", "hold the frame"),
-    ("h", "hide this list"),
+    ("h ?", "toggle this list"),
     ("q", "quit, or Ctrl+C"),
 )
-HOTKEY_COL = 7  # where the descriptions start, so the keys get a gutter
+HOTKEY_COL = 8  # where the descriptions start, so the keys get a gutter
 
-# Said once at the bottom of the window, then dropped: a clock that has taken
-# the whole screen owes the reader a way back out, but only until it is read.
+# Said once, in the same modal the key list uses, and then dropped: a clock
+# that has taken the whole screen owes the reader a way back out, but only
+# until it is read. -q/--quiet skips it outright.
 FLASH = "Press q or Ctrl+C to quit"
 FLASH_SECONDS = 3.0
 
@@ -198,6 +204,9 @@ HANDS = (
 
 # What --color and --day accept; auto reads the situation, the other two do not.
 WHENS = ("always", "auto", "never")
+# --color takes "off" too, alongside "never": both disable colour, but "off"
+# is the more obvious word for it.
+COLOR_WHENS = ("always", "auto", "never", "off")
 
 # braille dot bit for (x % 2, y % 4); the block starts at U+2800
 DOT_BITS = ((0x01, 0x02, 0x04, 0x40), (0x08, 0x10, 0x20, 0x80))
@@ -428,6 +437,7 @@ def parse_args(argv):
     day_when = ""  # unset: run() picks it, since a pinned clock differs
     halign, valign = "center", "center"
     hpad, vpad = None, None  # None is the even fill
+    quiet = False
     positional = []
     end_of_flags = False
 
@@ -453,7 +463,7 @@ def parse_args(argv):
                 # Bare --color means always, and takes no separate argument:
                 # "clock --color ET" names a zone list, exactly as ls and git
                 # read the same flag. The value only ever follows an "=".
-                color_when = parse_choice("color", val, WHENS) if sep else "always"
+                color_when = parse_choice("color", val, COLOR_WHENS) if sep else "always"
             elif name == "no-color":
                 if sep:
                     raise ClockError("--no-color takes no value")
@@ -464,6 +474,10 @@ def parse_args(argv):
                 if sep:
                     raise ClockError("--no-day takes no value")
                 day_when = "never"
+            elif name == "quiet":
+                if sep:
+                    raise ClockError("--quiet takes no value")
+                quiet = True
             elif name in ("halign", "valign", "hpad", "vpad"):
                 # These four want a value, and take it either way round, as
                 # --per-row does: there is no bare form to be ambiguous with.
@@ -482,6 +496,8 @@ def parse_args(argv):
                     vpad = parse_pad(name, val)
             else:
                 raise ClockError(f"unknown option: --{name}")
+        elif a == "-q":
+            quiet = True
         elif len(a) > 1 and a.startswith("-"):
             if a[1] != "n":
                 raise ClockError(f"unknown option: {a}")
@@ -509,6 +525,7 @@ def parse_args(argv):
         color_when,
         day_when,
         (halign, valign, hpad, vpad),
+        quiet,
     )
 
 
@@ -1064,22 +1081,6 @@ def help_rows():
     return [f"{key:<{HOTKEY_COL}}{what}" for key, what in HOTKEYS]
 
 
-def fit_help(chunks, term_cols, term_rows):
-    """Whether the key list fits under the grid, blank separator included.
-
-    When it does not, h is a no-op rather than a wrapped or scrolled frame --
-    the same trade the weekday makes against a narrow face. A window that
-    cannot be measured is taken to fit, since it has nothing to break.
-    """
-    rows = help_rows()
-    if term_cols > 0 and max(len(r) for r in rows) > term_cols:
-        return False
-    # Against the packed grid, not the one on screen: an even fill would
-    # otherwise stretch to the last row and leave the list nowhere to go.
-    packed = frame_height(chunks, VGAP)
-    return term_rows <= 0 or packed + len(rows) + 1 <= term_rows
-
-
 # One frame's spacing, both axes: the blank columns between faces and rows
 # between rows of faces, the one gutter each axis widens to swallow an odd
 # column, the margins before the first of each, and which way to lean a label
@@ -1089,7 +1090,7 @@ Layout = collections.namedtuple(
 )
 
 
-def frame(faces, now, per_row, color, help_on, day_when, lay):
+def frame(faces, now, per_row, color, day_when, lay):
     """Draw the whole grid: faces left to right, wrapping every per_row.
 
     A short last row keeps the gutters and margin of a full one, so the
@@ -1125,31 +1126,55 @@ def frame(faces, now, per_row, color, help_on, day_when, lay):
         rows.append(
             row([center(digital(t, weekday), COLS, lay.extra_left) for t in times])
         )
-    if help_on:
-        rows.append("")
-        rows.extend(indent + row for row in help_rows())
     return rows
 
 
-def flash_rows(rows, term_cols, term_rows, halign):
-    """Put the quit hint on the last line of the window, if that line is free.
+def modal_box(content):
+    """Draw content inside a one-line border.
 
-    The frame is padded out to the window rather than the hint tucked under the
-    grid, so it sits on the bottom line wherever the grid happens to be. When
-    the grid already reaches that line -- valign bottom, or a window it exactly
-    fills -- there is nowhere to put the hint that would not cover a clock, so
-    it goes unsaid rather than over the top of one. Centred with the clocks and
-    hard left otherwise, since a hint under a left-hand grid belongs at the
-    left edge, not adrift in the middle.
+    Used for both the key list and the startup quit hint so the two read as
+    the same kind of thing: a modal overlaid on the clocks, not part of the
+    grid underneath it.
     """
-    if term_rows <= 0 or len(rows) >= term_rows:
-        return rows
-    if 0 < term_cols < len(FLASH):
-        return rows  # narrower than the hint: it would wrap and cost two rows
-    left = 0
-    if halign == "center" and term_cols > len(FLASH):
-        left = (term_cols - len(FLASH)) // 2
-    return rows + [""] * (term_rows - len(rows) - 1) + [" " * left + FLASH]
+    width = max(len(c) for c in content)
+    box = [f"┌{'─' * (width + 2)}┐"]
+    box.extend(f"│ {c:<{width}} │" for c in content)
+    box.append(f"└{'─' * (width + 2)}┘")
+    return box
+
+
+def center_modal(box, term_cols, term_rows):
+    """Where to place a modal in the middle of a term_cols x term_rows window.
+
+    ok is False when it does not fit, the same trade the key list already made
+    against a narrow window: no modal beats a wrapped or clipped one. A window
+    that cannot be measured has nowhere settled to put one, so that is also a
+    no.
+    """
+    width, height = len(box[0]), len(box)
+    if term_cols <= 0 or term_rows <= 0 or width > term_cols or height > term_rows:
+        return 0, 0, False
+    return (term_rows - height) // 2, (term_cols - width) // 2, True
+
+
+def overlay_modal(rows, box, top, left):
+    """Stamp box onto rows at (top, left).
+
+    Extends rows with blank lines and pads short ones with spaces so the box
+    always lands intact regardless of what the grid drew there. rows must be
+    plain text -- no ANSI -- which run guarantees by turning colour off for
+    any frame a modal is going to be stamped onto, so a modal never has to
+    reason about resuming a hand's colour on the far side of it.
+    """
+    out = list(rows) + [""] * (top + len(box) - len(rows))
+    for i, line in enumerate(box):
+        r = top + i
+        existing = out[r]
+        if len(existing) < left:
+            existing += " " * (left - len(existing))
+        tail = existing[left + len(line):]
+        out[r] = existing[:left] + line + tail
+    return out
 
 
 def fold(text, width):
@@ -1321,7 +1346,7 @@ def _terminate(_signum, _frame):
 def run(argv):
     """Everything that can fail happens before the terminal is touched."""
     frozen = freeze()
-    want_per_row, zone_list, color_when, day_when, geometry = parse_args(argv)
+    want_per_row, zone_list, color_when, day_when, geometry, quiet = parse_args(argv)
     halign, valign, hpad, vpad = geometry
     zones = resolve_zones(zone_list, frozen or datetime.now(timezone.utc))
 
@@ -1374,6 +1399,11 @@ def run(argv):
                 # step with the Go port's loop.
                 cols, lines = term_size()
                 faces = order_faces(merge_zones(zones, now), now)
+                # The key list and the startup hint are the same kind of
+                # thing -- a modal laid over the clocks -- so only one shows
+                # at a time, and the key list, being asked for, wins over a
+                # hint that is already redundant with the "q" line in it.
+                fits = False
                 try:
                     per_row = fit_per_row(
                         want_per_row, len(faces), cols, gap_floor(cols, hpad, GAP)
@@ -1390,11 +1420,19 @@ def run(argv):
                         raise
                     rows = complaint(str(exc), cols, lines, halign)
                 else:
-                    # The key list is laid out under the grid rather than
-                    # spread with it, so the rows it needs come off the height
-                    # first.
-                    show_help = help_on and fit_help(chunks, cols, lines)
-                    reserved = len(help_rows()) + 1 if show_help else 0
+                    fits = True
+
+                content = None
+                if fits and full_screen and help_on:
+                    content = help_rows()
+                elif not quiet and full_screen and time.monotonic() < flash_until:
+                    content = [FLASH]
+                show_modal = False
+                if content is not None:
+                    modal = modal_box(content)
+                    modal_top, modal_left, show_modal = center_modal(modal, cols, lines)
+
+                if fits:
                     # Any lean left over from the grid is answered by the
                     # labels leaning the other way, so the frame comes out no
                     # more than a column off centre -- and with a gutter to
@@ -1403,12 +1441,16 @@ def run(argv):
                         per_row, COLS, cols, GAP, hpad, halign
                     )
                     vgap, vextra, top, _ = spread(
-                        chunks, ROWS + 2, max(0, lines - reserved), VGAP, vpad, valign
+                        chunks, ROWS + 2, lines, VGAP, vpad, valign
                     )
                     lay = Layout(gap_n, extra, left, vgap, vextra, top, leaned)
-                    rows = frame(faces, now, per_row, color, show_help, day_when, lay)
-                if full_screen and time.monotonic() < flash_until:
-                    rows = flash_rows(rows, cols, lines, halign)
+                    # Colour comes off whenever a modal is about to be
+                    # stamped on top: overlay_modal works in plain text, so
+                    # nothing under the modal is left carrying a hand's
+                    # colour past it.
+                    rows = frame(faces, now, per_row, color and not show_modal, day_when, lay)
+                if show_modal:
+                    rows = overlay_modal(rows, modal, modal_top, modal_left)
 
                 # Repaint in one write. CLEAR_EOL wipes a longer previous
                 # line, CLEAR_BELOW a taller previous frame, so the grid
@@ -1437,7 +1479,7 @@ def run(argv):
                             quitting = True
                         elif key == b" "[0]:
                             held = None if held is not None else now
-                        elif key in b"hH":
+                        elif key in b"hH?":
                             help_on = not help_on
                     if quitting:
                         break

@@ -17,21 +17,43 @@ red.
 ## Running
 
 ```sh
-python3 clock.py
-go run .
+python3 clock.py   # or: make run-py
+go run .            # or: make run-go
 ```
 
-Press space to hold the frame still, `h` for the key list, and `q` (or Ctrl+C)
-to quit.
+Press space to hold the frame still, `h` or `?` for the key list, and `q` (or
+Ctrl+C) to quit.
 
 Go needs `go run .`, not `go run clock.go`: the three termios ioctl requests
 are the one thing that differs between the BSDs and Linux, so they live in
 build-tagged `term_*.go` files, and naming a single file skips them.
 
+## Installation
+
+Neither implementation has a third-party dependency — the Go side is standard
+library only, and the Python side needs nothing beyond `zoneinfo`, which has
+shipped in the standard library since 3.9 — so installing is just getting one
+file onto your `PATH`.
+
+```sh
+go build -o clock . && mv clock /usr/local/bin/
+```
+
+builds the binary and puts it wherever you like; `go install .` does the same
+but drops it in `$GOPATH/bin` (or `$GOBIN`) under the name `clock`, which is
+on `PATH` already if you use Go tools regularly.
+
+`clock.py` is executable on its own — it carries a `#!/usr/bin/env python3`
+shebang — so the Python side needs only a copy or a symlink, no build step:
+
+```sh
+cp clock.py /usr/local/bin/clock
+```
+
 ## Usage
 
 ```
-clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]]
+clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
       [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
       [ZONES]
 ```
@@ -113,9 +135,8 @@ default 3 columns, and a `--vpad` that would push the grid past the last line
 is refused the same way a too-tall grid always was.
 
 A window that cannot be measured — redirected to a file, say — has nothing to
-fill or centre, so it keeps the packed layout: three columns between clocks,
-one row between rows, no margins. That is what the diff harness compares, and
-what the readout example further down shows.
+fill or centre, so it keeps the packed layout instead: three columns between
+clocks, one row between rows, no margins.
 
 ### Order
 
@@ -175,19 +196,21 @@ than the alignment, whatever `--day` says.
 | key | |
 |---|---|
 | space | hold the frame still, and again to carry on |
-| `h` | show or hide the key list, under the grid |
+| `h` or `?` | show or hide the key list |
 | `q` | quit, as does Ctrl+C |
 
-`h` writes the same list under the clocks, so nothing has to be remembered. It
-needs four spare lines and its own width; in a window too tight for both the
-grid and the list, `h` does nothing rather than wrap or scroll the frame.
+`h` or `?` opens the key list in a bordered box centred over the clocks, the
+same way a dialog sits over a window — not tucked under the grid, so it works
+whatever the grid's size or alignment. In a window too small to hold the box,
+the key press does nothing rather than clip or wrap it.
 
-For the first three seconds a clock says `Press q or Ctrl+C to quit` on the
-bottom line of the window, then drops it — a clock that has taken the whole
-screen owes you the way back out, but only until you have read it. It follows
-the clocks: centred under a centred grid, hard left under any other. If the
-grid already reaches the bottom line, with `--valign bottom` or in a window it
-exactly fills, the hint goes unsaid rather than over the top of a clock.
+For the first three seconds a clock says `Press q or Ctrl+C to quit`, in that
+same boxed style, then drops it — a clock that has taken the whole screen owes
+you the way back out, but only until you have read it. `-q`/`--quiet` skips
+this hint from the start, for a launch that doesn't blink; the key list is
+still there on `h` or `?` regardless. Pressing `h`/`?` before the three
+seconds are up shows the key list in its place, since the list already says
+everything the hint does.
 
 ### Holding a frame
 
@@ -212,8 +235,8 @@ CLOCK_FREEZE=2026-07-15T05:02:41.901000Z clock UTC,10001,PT
 
 The hands never move, space has nothing to hold back, and `h` and `q` work as
 usual. Every readout carries its weekday, for the same reason a photograph
-wants a date on it. Redirect that same command and it draws the one frame and
-exits, which is the form the diff harness uses.
+wants a date on it. Redirect that same command to a file and it draws the one
+frame and exits, instead of staying up.
 
 ### Colour
 
@@ -223,9 +246,9 @@ it is wearing. The rim, the ticks and the numerals stay plain.
 
 Colour is on for a terminal and off for a pipe or a file, so a redirected frame
 stays plain text. `--color=always` keeps it when redirecting, and any of
-`--no-color`, `--color=never` or `NO_COLOR` in the environment drops it
-everywhere — though an explicit `--color=always` outranks `NO_COLOR`, since
-that is what asking for *always* means.
+`--no-color`, `--color=never`, `--color=off` or `NO_COLOR` in the environment
+drops it everywhere — though an explicit `--color=always` outranks `NO_COLOR`,
+since that is what asking for *always* means.
 
 Bare `--color` means `--color=always` and never eats the following argument,
 the same rule `ls` and `git` use: `clock --color ET` is a coloured Eastern
@@ -337,17 +360,15 @@ happens.
 
 ### ZIP code accuracy
 
-Give all five digits and the answer is exact. The 3-digit prefix table stores
-one zone per prefix, decided by majority of the ZIP codes under it, so a prefix
-straddling a zone boundary rounds to whichever side holds more — 30 prefixes do,
-covering 233 ZIP codes that the majority gets wrong. Those 233 are named
-individually in a second table, which a 5-digit lookup consults first:
+Give all five digits and the answer is exact. Three digits (the prefix alone)
+is usually right but not always: 233 ZIP codes, across 30 prefixes, sit on the
+losing side of a zone boundary their prefix rounds the wrong way.
 
 ```
 $ clock 79835        # Canutillo, TX — El Paso County
-   MDT               # right: the exception table names it
+   MDT               # right: five digits are always exact
 $ clock 798          # the prefix alone
-   CDT               # the majority, which is Van Horn's side of the line
+   CDT               # wrong: most of 798 is CDT, but not this ZIP
 ```
 
 Verified against the source: of 33,791 ZIP codes, 233 (0.69%) resolve wrongly
@@ -357,61 +378,11 @@ The worst case a prefix gets wrong is `96799`, American Samoa, an hour behind
 Honolulu; `86504` and `865` differ only in summer, since the Navajo Nation
 observes daylight saving where the rest of Arizona does not.
 
-One gap remains. The tables come from Census ZCTA centroids, which exist only
-for ZIP codes with a delivery area — PO-box and single-building ZIPs have none,
-so they are absent from both tables and fall back to their prefix's majority.
-Those are the only 5-digit ZIPs that can still come out wrong.
-
-`tools/genzips.py` regenerates both tables and prints every straddling prefix
-with its vote breakdown.
-
-## How it works
-
-**Braille canvas.** Each terminal cell carries a 2x4 grid of braille dots
-(U+2800 and up), giving the faces roughly 4x the resolution of the character
-grid. Hour numerals are overlaid as real characters instead — a cell holds
-braille or text, never both, so a numeral hides whatever dots share its cell.
-
-**Layered hands.** Every dot remembers which hand put it there, and a cell
-takes the colour of the topmost hand with a dot in it — shortest hand on top,
-the reverse of the order they are drawn in. Escapes go per run of same-coloured
-cells rather than per cell, and each row ends back on the default foreground,
-so the gutters between faces stay uncoloured and nothing leaks past the frame.
-
-**19ms refresh, not 20.** 19 is coprime to 10, so the millisecond ones digit
-cycles through all ten values. At a flat 20ms it never moves at all, and 25ms
-would only ever show 0 and 5.
-
-**Smooth sweep.** The second hand takes fractional seconds, so it glides
-rather than stepping once a second.
-
-**One instant per frame.** Each frame samples the clock once and converts that
-single instant into every zone on screen, so no two faces can disagree by a
-millisecond at a rollover.
-
-**Snapped coordinates.** Dot positions are quantised to 1e-9 before they are
-rounded onto the grid. Go computes sin/cos in software while Python calls the
-platform libm; they agree to well under an ulp, but not bit for bit, and
-without the snap a dot sitting near a half-dot boundary lands in different
-cells in the two renders.
-
-**Repaint.** The whole frame is built as a single string and written in one
-call. On a terminal the clock takes the alternate screen (`ESC[?1049h`) and
-paints each frame from its top corner with `ESC[H`; `ESC[K` on each row clears
-a longer previous line and `ESC[J` at the end clears a taller previous frame,
-so the grid reshapes cleanly when the window changes. Keystrokes are swallowed
-(cbreak, `ISIG` left on) so a stray Return can't scroll the frame.
-
-Painting from a fixed corner rather than rewinding with `ESC[<n>A` is what
-makes a resize safe. A rewind counts the rows *written*, assuming each occupies
-one physical line — but narrow the window and the terminal rewraps the frame
-already on screen, so those rows become two lines each, the rewind lands inside
-the old frame, and its upper half is left behind smeared into the new one.
-`ESC[J` only ever clears downwards, so it cannot mop that up. Owning a screen
-makes the frame's position independent of whatever happened to the last one.
-
-Piped output has no resize to survive and keeps the rewind, which is also what
-lets `tools/difftest.sh` compare the two implementations byte for byte.
+One gap remains: PO-box and single-building ZIPs have no delivery-area data to
+place them precisely, so even given in full they fall back to their prefix's
+answer. See [ARCHITECTURE.md](ARCHITECTURE.md#zip-resolution) for how the two
+lookup tables are built and encoded, and [When to
+regenerate](#when-to-regenerate) for when they need to be.
 
 ## Tuning
 
@@ -479,6 +450,9 @@ screen active; `stty sane` and `printf '\033[?1049l'` fix it.
 
 ## Development
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how the renderer itself works —
+the braille canvas, the colour layering, the repaint strategy.
+
 `tools/difftest.sh` proves the two implementations agree. It pins both to a
 fixed instant with `CLOCK_FREEZE` (an instant like
 `2026-07-15T09:53:07.123456Z`, which redirected draws exactly one frame and
@@ -501,7 +475,7 @@ edit them by hand.
 
 ```sh
 pip install timezonefinder
-tools/genzips.py
+tools/genzips.py   # or: make regen
 ```
 
 The Census archive it downloads is cached in `tools/cache/` (gitignored) and

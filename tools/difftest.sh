@@ -137,6 +137,7 @@ check "$SUMMER" 200 60 --color=always ET
 check "$SUMMER" 200 60 --color ET
 check "$SUMMER" 200 60 --color=auto ET
 check "$SUMMER" 200 60 --color=never ET
+check "$SUMMER" 200 60 --color=off ET
 check "$SUMMER" 200 60 --no-color ET
 check "$SUMMER" 200 60 --color=bogus ET
 check "$SUMMER" 200 60 --color= ET
@@ -155,6 +156,10 @@ check "$SUMMER" 200 60 --day= ET
 check "$SUMMER" 200 60 --no-day=x ET
 check "$SUMMER" 200 60 --day always ET
 check "$SUMMER" 200 60 --day --no-day ET
+check "$SUMMER" 200 60 -q ET
+check "$SUMMER" 200 60 --quiet ET
+check "$SUMMER" 200 60 --quiet=x ET
+check "$SUMMER" 200 60 -q --quiet ET
 check "$SUMMER" 200 60 --help
 check "$SUMMER" 200 60 -h
 check "$SUMMER" 200 60 ET --help

@@ -48,20 +48,24 @@ const (
 
 const usage = `clock - analog terminal clocks
 
-usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]]
+usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
              [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
              [ZONES]
 
-  ZONES              comma-separated; default is your local zone
+  ZONES              comma-separated zone names, described below; default is
+                      your local zone
   -n, --per-row N    clocks per row before wrapping (default 3, reduced to fit)
-  --color[=WHEN]     colour the hands: always, auto (default), never
+  --color[=WHEN]     colour the hands: always, auto (default), never or off
   --no-color         same as --color=never
   --day[=WHEN]       weekday on the readout: always, auto (default), never
   --no-day           same as --day=never
+  -q, --quiet        skip the "press q to quit" hint shown at startup
   --halign WHERE     the grid across the window: left, center (default), right
   --valign WHERE     the grid down the window: top, center (default), bottom
   --hpad SPACE       between clocks: even (default), or a share of the width
+                      like 10%
   --vpad SPACE       between rows: even (default), or a share of the height
+                      like 5%
   -h, --help         this message
 
 A zone is an IANA name (Europe/Berlin), the city off the end of one where
@@ -77,7 +81,7 @@ when the clocks on screen disagree about the date. An even fill spreads the
 clocks over the whole window; --hpad 10% sets the gaps instead, as a share of
 the window, and then the alignment decides where the grid sits.
 
-Space holds the frame still, for a screenshot, and h lists the keys.
+Space holds the frame still, for a screenshot, and h or ? opens the key list.
 Press q or Ctrl+C to quit.
 
 examples:
@@ -92,9 +96,12 @@ examples:
 // window, and what --halign and --valign accept. Same order as clock.py's
 // tables, and the wording of the error they raise comes off these lists.
 var (
-	whens   = []string{"always", "auto", "never"}
-	haligns = []string{"left", "center", "right"}
-	valigns = []string{"top", "center", "bottom"}
+	whens = []string{"always", "auto", "never"}
+	// colorWhens takes "off" too, alongside "never": both disable colour,
+	// but "off" is the more obvious word for it.
+	colorWhens = []string{"always", "auto", "never", "off"}
+	haligns    = []string{"left", "center", "right"}
+	valigns    = []string{"top", "center", "bottom"}
 )
 
 // needs is the example each of the four layout flags gives when handed no
@@ -106,21 +113,21 @@ var needs = map[string]string{
 	"vpad":   "--vpad 5%",
 }
 
-// hotkeys is the key list h puts under the grid. In the order the keys are
-// reached for rather than alphabetically, and kept in the same order as
+// hotkeys is the key list h or ? puts up in a modal. In the order the keys
+// are reached for rather than alphabetically, and kept in the same order as
 // clock.py's table.
 var hotkeys = []struct{ key, what string }{
 	{"space", "hold the frame"},
-	{"h", "hide this list"},
+	{"h ?", "toggle this list"},
 	{"q", "quit, or Ctrl+C"},
 }
 
 // hotkeyCol is where the descriptions start, so the keys get a gutter.
-const hotkeyCol = 7
+const hotkeyCol = 8
 
-// flashText is said once at the bottom of the window and then dropped: a clock
-// that has taken the whole screen owes the reader a way back out, but only
-// until it is read.
+// flashText is said once, in the same modal the key list uses, and then
+// dropped: a clock that has taken the whole screen owes the reader a way back
+// out, but only until it is read. -q/--quiet skips it outright.
 const (
 	flashText = "Press q or Ctrl+C to quit"
 	flashFor  = 3 * time.Second
@@ -479,11 +486,12 @@ type geometry struct {
 // any position. Hand-rolled rather than package flag, which insists every
 // flag precede the first positional -- "clock ET,PT -n 2" would silently
 // ignore the -n. clock.py runs the same algorithm for the same reason.
-func parseArgs(argv []string) (int, string, string, string, geometry, error) {
+func parseArgs(argv []string) (int, string, string, string, geometry, bool, error) {
 	perRow := defaultPerRow
 	colorWhen := "auto"
 	dayWhen := "" // unset: run() picks it, since a pinned clock differs
 	geo := geometry{halign: "center", valign: "center", hpad: -1, vpad: -1}
+	quiet := false
 	var positional []string
 	endOfFlags := false
 
@@ -495,7 +503,7 @@ func parseArgs(argv []string) (int, string, string, string, geometry, error) {
 		case a == "--":
 			endOfFlags = true
 		case a == "-h" || a == "--help":
-			return 0, "", "", "", geo, errHelp
+			return 0, "", "", "", geo, false, errHelp
 		case strings.HasPrefix(a, "--"):
 			name, val, haveVal := strings.Cut(a[2:], "=")
 			switch name {
@@ -503,13 +511,13 @@ func parseArgs(argv []string) (int, string, string, string, geometry, error) {
 				if !haveVal {
 					i++
 					if i >= len(argv) {
-						return 0, "", "", "", geo, errors.New("--per-row needs a number, e.g. --per-row 2")
+						return 0, "", "", "", geo, false, errors.New("--per-row needs a number, e.g. --per-row 2")
 					}
 					val = argv[i]
 				}
 				n, err := parseCount(val, "--per-row", maxPerRow)
 				if err != nil {
-					return 0, "", "", "", geo, err
+					return 0, "", "", "", geo, false, err
 				}
 				perRow = n
 			case "color":
@@ -518,15 +526,15 @@ func parseArgs(argv []string) (int, string, string, string, geometry, error) {
 				// read the same flag. The value only ever follows an "=".
 				colorWhen = "always"
 				if haveVal {
-					w, err := parseChoice("color", val, whens)
+					w, err := parseChoice("color", val, colorWhens)
 					if err != nil {
-						return 0, "", "", "", geo, err
+						return 0, "", "", "", geo, false, err
 					}
 					colorWhen = w
 				}
 			case "no-color":
 				if haveVal {
-					return 0, "", "", "", geo, errors.New("--no-color takes no value")
+					return 0, "", "", "", geo, false, errors.New("--no-color takes no value")
 				}
 				colorWhen = "never"
 			case "day":
@@ -534,22 +542,27 @@ func parseArgs(argv []string) (int, string, string, string, geometry, error) {
 				if haveVal {
 					w, err := parseChoice("day", val, whens)
 					if err != nil {
-						return 0, "", "", "", geo, err
+						return 0, "", "", "", geo, false, err
 					}
 					dayWhen = w
 				}
 			case "no-day":
 				if haveVal {
-					return 0, "", "", "", geo, errors.New("--no-day takes no value")
+					return 0, "", "", "", geo, false, errors.New("--no-day takes no value")
 				}
 				dayWhen = "never"
+			case "quiet":
+				if haveVal {
+					return 0, "", "", "", geo, false, errors.New("--quiet takes no value")
+				}
+				quiet = true
 			case "halign", "valign", "hpad", "vpad":
 				// These four want a value, and take it either way round, as
 				// --per-row does: there is no bare form to be ambiguous with.
 				if !haveVal {
 					i++
 					if i >= len(argv) {
-						return 0, "", "", "", geo, fmt.Errorf(
+						return 0, "", "", "", geo, false, fmt.Errorf(
 							"--%s needs a value, e.g. %s", name, needs[name])
 					}
 					val = argv[i]
@@ -558,19 +571,19 @@ func parseArgs(argv []string) (int, string, string, string, geometry, error) {
 				case "halign":
 					w, err := parseChoice(name, val, haligns)
 					if err != nil {
-						return 0, "", "", "", geo, err
+						return 0, "", "", "", geo, false, err
 					}
 					geo.halign = w
 				case "valign":
 					w, err := parseChoice(name, val, valigns)
 					if err != nil {
-						return 0, "", "", "", geo, err
+						return 0, "", "", "", geo, false, err
 					}
 					geo.valign = w
 				default:
 					n, err := parsePad(name, val)
 					if err != nil {
-						return 0, "", "", "", geo, err
+						return 0, "", "", "", geo, false, err
 					}
 					if name == "hpad" {
 						geo.hpad = n
@@ -579,26 +592,28 @@ func parseArgs(argv []string) (int, string, string, string, geometry, error) {
 					}
 				}
 			default:
-				return 0, "", "", "", geo, fmt.Errorf("unknown option: --%s", name)
+				return 0, "", "", "", geo, false, fmt.Errorf("unknown option: --%s", name)
 			}
+		case a == "-q":
+			quiet = true
 		case len(a) > 1 && strings.HasPrefix(a, "-"):
 			if a[1] != 'n' {
-				return 0, "", "", "", geo, fmt.Errorf("unknown option: %s", a)
+				return 0, "", "", "", geo, false, fmt.Errorf("unknown option: %s", a)
 			}
 			rest := a[2:]
 			switch {
 			case rest == "":
 				i++
 				if i >= len(argv) {
-					return 0, "", "", "", geo, errors.New("-n needs a number, e.g. -n 2")
+					return 0, "", "", "", geo, false, errors.New("-n needs a number, e.g. -n 2")
 				}
 				rest = argv[i]
 			case rest[0] == '=':
-				return 0, "", "", "", geo, errors.New("-n takes its value as \"-n N\" or \"-nN\", not \"-n=N\"")
+				return 0, "", "", "", geo, false, errors.New("-n takes its value as \"-n N\" or \"-nN\", not \"-n=N\"")
 			}
 			n, err := parseCount(rest, "-n", maxPerRow)
 			if err != nil {
-				return 0, "", "", "", geo, err
+				return 0, "", "", "", geo, false, err
 			}
 			perRow = n
 		default:
@@ -607,13 +622,13 @@ func parseArgs(argv []string) (int, string, string, string, geometry, error) {
 	}
 
 	if len(positional) > 1 {
-		return 0, "", "", "", geo, fmt.Errorf("expected one comma-separated zone list, got %d: %s",
+		return 0, "", "", "", geo, false, fmt.Errorf("expected one comma-separated zone list, got %d: %s",
 			len(positional), strings.Join(positional, " "))
 	}
 	if len(positional) == 0 {
-		return perRow, "", colorWhen, dayWhen, geo, nil
+		return perRow, "", colorWhen, dayWhen, geo, quiet, nil
 	}
-	return perRow, positional[0], colorWhen, dayWhen, geo, nil
+	return perRow, positional[0], colorWhen, dayWhen, geo, quiet, nil
 }
 
 // A resolved clock face is just its location. No label is stored: it comes off
@@ -1333,29 +1348,9 @@ func helpRows() []string {
 	return rows
 }
 
-// fitHelp reports whether the key list fits under the grid, blank separator
-// included. When it does not, h is a no-op rather than a wrapped or scrolled
-// frame -- the same trade the weekday makes against a narrow face. A window
-// that cannot be measured is taken to fit, since it has nothing to break.
-func fitHelp(chunks, termCols, termRows int) bool {
-	rows := helpRows()
-	widest := 0
-	for _, r := range rows {
-		if w := utf8.RuneCountInString(r); w > widest {
-			widest = w
-		}
-	}
-	if termCols > 0 && widest > termCols {
-		return false
-	}
-	// Against the packed grid, not the one on screen: an even fill would
-	// otherwise stretch to the last row and leave the list nowhere to go.
-	return termRows <= 0 || frameHeight(chunks, vgap)+len(rows)+1 <= termRows
-}
-
 // frame draws the whole grid: faces left to right, wrapping every perRow. A
 // short last row is left-aligned so the column gutters stay lined up.
-func frame(faces []dial, now time.Time, perRow int, color, helpOn bool, dayWhen string, lay layout) []string {
+func frame(faces []dial, now time.Time, perRow int, color bool, dayWhen string, lay layout) []string {
 	indent := strings.Repeat(" ", lay.left)
 	weekday := showWeekday(faces, now, dayWhen)
 	chunks := chunkCount(len(faces), perRow)
@@ -1422,12 +1417,6 @@ func frame(faces []dial, now time.Time, perRow int, color, helpOn bool, dayWhen 
 		rows = append(rows, row(labels))
 		rows = append(rows, row(digits))
 	}
-	if helpOn {
-		rows = append(rows, "")
-		for _, r := range helpRows() {
-			rows = append(rows, indent+r)
-		}
-	}
 	return rows
 }
 
@@ -1439,32 +1428,64 @@ func isTerminal(f *os.File) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-// flashRows puts the quit hint on the last line of the window, if that line is
-// free. The frame is padded out to the window rather than the hint tucked
-// under the grid, so it sits on the bottom line wherever the grid happens to
-// be. When the grid already reaches that line -- valign bottom, or a window it
-// exactly fills -- there is nowhere to put the hint that would not cover a
-// clock, so it goes unsaid rather than over the top of one. Centred with the
-// clocks and hard left otherwise, since a hint under a left-hand grid belongs
-// at the left edge, not adrift in the middle.
-func flashRows(rows []string, termCols, termRows int, halign string) []string {
-	if termRows <= 0 || len(rows) >= termRows {
-		return rows
+// modalBox draws content inside a one-line border, used for both the key
+// list and the startup quit hint so the two read as the same kind of thing:
+// a modal overlaid on the clocks, not part of the grid underneath it.
+func modalBox(content []string) []string {
+	width := 0
+	for _, c := range content {
+		if w := utf8.RuneCountInString(c); w > width {
+			width = w
+		}
 	}
-	width := utf8.RuneCountInString(flashText)
-	if termCols > 0 && termCols < width {
-		return rows // narrower than the hint: it would wrap and cost two rows
+	box := make([]string, 0, len(content)+2)
+	box = append(box, "┌"+strings.Repeat("─", width+2)+"┐")
+	for _, c := range content {
+		box = append(box, "│ "+ljust(c, width)+" │")
 	}
-	left := 0
-	if halign == "center" && termCols > width {
-		left = (termCols - width) / 2
+	return append(box, "└"+strings.Repeat("─", width+2)+"┘")
+}
+
+// centerModal places a modal in the middle of a termCols x termRows window.
+// ok is false when it does not fit, the same trade the key list already made
+// against a narrow window: no modal beats a wrapped or clipped one. A window
+// that cannot be measured has nowhere settled to put one, so that is also a
+// no.
+func centerModal(box []string, termCols, termRows int) (top, left int, ok bool) {
+	width, height := utf8.RuneCountInString(box[0]), len(box)
+	if termCols <= 0 || termRows <= 0 || width > termCols || height > termRows {
+		return 0, 0, false
 	}
-	out := make([]string, 0, termRows)
-	out = append(out, rows...)
-	for len(out) < termRows-1 {
+	return (termRows - height) / 2, (termCols - width) / 2, true
+}
+
+// overlayModal stamps box onto rows at (top, left), extending rows with
+// blank lines and padding short ones with spaces so the box always lands
+// intact regardless of what the grid drew there. rows must be plain text --
+// no ANSI -- which run guarantees by turning colour off for any frame a
+// modal is going to be stamped onto, so a modal never has to reason about
+// resuming a hand's colour on the far side of it.
+func overlayModal(rows []string, box []string, top, left int) []string {
+	out := make([]string, len(rows))
+	copy(out, rows)
+	for len(out) < top+len(box) {
 		out = append(out, "")
 	}
-	return append(out, strings.Repeat(" ", left)+flashText)
+	for i, line := range box {
+		r := top + i
+		existing := []rune(out[r])
+		if len(existing) < left {
+			existing = append(existing, []rune(strings.Repeat(" ", left-len(existing)))...)
+		}
+		var b strings.Builder
+		b.WriteString(string(existing[:left]))
+		b.WriteString(line)
+		if tail := left + utf8.RuneCountInString(line); tail < len(existing) {
+			b.WriteString(string(existing[tail:]))
+		}
+		out[r] = b.String()
+	}
+	return out
 }
 
 // fold breaks text onto lines of at most width, on spaces where it can be. A
@@ -1674,7 +1695,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	wantPerRow, zoneList, colorWhen, dayWhen, geo, err := parseArgs(os.Args[1:])
+	wantPerRow, zoneList, colorWhen, dayWhen, geo, quiet, err := parseArgs(os.Args[1:])
 	if errors.Is(err, errHelp) {
 		fmt.Print(usage)
 		return nil
@@ -1768,6 +1789,25 @@ func run() error {
 			chunks = chunkCount(len(faces), perRow)
 			err = fitHeight(chunks, lines, gapFloor(lines, geo.vpad, vgap))
 		}
+		// The key list and the startup hint are the same kind of thing --
+		// a modal laid over the clocks -- so only one shows at a time, and
+		// the key list, being asked for, wins over a hint that is already
+		// redundant with the "q" line in it.
+		var content []string
+		switch {
+		case err == nil && fullScreen && helpOn:
+			content = helpRows()
+		case !quiet && fullScreen && time.Now().Before(flashUntil):
+			content = []string{flashText}
+		}
+		var modal []string
+		var modalTop, modalLeft int
+		showModal := false
+		if content != nil {
+			modal = modalBox(content)
+			modalTop, modalLeft, showModal = centerModal(modal, cols, lines)
+		}
+
 		if err != nil {
 			// A window dragged smaller than the clocks need is something the
 			// reader can undo, so say what is wrong and keep measuring: the
@@ -1779,28 +1819,20 @@ func run() error {
 			}
 			rows = complaint(err.Error(), cols, lines, geo.halign)
 		} else {
-			// The key list is laid out under the grid rather than spread with
-			// it, so the rows it needs come off the height first.
-			showHelp := helpOn && fitHelp(chunks, cols, lines)
-			reserved := 0
-			if showHelp {
-				reserved = len(helpRows()) + 1
-			}
-			body := lines - reserved
-			if body < 0 {
-				body = 0
-			}
 			// Any lean left over from the grid is answered by the labels
 			// leaning the other way, so the frame comes out no more than a
 			// column off centre -- and with a gutter to swallow the odd
 			// column, dead centre.
 			var lay layout
 			lay.gap, lay.extra, lay.left, lay.extraLeft = spread(perRow, colsN, cols, gap, geo.hpad, geo.halign)
-			lay.vgap, lay.vextra, lay.top, _ = spread(chunks, rowsN+2, body, vgap, geo.vpad, geo.valign)
-			rows = frame(faces, now, perRow, color, showHelp, dayWhen, lay)
+			lay.vgap, lay.vextra, lay.top, _ = spread(chunks, rowsN+2, lines, vgap, geo.vpad, geo.valign)
+			// Colour comes off whenever a modal is about to be stamped on
+			// top: overlayModal works in plain text, so nothing under the
+			// modal is left carrying a hand's colour past it.
+			rows = frame(faces, now, perRow, color && !showModal, dayWhen, lay)
 		}
-		if fullScreen && time.Now().Before(flashUntil) {
-			rows = flashRows(rows, cols, lines, geo.halign)
+		if showModal {
+			rows = overlayModal(rows, modal, modalTop, modalLeft)
 		}
 
 		// Repaint in one write. clearEOL wipes a longer previous line,
@@ -1846,7 +1878,7 @@ func run() error {
 					return nil
 				case ' ':
 					holding, held = !holding, now
-				case 'h', 'H':
+				case 'h', 'H', '?':
 					helpOn = !helpOn
 				}
 			}

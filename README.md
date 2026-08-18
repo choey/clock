@@ -480,9 +480,11 @@ on stdin — and both implementations say so and exit rather than failing
 obscurely; use WSL.
 
 You need a font with braille coverage, and a window big enough for one face
-(23 columns at the default size). The clock measures the terminal every frame
-and quietly lowers `--per-row` to whatever fits, so a narrow window rewraps
-instead of garbling.
+(23 columns at `--scale 1`, the base unit `--scale`/`--cell-ratio` work
+from). The clock measures the terminal every frame; by default that is what
+`--scale auto`/`-n auto` size and shape the grid against, and with a fixed
+`--per-row` it is quietly lowered to whatever fits instead, so a narrow
+window rewraps rather than garbling.
 
 When not even one face fits, or the grid is taller than the window, the clocks
 give way to the reason:
@@ -520,13 +522,13 @@ the braille canvas, the colour layering, the repaint strategy.
 fixed instant with `CLOCK_FREEZE` (an instant like
 `2026-07-15T09:53:07.123456Z`, which redirected draws exactly one frame and
 exits, and on a terminal stays up) and to a fixed window with
-`COLUMNS`/`LINES`, then compares stdout, stderr and exit status across a few
-hundred argument lists, terminal sizes and cell ratios.
-Colour is compared too, under `--color=always` — a redirected clock is plain
-otherwise — including the instants where the hands cross and the layering
-decides what shows. It
-also cross-compiles for Linux, macOS and Windows, and diffs the generated
-tables out of the two files.
+`COLUMNS`/`LINES`, then compares stdout, stderr and exit status across
+hundreds of argument lists, terminal sizes and cell ratios — including the
+`--scale`/`-n auto` searches, at window shapes chosen to land on both odd and
+even sizes. Colour is compared too, under `--color=always` — a redirected
+clock is plain otherwise — including the instants where the hands cross and
+the layering decides what shows. It also cross-compiles for Linux, macOS and
+Windows, and diffs the generated tables out of the two files.
 
 ```sh
 tools/difftest.sh -v

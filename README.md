@@ -419,7 +419,7 @@ One gap remains: PO-box and single-building ZIPs have no delivery-area data to
 place them precisely, so even given in full they fall back to their prefix's
 answer. See [ARCHITECTURE.md](ARCHITECTURE.md#zip-resolution) for how the two
 lookup tables are built and encoded, and [When to
-regenerate](#when-to-regenerate) for when they need to be.
+regenerate](ziptz/README.md#when-to-regenerate) for when they need to be.
 
 The tables and the two lookups over them are not part of the clock: they are
 [`ziptz`](ziptz/), a library in this repository, in Go and in Python, usable
@@ -552,58 +552,22 @@ Windows, and diffs the generated tables out of the two `ziptz` files.
 tools/difftest.sh -v
 ```
 
-`ziptz` has tests of its own — `ziptz_test.go` and `test_ziptz.py`, written
-case for case against each other — and `make test` runs those and the difftest
-together.
+`ziptz` has tests of its own, and holds its two libraries to one shared list
+of cases in `ziptz/testdata/cases.json` — the same idea as the difftest, a
+rung down. `make test` runs those and the difftest together.
 
 ```sh
 make test
 ```
 
-`tools/genzips.py` regenerates the ZIP table, writing `ziptz/ziptz.go` and
-`ziptz/ziptz.py` in the same pass — which is what keeps the two literals from
-drifting. Never edit them by hand.
+The ZIP tables are `ziptz`'s, not the clock's, and so is regenerating them:
+see [Regenerating](ziptz/README.md#regenerating) and [When to
+regenerate](ziptz/README.md#when-to-regenerate) there. `make regen` from here
+runs it in place. The short version is almost never, and *not* for
+daylight-saving changes — the tables store zone names, not offsets, so a rule
+change arrives with an OS update and needs nothing here.
 
-```sh
-pip install timezonefinder
-tools/genzips.py   # or: make regen
-```
-
-The Census archive it downloads is cached in `tools/cache/` (gitignored) and
-reused on every later run, so only the first regeneration touches the network.
-Pass a path to read a local copy instead.
-
-### When to regenerate
-
-Almost never, and *not* for daylight-saving changes. The tables store zone
-names, not offsets or rules, so the answer to "is Denver on MDT today" comes
-from whatever tzdata the machine running the clock has. A state dropping
-daylight saving, or the country abolishing the switch, arrives with an OS
-update and needs nothing here.
-
-Regenerate when the mapping itself moves:
-
-| what changed | why it matters |
-|---|---|
-| a place changes zone | Kentucky/Monticello left Central for Eastern in 2000; its ZIPs now belong to a different name |
-| new or redrawn ZIP codes | a new Census gazetteer describes them |
-| a zone splits from the letter it folds onto | `CANONICAL` collapses ~34 zones onto 11 letters, and that only holds while they keep the same rules |
-
-The last is the one that could go wrong quietly, so `genzips.py` re-tests it on
-every run: each folded zone is compared against its letter's zone every six
-hours for the next thirteen months, and the run aborts if any of them parts
-company. Indiana observed no daylight saving until 2006 and North Dakota/Beulah
-left Mountain in 2010, so this is not hypothetical.
-
-```
-genzips: these zones no longer track the letter they fold onto, so folding
-them would serve the wrong hour:
-  America/Phoenix parts from America/Denver on 2026-08-12
-Give the divergent one its own letter in CANONICAL, and add that letter to
-zones/ZONES in both ziptz libraries.
-```
-
-The ZIP data derives from US Census ZCTA Gazetteer centroids (a US Government
+The data derives from US Census ZCTA Gazetteer centroids (a US Government
 work, public domain) resolved through
 [timezonefinder](https://github.com/jannikmi/timezonefinder), whose boundaries
 come from timezone-boundary-builder (ODbL).

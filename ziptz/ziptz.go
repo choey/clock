@@ -22,6 +22,8 @@
 // must never be edited by hand.
 package ziptz
 
+//go:generate python3 tools/genzips.py
+
 import (
 	"fmt"
 	"time"

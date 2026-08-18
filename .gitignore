@@ -1,6 +1,6 @@
 clock
 *.out
 __pycache__/
-tools/cache/
+ziptz/tools/cache/
 build/
 *.egg-info/

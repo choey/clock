@@ -1,75 +1,102 @@
 package ziptz
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
 
-// Cases every ZIP table has to get right: a plain lookup, both sides of a
-// boundary a prefix rounds the wrong way, and the non-contiguous zones.
-var cases = []struct {
-	zip  string
-	zone string
-}{
-	{"94110", "America/Los_Angeles"}, // San Francisco
-	{"941", "America/Los_Angeles"},
-	{"10001", "America/New_York"}, // Manhattan
-	{"100", "America/New_York"},
-	{"79835", "America/Denver"},    // Canutillo TX, the losing side of 798
-	{"798", "America/Chicago"},     // ... which the prefix rounds to Central
-	{"86502", "America/Phoenix"},   // Arizona, which skips daylight saving
-	{"865", "America/Denver"},      // ... unlike the Navajo Nation around it
-	{"96799", "Pacific/Pago_Pago"}, // American Samoa
-	{"967", "Pacific/Honolulu"},
-	{"96910", "Pacific/Guam"},
-	{"99546", "America/Adak"}, // Adak, an hour behind Anchorage
-	{"99501", "America/Anchorage"},
-	{"006", "America/Puerto_Rico"},
+// The cases live in testdata/cases.json, which test_ziptz.py reads too: one
+// list, run by both libraries, so neither can quietly stop agreeing with the
+// other. Add a case there rather than here.
+type testCase struct {
+	Token string `json:"token"`
+	Zone  string `json:"zone"`  // the name it must resolve to
+	Error string `json:"error"` // or the kind of failure it must produce
+	Why   string `json:"why"`
+}
+
+// errorKinds maps a case's error kind to the text the message must carry.
+var errorKinds = map[string]string{
+	"malformed":  "not a US ZIP code",
+	"unassigned": "no US time zone is recorded",
+}
+
+func loadCases(t *testing.T) []testCase {
+	t.Helper()
+	blob, err := os.ReadFile("testdata/cases.json")
+	if err != nil {
+		t.Fatalf("reading the shared cases: %v", err)
+	}
+	var file struct {
+		Cases []testCase `json:"cases"`
+	}
+	if err := json.Unmarshal(blob, &file); err != nil {
+		t.Fatalf("parsing the shared cases: %v", err)
+	}
+	// A truncated or renamed file would otherwise pass as zero cases run.
+	if len(file.Cases) < 50 {
+		t.Fatalf("only %d cases in testdata/cases.json; the file looks truncated", len(file.Cases))
+	}
+	for _, c := range file.Cases {
+		if (c.Zone == "") == (c.Error == "") {
+			t.Fatalf("case %q must have exactly one of zone and error", c.Token)
+		}
+		if c.Error != "" && errorKinds[c.Error] == "" {
+			t.Fatalf("case %q has unknown error kind %q", c.Token, c.Error)
+		}
+	}
+	return file.Cases
 }
 
 func TestZone(t *testing.T) {
-	for _, c := range cases {
-		got, err := Zone(c.zip)
-		if err != nil {
-			t.Errorf("Zone(%q): %v", c.zip, err)
-			continue
-		}
-		if got != c.zone {
-			t.Errorf("Zone(%q) = %q, want %q", c.zip, got, c.zone)
-		}
+	for _, c := range loadCases(t) {
+		t.Run(c.Token, func(t *testing.T) {
+			got, err := Zone(c.Token)
+			if c.Zone != "" {
+				if err != nil {
+					t.Fatalf("Zone(%q): %v  [%s]", c.Token, err, c.Why)
+				}
+				if got != c.Zone {
+					t.Errorf("Zone(%q) = %q, want %q  [%s]", c.Token, got, c.Zone, c.Why)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Zone(%q) = %q, want a %s error  [%s]", c.Token, got, c.Error, c.Why)
+			}
+			if want := errorKinds[c.Error]; !strings.Contains(err.Error(), want) {
+				t.Errorf("Zone(%q): %v, want a %s error saying %q", c.Token, err, c.Error, want)
+			}
+		})
 	}
 }
 
-func TestZoneErrors(t *testing.T) {
-	for _, zip := range []string{"", "1", "12", "1234", "123456", "abcde", "9411o", " 9411", "94110\n"} {
-		if got, err := Zone(zip); err == nil {
-			t.Errorf("Zone(%q) = %q, want an error", zip, got)
-		} else if !strings.Contains(err.Error(), "not a US ZIP code") {
-			t.Errorf("Zone(%q): %v, want a shape complaint", zip, err)
-		}
-	}
-	// Real-looking, but the Postal Service has assigned neither: 099 is a gap
-	// in the table, and 00501 is a single-building ZIP whose 005 prefix has no
-	// delivery area of its own.
-	for _, zip := range []string{"099", "00501", "005"} {
-		if got, err := Zone(zip); err == nil {
-			t.Errorf("Zone(%q) = %q, want an error", zip, got)
-		} else if !strings.Contains(err.Error(), "no US time zone is recorded") {
-			t.Errorf("Zone(%q): %v, want an unassigned complaint", zip, err)
-		}
-	}
-}
-
+// Location has to agree with Zone on every case, and fail on the same ones:
+// the clock calls it, not Zone.
 func TestLocation(t *testing.T) {
-	loc, err := Location("94110")
-	if err != nil {
-		t.Fatalf("Location: %v", err)
-	}
-	if loc.String() != "America/Los_Angeles" {
-		t.Errorf("Location(\"94110\") = %v, want America/Los_Angeles", loc)
-	}
-	if _, err := Location("nope"); err == nil {
-		t.Error("Location(\"nope\") succeeded, want an error")
+	for _, c := range loadCases(t) {
+		t.Run(c.Token, func(t *testing.T) {
+			loc, err := Location(c.Token)
+			if c.Zone == "" {
+				if err == nil {
+					t.Fatalf("Location(%q) = %v, want a %s error", c.Token, loc, c.Error)
+				}
+				return
+			}
+			if err != nil {
+				// A system without this zone installed is an environment
+				// fact, not a bug in the table.
+				if strings.Contains(err.Error(), "time zone database lacks") {
+					t.Skipf("this system's tz database lacks %s", c.Zone)
+				}
+				t.Fatalf("Location(%q): %v", c.Token, err)
+			}
+			if loc.String() != c.Zone {
+				t.Errorf("Location(%q) = %v, want %v", c.Token, loc, c.Zone)
+			}
+		})
 	}
 }
 

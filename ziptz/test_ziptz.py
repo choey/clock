@@ -1,63 +1,76 @@
-"""Tests for ziptz, mirroring ziptz_test.go case for case.
+"""Tests for ziptz, run against the same cases as ziptz_test.go.
 
-    python3 -m unittest discover ziptz     # or: make test-lib
+    python3 -m unittest -q test_ziptz     # or: make test-py
+
+The cases live in testdata/cases.json, which the Go suite reads too: one list,
+run by both libraries, so neither can quietly stop agreeing with the other.
+Add a case there rather than here.
 """
 
+import json
+import pathlib
 import unittest
 
 import ziptz
 
-# Cases every ZIP table has to get right: a plain lookup, both sides of a
-# boundary a prefix rounds the wrong way, and the non-contiguous zones.
-CASES = (
-    ("94110", "America/Los_Angeles"),  # San Francisco
-    ("941", "America/Los_Angeles"),
-    ("10001", "America/New_York"),  # Manhattan
-    ("100", "America/New_York"),
-    ("79835", "America/Denver"),  # Canutillo TX, the losing side of 798
-    ("798", "America/Chicago"),  # ... which the prefix rounds to Central
-    ("86502", "America/Phoenix"),  # Arizona, which skips daylight saving
-    ("865", "America/Denver"),  # ... unlike the Navajo Nation around it
-    ("96799", "Pacific/Pago_Pago"),  # American Samoa
-    ("967", "Pacific/Honolulu"),
-    ("96910", "Pacific/Guam"),
-    ("99546", "America/Adak"),  # Adak, an hour behind Anchorage
-    ("99501", "America/Anchorage"),
-    ("006", "America/Puerto_Rico"),
-)
+# The text a case's error kind must carry.
+ERROR_KINDS = {
+    "malformed": "not a US ZIP code",
+    "unassigned": "no US time zone is recorded",
+}
+
+
+def load_cases():
+    path = pathlib.Path(__file__).resolve().parent / "testdata" / "cases.json"
+    cases = json.loads(path.read_text(encoding="utf-8"))["cases"]
+    # A truncated or renamed file would otherwise pass as zero cases run.
+    assert len(cases) >= 50, f"only {len(cases)} cases in {path}; it looks truncated"
+    for case in cases:
+        assert ("zone" in case) != ("error" in case), (
+            f"case {case['token']!r} must have exactly one of zone and error"
+        )
+        assert case.get("error", "malformed") in ERROR_KINDS, (
+            f"case {case['token']!r} has unknown error kind {case['error']!r}"
+        )
+    return cases
+
+
+CASES = load_cases()
 
 
 class TestZone(unittest.TestCase):
-    def test_known_zips(self):
-        for zip_code, name in CASES:
-            with self.subTest(zip=zip_code):
-                self.assertEqual(ziptz.zone(zip_code), name)
-
-    def test_malformed(self):
-        for zip_code in ("", "1", "12", "1234", "123456", "abcde", "9411o", " 9411", "94110\n", "١٢٣"):
-            with self.subTest(zip=zip_code):
+    def test_cases(self):
+        for case in CASES:
+            token, why = case["token"], case["why"]
+            with self.subTest(token=token, why=why):
+                if "zone" in case:
+                    self.assertEqual(ziptz.zone(token), case["zone"], why)
+                    continue
                 with self.assertRaises(ziptz.ZipError) as caught:
-                    ziptz.zone(zip_code)
-                self.assertIn("not a US ZIP code", str(caught.exception))
-
-    def test_unassigned(self):
-        # Real-looking, but the Postal Service has assigned neither: 099 is a
-        # gap in the table, and 00501 is a single-building ZIP whose 005 prefix
-        # has no delivery area of its own.
-        for zip_code in ("099", "00501", "005"):
-            with self.subTest(zip=zip_code):
-                with self.assertRaises(ziptz.ZipError) as caught:
-                    ziptz.zone(zip_code)
-                self.assertIn("no US time zone is recorded", str(caught.exception))
+                    ziptz.zone(token)
+                self.assertIn(ERROR_KINDS[case["error"]], str(caught.exception), why)
 
 
 class TestLocation(unittest.TestCase):
-    def test_loads(self):
-        self.assertEqual(ziptz.location("94110").key, "America/Los_Angeles")
+    """location() has to agree with zone() on every case, and fail on the same
+    ones: the clock calls it, not zone()."""
 
-    def test_rejects_nonsense(self):
-        with self.assertRaises(ziptz.ZipError):
-            ziptz.location("nope")
+    def test_cases(self):
+        for case in CASES:
+            token = case["token"]
+            with self.subTest(token=token, why=case["why"]):
+                if "zone" not in case:
+                    with self.assertRaises(ziptz.ZipError):
+                        ziptz.location(token)
+                    continue
+                try:
+                    self.assertEqual(ziptz.location(token).key, case["zone"])
+                except ziptz.ZipError as exc:
+                    # A system without this zone installed is an environment
+                    # fact, not a bug in the table.
+                    if "time zone database lacks" not in str(exc):
+                        raise
+                    self.skipTest(f"this system's tz database lacks {case['zone']}")
 
 
 def exception_groups():

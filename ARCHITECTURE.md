@@ -156,9 +156,11 @@ in at build time; Python imports it if it's there and says what to install if
 it isn't, since a missing ZIP table is no reason not to draw a clock.
 
 A lookup tries an exact 5-digit match first and falls back to the 3-digit
-prefix, and both come from two tables `tools/genzips.py` generates into
-`ziptz/ziptz.go` and `ziptz/ziptz.py` in the same pass — never edit them by
-hand, or the two ports drift.
+prefix, and both come from two tables `ziptz/tools/genzips.py` generates into
+`ziptz.go` and `ziptz.py` in the same pass — never edit them by hand, or the
+two ports drift. The generator belongs to the library, not the clock: nothing
+here needs it, and `ziptz/` lifts out of this repository with its data
+lifecycle intact.
 
 **`runs`/`RUNS`** is the prefix table: fixed 4-byte records, `"NNNc"` — the
 3-digit prefix a run starts at, then a zone letter. A run reaches to the next

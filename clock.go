@@ -49,6 +49,11 @@ const (
 	// to sit; maxRowsN is just a guard against a typo asking for a giant canvas.
 	minRowsN = 4
 	maxRowsN = 200
+
+	// symmetryWindow is how many rows below the largest fit autoScale will
+	// give up looking for one where both rowsN and colsN are odd -- see its
+	// own comment for why that is worth a few rows of size.
+	symmetryWindow = 8
 )
 
 const usage = `clock - analog terminal clocks
@@ -350,29 +355,56 @@ func face(t time.Time, color bool) []string {
 
 	// spoke draws a radial segment from r0 to r1, as fractions of the radius.
 	// A thick spoke drawn with point set narrows over its last handTaper share
-	// to a single dot at r1, instead of ending in a flat, two-dot-wide butt.
+	// to a single dot at r1, instead of ending in a flat, two-dot-wide butt --
+	// that is a hand. A thick spoke without point is a plain parallel-sided
+	// band the same width all the way to r1 -- that is always one of the four
+	// major hour ticks (h = 0, 3, 6, 9), always exactly axis-aligned, always
+	// beside a numeral.
 	spoke := func(angle, r0, r1 float64, thick, point bool, layer uint8) {
 		sin, cos := math.Sin(angle), math.Cos(angle)
 		x0, y0 := cx+rx*r0*sin, cy-ry*r0*cos
 		x1, y1 := cx+rx*r1*sin, cy-ry*r1*cos
-		// two dots thick straddles the axis, so the spoke centres on it
-		offs := []float64{0}
-		if thick {
-			offs = []float64{-0.5, 0.5}
-		}
-		tip := r1
+
 		if thick && point {
-			tip = r1 - (r1-r0)*handTaper
-		}
-		tx, ty := cx+rx*tip*sin, cy-ry*tip*cos
-		for _, off := range offs {
-			dx, dy := off*cos, off*sin
-			// the offset shrinks to nothing at the tip, not the base: that is
-			// what tapers the two edges together into a point
-			c.line(x0+dx, y0+dy, tx, ty, layer)
-		}
-		if thick && point {
+			tip := r1 - (r1-r0)*handTaper
+			tx, ty := cx+rx*tip*sin, cy-ry*tip*cos
+			for _, off := range []float64{-0.5, 0.5} {
+				dx, dy := off*cos, off*sin
+				// the offset shrinks to nothing at the tip, not the base:
+				// that is what tapers the two edges together into a point
+				c.line(x0+dx, y0+dy, tx, ty, layer)
+			}
 			c.line(tx, ty, x1, y1, layer)
+			return
+		}
+		if !thick {
+			c.line(x0, y0, x1, y1, layer)
+			return
+		}
+
+		// A symmetric +-0.5 offset here would straddle a character cell
+		// boundary about half the time -- whichever side of a 2-or-4-dot
+		// cell the true centre's neighbouring dot falls on -- splitting the
+		// tick's two lines into different rows or columns and making it
+		// look disjointed from the numeral beside it. Landing both dots in
+		// the same cell as the numeral's own dot instead costs at most half
+		// a dot of true centring, invisible, for a tick that always reads
+		// as attached to its numeral, which is not.
+		horizontal := math.Abs(cos) < 0.5
+		cellSize, center := 4, cy
+		if !horizontal {
+			cellSize, center = 2, cx
+		}
+		step := -1.0
+		if int(math.Floor(center+0.5))%cellSize == 0 {
+			step = 1
+		}
+		for _, s := range []float64{0, step} {
+			if horizontal {
+				c.line(x0, y0+s, x1, y1+s, layer)
+			} else {
+				c.line(x0+s, y0, x1+s, y1, layer)
+			}
 		}
 	}
 
@@ -1805,7 +1837,19 @@ func fitHeight(chunks, termRows, vgap int) error {
 // Sets the package-level rowsN and colsN to the winner; if nothing in range
 // fits, it leaves them at minRowsN so the fitPerRow/fitHeight call right
 // after this one reports why.
+//
+// An odd rowsN (or colsN) is preferred within symmetryWindow of the largest
+// fit: an odd count centres the face's true axis exactly in the middle of a
+// character cell, while an even one centres it exactly on the boundary
+// between two cells, where no placement of a major tick's two dots can be
+// symmetric -- see the axis-safe tick comment on spoke(), and
+// ARCHITECTURE.md, for why that is otherwise unavoidable. Every smaller
+// candidate already fits, by the same monotonicity argument above, so
+// trading a handful of rows for one with both counts odd costs nothing but
+// those few rows -- capped at symmetryWindow, so a face that never finds one
+// does not shrink indefinitely looking.
 func autoScale(wantPerRow, numFaces, cols, lines, hpad, vpad int) {
+	best := 0
 	for n := maxRowsN; n >= minRowsN; n-- {
 		rowsN = n
 		colsN = int(math.Floor(float64(n)*cellRatio + 0.5))
@@ -1814,11 +1858,41 @@ func autoScale(wantPerRow, numFaces, cols, lines, hpad, vpad int) {
 			continue
 		}
 		if fitHeight(chunkCount(numFaces, perRow), lines, gapFloor(lines, vpad, vgap)) == nil {
-			return
+			best = n
+			break
 		}
 	}
-	rowsN = minRowsN
-	colsN = int(math.Floor(float64(minRowsN)*cellRatio + 0.5))
+	if best == 0 {
+		rowsN = minRowsN
+		colsN = int(math.Floor(float64(minRowsN)*cellRatio + 0.5))
+		return
+	}
+	rowFallback, colFallback := -1, -1
+	for n := best; n > best-symmetryWindow && n >= minRowsN; n-- {
+		c := int(math.Floor(float64(n)*cellRatio + 0.5))
+		if n%2 == 1 && c%2 == 1 {
+			rowsN, colsN = n, c
+			return
+		}
+		if n%2 == 1 && rowFallback < 0 {
+			rowFallback = n
+		}
+		if c%2 == 1 && colFallback < 0 {
+			colFallback = n
+		}
+	}
+	// No candidate had both odd: an odd rowsN keeps the 3/9 o'clock ticks
+	// symmetric, which is the more noticeable pair, so it wins over an odd
+	// colsN alone.
+	switch {
+	case rowFallback >= 0:
+		rowsN = rowFallback
+	case colFallback >= 0:
+		rowsN = colFallback
+	default:
+		rowsN = best
+	}
+	colsN = int(math.Floor(float64(rowsN)*cellRatio + 0.5))
 }
 
 func ioctl(fd, req uintptr, p unsafe.Pointer) error {

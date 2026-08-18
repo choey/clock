@@ -120,6 +120,11 @@ DEFAULT_CELL_RATIO = 2.1  # cell height / width; braille dots are square at 2
 MIN_ROWS_N = 4
 MAX_ROWS_N = 200
 
+# How many rows below the largest fit auto_scale will give up looking for
+# one where both ROWS and COLS are odd -- see its own comment for why that
+# is worth a few rows of size.
+SYMMETRY_WINDOW = 8
+
 # ROWS, CELL_RATIO and COLS start at the defaults and are set for real in
 # run(), once --scale, --cell-ratio and CLOCK_CELL_RATIO have been read;
 # nothing touches any of them before then.
@@ -347,22 +352,46 @@ def face(now, color):
         """Radial segment from r0 to r1, as fractions of the radius.
 
         A thick spoke drawn with point set narrows over its last HAND_TAPER
-        share to a single dot at r1, instead of ending in a flat, two-dot-wide
-        butt.
+        share to a single dot at r1, instead of ending in a flat,
+        two-dot-wide butt -- that is a hand. A thick spoke without point is a
+        plain parallel-sided band the same width all the way to r1 -- that is
+        always one of the four major hour ticks (h = 0, 3, 6, 9), always
+        exactly axis-aligned, always beside a numeral.
         """
         sin_a, cos_a = math.sin(angle), math.cos(angle)
         x0, y0 = cx + rx * r0 * sin_a, cy - ry * r0 * cos_a
         x1, y1 = cx + rx * r1 * sin_a, cy - ry * r1 * cos_a
-        tip = r1 - (r1 - r0) * HAND_TAPER if thick and point else r1
-        tx, ty = cx + rx * tip * sin_a, cy - ry * tip * cos_a
-        # two dots thick straddles the axis, so the spoke centres on it
-        for off in (-0.5, 0.5) if thick else (0.0,):
-            dx, dy = off * cos_a, off * sin_a
-            # the offset shrinks to nothing at the tip, not the base: that is
-            # what tapers the two edges together into a point
-            canvas.line(x0 + dx, y0 + dy, tx, ty, layer)
+
         if thick and point:
+            tip = r1 - (r1 - r0) * HAND_TAPER
+            tx, ty = cx + rx * tip * sin_a, cy - ry * tip * cos_a
+            for off in (-0.5, 0.5):
+                dx, dy = off * cos_a, off * sin_a
+                # the offset shrinks to nothing at the tip, not the base:
+                # that is what tapers the two edges together into a point
+                canvas.line(x0 + dx, y0 + dy, tx, ty, layer)
             canvas.line(tx, ty, x1, y1, layer)
+            return
+        if not thick:
+            canvas.line(x0, y0, x1, y1, layer)
+            return
+
+        # A symmetric +-0.5 offset here would straddle a character cell
+        # boundary about half the time -- whichever side of a 2-or-4-dot cell
+        # the true centre's neighbouring dot falls on -- splitting the
+        # tick's two lines into different rows or columns and making it look
+        # disjointed from the numeral beside it. Landing both dots in the
+        # same cell as the numeral's own dot instead costs at most half a dot
+        # of true centring, invisible, for a tick that always reads as
+        # attached to its numeral, which is not.
+        horizontal = abs(cos_a) < 0.5
+        cell_size, center = (4, cy) if horizontal else (2, cx)
+        step = 1.0 if math.floor(center + 0.5) % cell_size == 0 else -1.0
+        for s in (0.0, step):
+            if horizontal:
+                canvas.line(x0, y0 + s, x1, y1 + s, layer)
+            else:
+                canvas.line(x0 + s, y0, x1 + s, y1, layer)
 
     # rim: sample densely enough that adjacent dots touch
     steps = math.floor(4 * math.pi * max(rx, ry) + 0.5)
@@ -1440,8 +1469,20 @@ def auto_scale(want_per_row, num_faces, cols, lines, hpad, vpad):
     Sets the module-level ROWS and COLS to the winner; if nothing in range
     fits, it leaves them at MIN_ROWS_N so the fit_per_row/fit_height call
     right after this one reports why.
+
+    An odd ROWS (or COLS) is preferred within SYMMETRY_WINDOW of the largest
+    fit: an odd count centres the face's true axis exactly in the middle of a
+    character cell, while an even one centres it exactly on the boundary
+    between two cells, where no placement of a major tick's two dots can be
+    symmetric -- see the axis-safe tick comment on spoke(), and
+    ARCHITECTURE.md, for why that is otherwise unavoidable. Every smaller
+    candidate already fits, by the same monotonicity argument above, so
+    trading a handful of rows for one with both counts odd costs nothing but
+    those few rows -- capped at SYMMETRY_WINDOW, so a face that never finds
+    one does not shrink indefinitely looking.
     """
     global ROWS, COLS
+    best = 0
     for n in range(MAX_ROWS_N, MIN_ROWS_N - 1, -1):
         ROWS = n
         COLS = math.floor(n * CELL_RATIO + 0.5)
@@ -1453,9 +1494,33 @@ def auto_scale(want_per_row, num_faces, cols, lines, hpad, vpad):
             fit_height(chunk_count(num_faces, per_row), lines, gap_floor(lines, vpad, VGAP))
         except ClockError:
             continue
+        best = n
+        break
+    if best == 0:
+        ROWS = MIN_ROWS_N
+        COLS = math.floor(MIN_ROWS_N * CELL_RATIO + 0.5)
         return
-    ROWS = MIN_ROWS_N
-    COLS = math.floor(MIN_ROWS_N * CELL_RATIO + 0.5)
+
+    row_fallback, col_fallback = -1, -1
+    for n in range(best, max(best - SYMMETRY_WINDOW, MIN_ROWS_N - 1), -1):
+        c = math.floor(n * CELL_RATIO + 0.5)
+        if n % 2 == 1 and c % 2 == 1:
+            ROWS, COLS = n, c
+            return
+        if n % 2 == 1 and row_fallback < 0:
+            row_fallback = n
+        if c % 2 == 1 and col_fallback < 0:
+            col_fallback = n
+    # No candidate had both odd: an odd ROWS keeps the 3/9 o'clock ticks
+    # symmetric, which is the more noticeable pair, so it wins over an odd
+    # COLS alone.
+    if row_fallback >= 0:
+        ROWS = row_fallback
+    elif col_fallback >= 0:
+        ROWS = col_fallback
+    else:
+        ROWS = best
+    COLS = math.floor(ROWS * CELL_RATIO + 0.5)
 
 
 @contextlib.contextmanager

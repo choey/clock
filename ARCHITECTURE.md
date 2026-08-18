@@ -10,6 +10,33 @@ Notes for anyone hacking on the implementation, not needed just to run
 grid. Hour numerals are overlaid as real characters instead — a cell holds
 braille or text, never both, so a numeral hides whatever dots share its cell.
 
+**Axis-safe major ticks.** The four major hour ticks (0, 3, 6, 9 — the ones
+with a numeral beside them) are drawn two dots thick, exactly axis-aligned.
+The obvious way to draw a thick spoke is a symmetric ±0.5-dot offset
+straddling its centreline, and that is what every other thick spoke
+(the hour and minute hands) uses. For a major tick specifically that is a
+mistake: the centreline sits at a cell's exact half-integer coordinate, so
+the two ±0.5 dots always land one on each side of it — and whether that
+puts them in the *same* character row (or column) or splits them into two
+depends on the face's size, specifically on `rowsN`/`colsN`'s parity. Split,
+the tick reads as disconnected from the numeral beside it — something the
+single fixed default size (11 rows, odd, never split) this project shipped
+with for a long time happened to never trigger. `--scale auto` picking
+arbitrary sizes made it visible. The fix keeps both dots in the same cell as
+the numeral's own dot —
+the centre dot, plus whichever neighbour doesn't cross a cell boundary —
+rather than straddling symmetrically; the tick moves by at most half a dot
+of true centring, invisible, in exchange for never looking disjointed. See
+`spoke()`'s comments in clock.go/clock.py for the exact rule.
+
+While fixing that, a second bug turned up in the same function: giving a
+thick, non-tapered spoke (any tick) an offset endpoint at one end and a
+bare, un-offset endpoint at the other — a leftover from how hand-tapering
+was bolted on — made every tick a wedge narrowing to a point at the rim
+instead of a flat-ended band. Invisible in practice, since the rim's own
+dot circle overdraws the last fraction of it, but fixed alongside the
+alignment issue since both live in the same few lines.
+
 **Layered hands.** Every dot remembers which hand put it there, and a cell
 takes the colour of the topmost hand with a dot in it — shortest hand on top,
 the reverse of the order they are drawn in. Escapes go per run of same-coloured
@@ -95,6 +122,28 @@ than necessary. A first attempt at this search per-row counts explicitly, one
 `autoScale` pass per count from `num_faces` down to 1, taking whichever pair
 gave the largest `ROWS`; it gave the same answer every time, because it was
 solving a problem the existing search already solved by construction.
+
+**Preferring an odd size.** Once a candidate fits, the search does not take
+it immediately -- it looks up to `SYMMETRY_WINDOW` rows smaller for one where
+both `ROWS` and `COLS` are odd, and only falls back to the largest fit itself
+if none turns up. This is not cosmetic. `cy` and `cx` (the face's true
+centre, in dot coordinates) are always exactly `K + 0.5` for some integer
+`K` -- see the axis-safe tick comment on `spoke()`. An *odd* `ROWS` (or
+`COLS`) puts that centre at the exact middle of a character cell; an *even*
+one puts it exactly on the boundary between two cells, where the major
+3/9 o'clock (or 12/6 o'clock) tick's two dots cannot be placed symmetrically
+inside a single cell no matter what `spoke()` does -- it can only pick the
+closest same-cell pair, which ends up pressed against one edge of the cell
+rather than centred. That asymmetry is small -- under a dot -- and invisible
+in terminals that draw a text glyph and a braille glyph the same way. It
+is not invisible everywhere: Ghostty synthesises braille glyphs itself,
+independent of the font, to guarantee they tile edge-to-edge, while the hour
+numerals still go through the font's own glyph metrics -- and depending on
+the font, those two placement systems can disagree by enough that the
+edge-pressed tick reads as visibly detached from its numeral, while the
+centred (odd) case does not. Reported and diagnosed against a live Ghostty
+session: `--scale` values landing on an even `rowsN` looked wrong, odd ones
+did not, with zero exceptions across five tested values.
 
 ## ZIP resolution
 

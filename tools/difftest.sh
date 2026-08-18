@@ -338,6 +338,14 @@ done
 check "$SUMMER" 10 5 --scale auto ET,PT,UTC
 check "$SUMMER" 0 0 --scale auto ET,PT,UTC
 
+# Windows sized so the unconstrained maximum (ignoring the symmetry
+# preference) would land exactly on an even rowsN -- 24 and 26, reported
+# live against Ghostty as visibly misaligned -- to pin that autoScale steps
+# off them rather than just happening to most of the time.
+for cols in 51 56; do
+	check "$SUMMER" "$cols" 40 --scale auto UTC
+done
+
 # -n auto (the default, alongside --scale auto) searches per-row counts too,
 # so a lopsided window -- wide and short, or narrow and tall -- can still
 # grow the face as big as a squarer one would: extreme aspect ratios are

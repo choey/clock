@@ -448,6 +448,11 @@ axis isn't the tight one still has room left over, and that's exactly what
 [Layout](#layout)'s halign/valign/hpad/vpad describe — a wide window with one
 short row of clocks, say, still centres them top-to-bottom.
 
+It will give up a few rows of that maximum for a size where the 12/3/6/9
+numerals sit flush against their tick marks rather than half a cell off —
+visible on some terminals, depending on how they draw braille next to text.
+A fixed `--scale` skips that check and gives exactly the size asked for.
+
 `-n`'s own default, `auto`, is what actually lets that maximum be found:
 against a wide, short window a narrow cap forces more rows of clocks than the
 window needs, and each of those rows steals height the face could have used

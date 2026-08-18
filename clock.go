@@ -35,7 +35,7 @@ const (
 	// all ten values instead of sitting still. Reads as a live clock.
 	tick = 19 * time.Millisecond
 
-	rowsN            = 11   // face height, in terminal rows
+	defaultRowsN     = 11   // face height, in terminal rows, at --scale 1
 	defaultCellRatio = 2.1  // cell height / width; braille dots are square at 2
 	gap              = 3    // fewest blank columns between adjacent faces
 	vgap             = 1    // fewest blank rows between rows of faces
@@ -44,17 +44,23 @@ const (
 
 	defaultPerRow = 3  // faces per row before wrapping
 	maxPerRow     = 64 // an upper bound so a typo can't ask for a million faces
+
+	// minRowsN keeps a face big enough for the hour numerals to have somewhere
+	// to sit; maxRowsN is just a guard against a typo asking for a giant canvas.
+	minRowsN = 4
+	maxRowsN = 200
 )
 
 const usage = `clock - analog terminal clocks
 
 usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
              [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
-             [ZONES]
+             [--cell-ratio N] [--scale N] [ZONES]
 
   ZONES              comma-separated zone names, described below; default is
                       your local zone
-  -n, --per-row N    clocks per row before wrapping (default 3, reduced to fit)
+  -n, --per-row N    clocks per row before wrapping, reduced to fit; auto
+                      (default) picks whatever grows --scale auto the most
   --color[=WHEN]     colour the hands: always, auto (default), never or off
   --no-color         same as --color=never
   --day[=WHEN]       weekday on the readout: always, auto (default), never
@@ -66,6 +72,10 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
                       like 10%
   --vpad SPACE       between rows: even (default), or a share of the height
                       like 5%
+  --cell-ratio N     font cell height / width (default 2.1); raise if the
+                      face looks squished, lower if it bulges sideways
+  --scale N          resize every face by this factor; auto (default) fills
+                      the window, at minimum padding
   -h, --help         this message
 
 A zone is an IANA name (Europe/Berlin), the city off the end of one where
@@ -79,7 +89,9 @@ The hands are coloured on a terminal and plain when redirected; NO_COLOR
 turns the colour off everywhere. Auto puts a weekday on the readouts only
 when the clocks on screen disagree about the date. An even fill spreads the
 clocks over the whole window; --hpad 10% sets the gaps instead, as a share of
-the window, and then the alignment decides where the grid sits.
+the window, and then the alignment decides where the grid sits. CLOCK_CELL_RATIO
+sets the same thing as --cell-ratio, for when it wants to be set once per
+terminal rather than typed every time; the flag wins if both are given.
 
 Space holds the frame still, for a screenshot, and h or ? opens the key list.
 Press q or Ctrl+C to quit.
@@ -107,10 +119,12 @@ var (
 // needs is the example each of the four layout flags gives when handed no
 // value at all.
 var needs = map[string]string{
-	"halign": "--halign center",
-	"valign": "--valign center",
-	"hpad":   "--hpad 10%",
-	"vpad":   "--vpad 5%",
+	"halign":     "--halign center",
+	"valign":     "--valign center",
+	"hpad":       "--hpad 10%",
+	"vpad":       "--vpad 5%",
+	"cell-ratio": "--cell-ratio 2.6",
+	"scale":      "--scale 1.5",
 }
 
 // hotkeys is the key list h or ? puts up in a modal. In the order the keys
@@ -135,17 +149,29 @@ const (
 
 // cellRatio is how tall a terminal cell is relative to its width. It is the
 // only knob that decides whether the face is round, and it varies by font and
-// line spacing. Override without editing: CLOCK_CELL_RATIO=2.7
+// line spacing. Set for real in run(), from --cell-ratio or CLOCK_CELL_RATIO;
+// nothing reads it before then, so the default here is just a placeholder.
 // Raise it if the face looks squished, lower it if it bulges sideways.
-var cellRatio = func() float64 {
-	if v, err := strconv.ParseFloat(os.Getenv("CLOCK_CELL_RATIO"), 64); err == nil && v > 0 {
-		return v
-	}
-	return defaultCellRatio
-}()
+var cellRatio = defaultCellRatio
 
-// colsN is the face width in terminal columns.
-var colsN = int(math.Floor(rowsN*cellRatio + 0.5))
+// rowsN is the face height in terminal rows, set for real in run() from
+// --scale; nothing reads it before then.
+var rowsN = defaultRowsN
+
+// colsN is the face width in terminal columns, set alongside rowsN and cellRatio.
+var colsN = int(math.Floor(defaultRowsN*defaultCellRatio + 0.5))
+
+// envCellRatio reads CLOCK_CELL_RATIO, falling back to the default on
+// anything unusable. Unlike --cell-ratio, an environment variable might be
+// stale or set for some other program, so a bad value is not a user error --
+// it is simply ignored, the same way an unset one is.
+func envCellRatio() float64 {
+	v, err := strconv.ParseFloat(os.Getenv("CLOCK_CELL_RATIO"), 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
+		return defaultCellRatio
+	}
+	return v
+}
 
 // freezeLayout is the one instant format CLOCK_FREEZE accepts. Exactly six
 // fractional digits, exactly UTC: Python's datetime stops at microseconds, and
@@ -474,6 +500,39 @@ func parsePad(flag, val string) (int, error) {
 	return n, nil
 }
 
+// parseRatio reads a positive, finite decimal for --cell-ratio. Delegates to
+// strconv.ParseFloat rather than a hand-rolled scan, the same as
+// CLOCK_CELL_RATIO already does: this knob shapes one face, not a zone or a
+// count, and does not carry the same cross-language byte-for-byte stakes.
+func parseRatio(val string) (float64, error) {
+	v, ok := positiveFloat(val)
+	if !ok {
+		return 0, fmt.Errorf("--cell-ratio wants a positive number, e.g. --cell-ratio 2.6, got \"%s\"", val)
+	}
+	return v, nil
+}
+
+// parseScale reads a positive, finite decimal for --scale.
+func parseScale(val string) (float64, error) {
+	v, ok := positiveFloat(val)
+	if !ok {
+		return 0, fmt.Errorf("--scale wants auto or a positive number, e.g. --scale 1.5, got \"%s\"", val)
+	}
+	return v, nil
+}
+
+// positiveFloat is what --cell-ratio and --scale share: neither shapes a
+// zone or a count, so unlike those this delegates to strconv.ParseFloat
+// rather than a hand-rolled scan, and does not carry the same
+// cross-language byte-for-byte stakes.
+func positiveFloat(val string) (float64, bool) {
+	v, err := strconv.ParseFloat(val, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
+		return 0, false
+	}
+	return v, true
+}
+
 // geometry is what the four layout flags collect: where the grid sits when it
 // does not fill the window, and how much space goes between the clocks. A pad
 // of -1 is the even fill.
@@ -486,12 +545,16 @@ type geometry struct {
 // any position. Hand-rolled rather than package flag, which insists every
 // flag precede the first positional -- "clock ET,PT -n 2" would silently
 // ignore the -n. clock.py runs the same algorithm for the same reason.
-func parseArgs(argv []string) (int, string, string, string, geometry, bool, error) {
-	perRow := defaultPerRow
+func parseArgs(argv []string) (int, string, string, string, geometry, bool, float64, float64, bool, bool, error) {
+	perRow := defaultPerRow // only used when an explicit -n/--per-row overrides perRowAuto below
 	colorWhen := "auto"
 	dayWhen := "" // unset: run() picks it, since a pinned clock differs
 	geo := geometry{halign: "center", valign: "center", hpad: -1, vpad: -1}
 	quiet := false
+	cellRatioFlag := 0.0 // unset: run() falls back to CLOCK_CELL_RATIO, then the default
+	scaleFlag := 0.0     // unset unless a specific --scale overrides scaleAuto below
+	scaleAuto := true    // the default: run() re-solves rowsN every frame to fill the window
+	perRowAuto := true   // the default: run() also searches per-row counts, to maximise rowsN
 	var positional []string
 	endOfFlags := false
 
@@ -503,7 +566,7 @@ func parseArgs(argv []string) (int, string, string, string, geometry, bool, erro
 		case a == "--":
 			endOfFlags = true
 		case a == "-h" || a == "--help":
-			return 0, "", "", "", geo, false, errHelp
+			return 0, "", "", "", geo, false, 0, 0, false, false, errHelp
 		case strings.HasPrefix(a, "--"):
 			name, val, haveVal := strings.Cut(a[2:], "=")
 			switch name {
@@ -511,15 +574,20 @@ func parseArgs(argv []string) (int, string, string, string, geometry, bool, erro
 				if !haveVal {
 					i++
 					if i >= len(argv) {
-						return 0, "", "", "", geo, false, errors.New("--per-row needs a number, e.g. --per-row 2")
+						return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("--per-row needs a number, e.g. --per-row 2")
 					}
 					val = argv[i]
 				}
+				if val == "auto" {
+					perRowAuto = true
+					break
+				}
 				n, err := parseCount(val, "--per-row", maxPerRow)
 				if err != nil {
-					return 0, "", "", "", geo, false, err
+					return 0, "", "", "", geo, false, 0, 0, false, false, err
 				}
 				perRow = n
+				perRowAuto = false
 			case "color":
 				// Bare --color means always, and takes no separate argument:
 				// "clock --color ET" names a zone list, exactly as ls and git
@@ -528,13 +596,13 @@ func parseArgs(argv []string) (int, string, string, string, geometry, bool, erro
 				if haveVal {
 					w, err := parseChoice("color", val, colorWhens)
 					if err != nil {
-						return 0, "", "", "", geo, false, err
+						return 0, "", "", "", geo, false, 0, 0, false, false, err
 					}
 					colorWhen = w
 				}
 			case "no-color":
 				if haveVal {
-					return 0, "", "", "", geo, false, errors.New("--no-color takes no value")
+					return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("--no-color takes no value")
 				}
 				colorWhen = "never"
 			case "day":
@@ -542,27 +610,27 @@ func parseArgs(argv []string) (int, string, string, string, geometry, bool, erro
 				if haveVal {
 					w, err := parseChoice("day", val, whens)
 					if err != nil {
-						return 0, "", "", "", geo, false, err
+						return 0, "", "", "", geo, false, 0, 0, false, false, err
 					}
 					dayWhen = w
 				}
 			case "no-day":
 				if haveVal {
-					return 0, "", "", "", geo, false, errors.New("--no-day takes no value")
+					return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("--no-day takes no value")
 				}
 				dayWhen = "never"
 			case "quiet":
 				if haveVal {
-					return 0, "", "", "", geo, false, errors.New("--quiet takes no value")
+					return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("--quiet takes no value")
 				}
 				quiet = true
-			case "halign", "valign", "hpad", "vpad":
-				// These four want a value, and take it either way round, as
+			case "halign", "valign", "hpad", "vpad", "cell-ratio", "scale":
+				// These six want a value, and take it either way round, as
 				// --per-row does: there is no bare form to be ambiguous with.
 				if !haveVal {
 					i++
 					if i >= len(argv) {
-						return 0, "", "", "", geo, false, fmt.Errorf(
+						return 0, "", "", "", geo, false, 0, 0, false, false, fmt.Errorf(
 							"--%s needs a value, e.g. %s", name, needs[name])
 					}
 					val = argv[i]
@@ -571,19 +639,36 @@ func parseArgs(argv []string) (int, string, string, string, geometry, bool, erro
 				case "halign":
 					w, err := parseChoice(name, val, haligns)
 					if err != nil {
-						return 0, "", "", "", geo, false, err
+						return 0, "", "", "", geo, false, 0, 0, false, false, err
 					}
 					geo.halign = w
 				case "valign":
 					w, err := parseChoice(name, val, valigns)
 					if err != nil {
-						return 0, "", "", "", geo, false, err
+						return 0, "", "", "", geo, false, 0, 0, false, false, err
 					}
 					geo.valign = w
+				case "cell-ratio":
+					r, err := parseRatio(val)
+					if err != nil {
+						return 0, "", "", "", geo, false, 0, 0, false, false, err
+					}
+					cellRatioFlag = r
+				case "scale":
+					if val == "auto" {
+						scaleAuto = true
+						break
+					}
+					s, err := parseScale(val)
+					if err != nil {
+						return 0, "", "", "", geo, false, 0, 0, false, false, err
+					}
+					scaleFlag = s
+					scaleAuto = false
 				default:
 					n, err := parsePad(name, val)
 					if err != nil {
-						return 0, "", "", "", geo, false, err
+						return 0, "", "", "", geo, false, 0, 0, false, false, err
 					}
 					if name == "hpad" {
 						geo.hpad = n
@@ -592,43 +677,48 @@ func parseArgs(argv []string) (int, string, string, string, geometry, bool, erro
 					}
 				}
 			default:
-				return 0, "", "", "", geo, false, fmt.Errorf("unknown option: --%s", name)
+				return 0, "", "", "", geo, false, 0, 0, false, false, fmt.Errorf("unknown option: --%s", name)
 			}
 		case a == "-q":
 			quiet = true
 		case len(a) > 1 && strings.HasPrefix(a, "-"):
 			if a[1] != 'n' {
-				return 0, "", "", "", geo, false, fmt.Errorf("unknown option: %s", a)
+				return 0, "", "", "", geo, false, 0, 0, false, false, fmt.Errorf("unknown option: %s", a)
 			}
 			rest := a[2:]
 			switch {
 			case rest == "":
 				i++
 				if i >= len(argv) {
-					return 0, "", "", "", geo, false, errors.New("-n needs a number, e.g. -n 2")
+					return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("-n needs a number, e.g. -n 2")
 				}
 				rest = argv[i]
 			case rest[0] == '=':
-				return 0, "", "", "", geo, false, errors.New("-n takes its value as \"-n N\" or \"-nN\", not \"-n=N\"")
+				return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("-n takes its value as \"-n N\" or \"-nN\", not \"-n=N\"")
+			}
+			if rest == "auto" {
+				perRowAuto = true
+				continue
 			}
 			n, err := parseCount(rest, "-n", maxPerRow)
 			if err != nil {
-				return 0, "", "", "", geo, false, err
+				return 0, "", "", "", geo, false, 0, 0, false, false, err
 			}
 			perRow = n
+			perRowAuto = false
 		default:
 			positional = append(positional, a)
 		}
 	}
 
 	if len(positional) > 1 {
-		return 0, "", "", "", geo, false, fmt.Errorf("expected one comma-separated zone list, got %d: %s",
+		return 0, "", "", "", geo, false, 0, 0, false, false, fmt.Errorf("expected one comma-separated zone list, got %d: %s",
 			len(positional), strings.Join(positional, " "))
 	}
 	if len(positional) == 0 {
-		return perRow, "", colorWhen, dayWhen, geo, quiet, nil
+		return perRow, "", colorWhen, dayWhen, geo, quiet, cellRatioFlag, scaleFlag, scaleAuto, perRowAuto, nil
 	}
-	return perRow, positional[0], colorWhen, dayWhen, geo, quiet, nil
+	return perRow, positional[0], colorWhen, dayWhen, geo, quiet, cellRatioFlag, scaleFlag, scaleAuto, perRowAuto, nil
 }
 
 // A resolved clock face is just its location. No label is stored: it comes off
@@ -1473,19 +1563,81 @@ func overlayModal(rows []string, box []string, top, left int) []string {
 	}
 	for i, line := range box {
 		r := top + i
-		existing := []rune(out[r])
-		if len(existing) < left {
-			existing = append(existing, []rune(strings.Repeat(" ", left-len(existing)))...)
-		}
-		var b strings.Builder
-		b.WriteString(string(existing[:left]))
-		b.WriteString(line)
-		if tail := left + utf8.RuneCountInString(line); tail < len(existing) {
-			b.WriteString(string(existing[tail:]))
-		}
-		out[r] = b.String()
+		out[r] = spliceRow(out[r], left, utf8.RuneCountInString(line), line)
 	}
 	return out
+}
+
+// spliceRow overwrites the visible columns [col, col+width) of row with
+// insert -- plain text, never coloured itself -- while preserving whatever
+// ANSI colour the row carried outside that span, and resuming it correctly
+// on the far side. row may already be full of colour escapes (a face's hand
+// can pass under where a modal lands) or may have none at all (--color=never,
+// or a redirected frame); either way nothing outside [col, col+width) changes.
+func spliceRow(row string, col, width int, insert string) string {
+	runes := []rune(row)
+	n := len(runes)
+	var before, after strings.Builder
+	active := "" // the last SGR escape seen so far, "" meaning none yet
+	startActive, endActive := "", ""
+	startCaptured, endCaptured := false, false
+	visible := 0
+	for i := 0; i < n; {
+		if runes[i] == '\x1b' {
+			j := i + 1
+			for j < n && runes[j] != 'm' {
+				j++
+			}
+			if j < n {
+				j++ // include the 'm'
+			}
+			seq := string(runes[i:j])
+			active = seq
+			switch {
+			case visible < col:
+				before.WriteString(seq)
+			case visible >= col+width:
+				after.WriteString(seq)
+			}
+			i = j
+			continue
+		}
+		if !startCaptured && visible >= col {
+			startCaptured, startActive = true, active
+		}
+		if !endCaptured && visible >= col+width {
+			endCaptured, endActive = true, active
+		}
+		switch {
+		case visible < col:
+			before.WriteRune(runes[i])
+		case visible >= col+width:
+			after.WriteRune(runes[i])
+		}
+		visible++
+		i++
+	}
+	if !startCaptured {
+		startActive = active
+	}
+	if !endCaptured {
+		endActive = active
+	}
+	if visible < col {
+		before.WriteString(strings.Repeat(" ", col-visible))
+	}
+	result := before.String()
+	if startActive != "" && startActive != defaultFG {
+		result += defaultFG
+	}
+	result += insert
+	if after.Len() > 0 {
+		if endActive != "" {
+			result += endActive
+		}
+		result += after.String()
+	}
+	return result
 }
 
 // fold breaks text onto lines of at most width, on spaces where it can be. A
@@ -1610,7 +1762,7 @@ func fitPerRow(want, n, termCols, gap int) (int, error) {
 	maxFit := (termCols + gap) / (colsN + gap)
 	if maxFit < 1 {
 		return 0, fmt.Errorf(
-			"terminal is %d columns wide and one clock face needs %d; widen the window, or lower CLOCK_CELL_RATIO",
+			"terminal is %d columns wide and one clock face needs %d; widen the window, or lower --cell-ratio",
 			termCols, colsN)
 	}
 	if want > maxFit {
@@ -1630,6 +1782,43 @@ func fitHeight(chunks, termRows, vgap int) error {
 			chunks, h, termRows)
 	}
 	return nil
+}
+
+// autoScale is what --scale auto resolves to every frame: the largest rowsN
+// (and its matching colsN) that lets numFaces fit cols x lines at no more
+// than wantPerRow per row, using no more than hpad/vpad's own minimum gap on
+// each axis -- the same floor fitPerRow and fitHeight already enforce, so a
+// maximised face never asks for less room than an explicit --hpad would once
+// drawn. Larger rowsN can only ever need as much or more space (a wider face
+// fits no more per row, and a taller one needs no fewer lines), so the first
+// size that fits, searched from the top down, is the largest one that does.
+//
+// -n auto passes numFaces itself as wantPerRow -- no cap at all, in effect,
+// since fitPerRow already clamps want to numFaces on its own -- rather than
+// searching per-row counts separately. fitPerRow always uses the most faces
+// a row can hold up to the cap, which is also the fewest chunks (and so the
+// least height) any per-row choice at that rowsN could need, so an uncapped
+// want already finds whichever per-row count each candidate rowsN fits best
+// through, without a second search: capping lower could only ever force more
+// chunks than that rowsN needed, never fewer.
+//
+// Sets the package-level rowsN and colsN to the winner; if nothing in range
+// fits, it leaves them at minRowsN so the fitPerRow/fitHeight call right
+// after this one reports why.
+func autoScale(wantPerRow, numFaces, cols, lines, hpad, vpad int) {
+	for n := maxRowsN; n >= minRowsN; n-- {
+		rowsN = n
+		colsN = int(math.Floor(float64(n)*cellRatio + 0.5))
+		perRow, err := fitPerRow(wantPerRow, numFaces, cols, gapFloor(cols, hpad, gap))
+		if err != nil {
+			continue
+		}
+		if fitHeight(chunkCount(numFaces, perRow), lines, gapFloor(lines, vpad, vgap)) == nil {
+			return
+		}
+	}
+	rowsN = minRowsN
+	colsN = int(math.Floor(float64(minRowsN)*cellRatio + 0.5))
 }
 
 func ioctl(fd, req uintptr, p unsafe.Pointer) error {
@@ -1695,7 +1884,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	wantPerRow, zoneList, colorWhen, dayWhen, geo, quiet, err := parseArgs(os.Args[1:])
+	wantPerRow, zoneList, colorWhen, dayWhen, geo, quiet, cellRatioFlag, scaleFlag, scaleAuto, perRowAuto, err := parseArgs(os.Args[1:])
 	if errors.Is(err, errHelp) {
 		fmt.Print(usage)
 		return nil
@@ -1704,6 +1893,40 @@ func run() error {
 		return err
 	}
 	color := useColor(colorWhen)
+
+	// --cell-ratio wins over CLOCK_CELL_RATIO, which wins over the default.
+	if cellRatioFlag > 0 {
+		cellRatio = cellRatioFlag
+	} else {
+		cellRatio = envCellRatio()
+	}
+
+	// --scale resizes the whole face, keeping the same shape: rowsN moves and
+	// colsN follows it, through the cell-ratio arithmetic above. --scale auto
+	// instead re-solves both every frame, in the main loop, against whatever
+	// the terminal measures to.
+	if !scaleAuto {
+		scale := 1.0
+		if scaleFlag > 0 {
+			scale = scaleFlag
+		}
+		rowsN = int(math.Floor(defaultRowsN*scale + 0.5))
+		if rowsN < minRowsN || rowsN > maxRowsN {
+			return fmt.Errorf(
+				"--scale %g makes each face %d rows tall; want %d to %d rows, roughly --scale %.2f to --scale %.2f",
+				scale, rowsN, minRowsN, maxRowsN,
+				float64(minRowsN)/defaultRowsN, float64(maxRowsN)/defaultRowsN)
+		}
+		colsN = int(math.Floor(float64(rowsN)*cellRatio + 0.5))
+	}
+
+	// -n auto's whole point is choosing whatever per-row count lets --scale
+	// auto grow the face furthest; with a fixed --scale there is no face
+	// size left for it to affect, so it falls back to the plain default cap.
+	if perRowAuto && !scaleAuto {
+		wantPerRow = defaultPerRow
+		perRowAuto = false
+	}
 
 	// A pinned clock is a still of one instant, and an undated still records
 	// half of it, so the weekday goes under every face unless --day says
@@ -1782,6 +2005,23 @@ func run() error {
 		cols, lines := termSize()
 		faces := orderFaces(mergeZones(zones, now), now)
 
+		if scaleAuto {
+			if perRowAuto {
+				wantPerRow = defaultPerRow // overridden below whenever there is a window to measure
+			}
+			if cols > 0 && lines > 0 {
+				if perRowAuto {
+					wantPerRow = len(faces) // no real cap: see autoScale's own comment
+				}
+				autoScale(wantPerRow, len(faces), cols, lines, geo.hpad, geo.vpad)
+			} else {
+				// Nothing measurable to fill, so there is nothing to solve --
+				// same as any other window that cannot be measured.
+				rowsN = defaultRowsN
+				colsN = int(math.Floor(defaultRowsN*cellRatio + 0.5))
+			}
+		}
+
 		var rows []string
 		perRow, err := fitPerRow(wantPerRow, len(faces), cols, gapFloor(cols, geo.hpad, gap))
 		chunks := 0
@@ -1826,10 +2066,7 @@ func run() error {
 			var lay layout
 			lay.gap, lay.extra, lay.left, lay.extraLeft = spread(perRow, colsN, cols, gap, geo.hpad, geo.halign)
 			lay.vgap, lay.vextra, lay.top, _ = spread(chunks, rowsN+2, lines, vgap, geo.vpad, geo.valign)
-			// Colour comes off whenever a modal is about to be stamped on
-			// top: overlayModal works in plain text, so nothing under the
-			// modal is left carrying a hand's colour past it.
-			rows = frame(faces, now, perRow, color && !showModal, dayWhen, lay)
+			rows = frame(faces, now, perRow, color, dayWhen, lay)
 		}
 		if showModal {
 			rows = overlayModal(rows, modal, modalTop, modalLeft)

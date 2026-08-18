@@ -52,10 +52,49 @@ Piped output has no resize to survive and keeps the rewind, which is also what
 lets `tools/difftest.sh` compare the two implementations byte for byte.
 
 **Modals.** The key list and the startup quit hint are stamped onto the
-finished frame as plain text, after the grid is drawn — never mixed into a
-face's own rows. Colour is turned off for any frame a modal is going onto, so
-the overlay never has to reason about resuming a hand's ANSI colour on the far
-side of the box it just drew over.
+finished, already-coloured frame after the grid is drawn — never mixed into a
+face's own rows. The splice is ANSI-aware: it walks each row it touches,
+tracks the last colour escape seen, and drops in the box's plain text between
+a reset and whatever colour was active on the far side, so a hand's colour
+survives everywhere outside the box itself, including where the box actually
+lands mid-hand.
+
+## Auto scale
+
+`--scale auto`, the default, re-solves `ROWS` (and `COLS`, through it) every
+frame by searching candidate sizes from `MAX_ROWS_N` down to `MIN_ROWS_N` and
+taking the first one where `fit_per_row` and `fit_height` both still succeed.
+That search relies on a monotonicity argument rather than trying every
+`(ROWS, per_row)` combination:
+
+- `fit_per_row` already returns the *largest* `per_row` that fits a given
+  `COLS`, so for a fixed `ROWS` there is nothing better to try.
+- As `ROWS` grows, `COLS` grows with it (through the cell-ratio formula), so
+  `fit_per_row`'s own max-fit can only fall or hold, never rise -- meaning the
+  `per_row` a candidate settles on is non-increasing in `ROWS`.
+- Fewer faces per row means the same face count needs as many or more rows of
+  clocks, and each of those rows is itself taller (`ROWS` grew) -- so the
+  total height a candidate needs is non-decreasing in `ROWS`.
+
+So whether a given `ROWS` fits is true for small values and, once it turns
+false, stays false for every larger one: a single descending scan finds the
+true largest fit, without needing to search `per_row` separately. Both
+`fit_per_row`/`fit_height` read `COLS`/`ROWS` as module state rather than
+taking them as arguments, so the search mutates them directly per candidate
+and leaves the winner in place for the ordinary per-frame layout code -- run
+right after it -- to pick up.
+
+**`-n auto`.** This is also why `-n auto` needs no search of its own: it
+just passes `num_faces` as `want_per_row` -- no real cap, since `fit_per_row`
+already clamps `want` to `num_faces` -- and lets the existing scan above do
+the rest. The first bullet is the reason that works: at any candidate `ROWS`,
+`fit_per_row` already settles on the per-row count that minimises the chunks
+(and so the height) that `ROWS` needs, so there is never a smaller cap that
+would have let a *larger* `ROWS` fit -- only ever one that forces more chunks
+than necessary. A first attempt at this search per-row counts explicitly, one
+`autoScale` pass per count from `num_faces` down to 1, taking whichever pair
+gave the largest `ROWS`; it gave the same answer every time, because it was
+solving a problem the existing search already solved by construction.
 
 ## ZIP resolution
 

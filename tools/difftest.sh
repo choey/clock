@@ -124,6 +124,11 @@ check "$SUMMER" 200 60 -n 999 ET
 check "$SUMMER" 200 60 -n " 2" ET
 check "$SUMMER" 200 60 -n +2 ET
 check "$SUMMER" 200 60 -n 2_0 ET
+check "$SUMMER" 200 60 -n auto ET,PT,UTC
+check "$SUMMER" 200 60 -nauto ET,PT,UTC
+check "$SUMMER" 200 60 --per-row auto ET,PT,UTC
+check "$SUMMER" 200 60 --per-row=auto ET,PT,UTC
+check "$SUMMER" 200 60 -n auto --scale 1 ET,PT,UTC
 check "$SUMMER" 200 60 -n
 check "$SUMMER" 200 60 --per-row
 check "$SUMMER" 200 60 --per
@@ -160,6 +165,27 @@ check "$SUMMER" 200 60 -q ET
 check "$SUMMER" 200 60 --quiet ET
 check "$SUMMER" 200 60 --quiet=x ET
 check "$SUMMER" 200 60 -q --quiet ET
+check "$SUMMER" 200 60 --cell-ratio=2.6 ET
+check "$SUMMER" 200 60 --cell-ratio 2.6 ET
+check "$SUMMER" 200 60 --cell-ratio
+check "$SUMMER" 200 60 --cell-ratio 0 ET
+check "$SUMMER" 200 60 --cell-ratio -1 ET
+check "$SUMMER" 200 60 --cell-ratio bogus ET
+check "$SUMMER" 200 60 --cell-ratio inf ET
+check "$SUMMER" 200 60 --cell-ratio nan ET
+check "$SUMMER" 200 60 --scale=1.5 ET,PT
+check "$SUMMER" 200 60 --scale 1.5 ET,PT
+check "$SUMMER" 200 60 --scale 0.5 ET,PT
+check "$SUMMER" 200 60 --scale
+check "$SUMMER" 200 60 --scale 0 ET
+check "$SUMMER" 200 60 --scale -1 ET
+check "$SUMMER" 200 60 --scale bogus ET
+check "$SUMMER" 200 60 --scale inf ET
+check "$SUMMER" 200 60 --scale nan ET
+check "$SUMMER" 200 60 --scale 0.1 ET
+check "$SUMMER" 200 60 --scale 100 ET
+check "$SUMMER" 200 60 --scale=auto ET
+check "$SUMMER" 200 60 --scale auto ET
 check "$SUMMER" 200 60 --help
 check "$SUMMER" 200 60 -h
 check "$SUMMER" 200 60 ET --help
@@ -189,28 +215,36 @@ done
 # and zone lists that are deliberately out of order. Every case here is pinned,
 # which defaults the weekday to always, so these ask for --day=auto: it is the
 # live clock's rule, and nothing else in the harness can reach it.
+# --scale 1 pins every case in this section to the fixed default size: the
+# weekday's own visibility depends on a 16-column-wide face (dayCols), which
+# --scale auto -- the default -- would not otherwise hold steady.
 echo "== order and days =="
 for at in 00:00:00.000000 05:02:41.901000 11:00:00.000000 23:59:59.999999; do
 	for zones in PT,UTC,10001,JP,GB UTC,GMT,PST,PT,PDT JST,PT,UTC NZ,HT,UTC \
 		Pacific/Kiritimati,Etc/GMT+12,UTC local,JST ET; do
-		check "2026-07-15T${at}Z" 200 60 --day=auto "$zones" -n 5
-		check "2026-01-15T${at}Z" 200 60 --day=auto "$zones" -n 5
-		check "2026-07-15T${at}Z" 200 60 "$zones" -n 5
+		check "2026-07-15T${at}Z" 200 60 --scale 1 --day=auto "$zones" -n 5
+		check "2026-01-15T${at}Z" 200 60 --scale 1 --day=auto "$zones" -n 5
+		check "2026-07-15T${at}Z" 200 60 --scale 1 "$zones" -n 5
 	done
 done
-check "$SUMMER" 200 60 UTC,JP,NZ,HT,PT,GB,IN -n 3
-check "$SUMMER" 200 60 --color=always UTC,JP,PT
+check "$SUMMER" 200 60 --scale 1 UTC,JP,NZ,HT,PT,GB,IN -n 3
+check "$SUMMER" 200 60 --scale 1 --color=always UTC,JP,PT
 
 # A 16-column face is the narrowest that holds "Wed 05:02:41.901": 1.5 clears
 # it at 17 columns, 1.4 falls one short at 15 and drops the weekday instead.
 for ratio in 1.4 1.5; do
-	check "2026-07-15T05:02:41.901000Z" 200 60 UTC,PT
+	check "2026-07-15T05:02:41.901000Z" 200 60 --scale 1 UTC,PT
 done
 ratio=
 
 # Every case above lays out with the even fill and centred, which is the
 # default; these pin the alignments, the fixed paddings and the arithmetic
 # where a gap does not divide evenly.
+# --scale 1 pins every case in this section (and layout grammar, width fit,
+# height fit, and cell ratios below) to the fixed default size: these test
+# the padding/alignment spread and the fit boundary at a known face size, and
+# --scale auto -- the default since it maximises the face instead -- would
+# leave little or no leftover space for any of that to exercise.
 echo "== layout =="
 for size in "100 30" "101 31" "75 13" "80 24" "200 60" "23 13" "49 27" \
 	"300 80" "400 100" "76 14"; do
@@ -220,47 +254,47 @@ for size in "100 30" "101 31" "75 13" "80 24" "200 60" "23 13" "49 27" \
 		"--hpad 10%" "--hpad 0" "--hpad 100%" "--hpad even" \
 		"--vpad 10%" "--vpad 0" "--vpad even" \
 		"--hpad 5% --vpad 5% --halign right --valign bottom"; do
-		check "$SUMMER" "$1" "$2" $geo ET,PT,UTC
-		check "$SUMMER" "$1" "$2" $geo -n 2 ET,PT,UTC,JP
+		check "$SUMMER" "$1" "$2" --scale 1 $geo ET,PT,UTC
+		check "$SUMMER" "$1" "$2" --scale 1 $geo -n 2 ET,PT,UTC,JP
 	done
 done
 
 echo "== layout grammar =="
-check "$SUMMER" 200 60 --halign=center ET
-check "$SUMMER" 200 60 --halign center ET
-check "$SUMMER" 200 60 --halign bogus ET
-check "$SUMMER" 200 60 --halign top ET
-check "$SUMMER" 200 60 --valign left ET
-check "$SUMMER" 200 60 --halign ET
-check "$SUMMER" 200 60 --halign
-check "$SUMMER" 200 60 --hpad
-check "$SUMMER" 200 60 --hpad 10 ET
-check "$SUMMER" 200 60 --hpad 10% ET
-check "$SUMMER" 200 60 --hpad=10% ET
-check "$SUMMER" 200 60 --hpad 010 ET
-check "$SUMMER" 200 60 --hpad 101 ET
-check "$SUMMER" 200 60 --hpad 100% ET
-check "$SUMMER" 200 60 --hpad -5 ET
-check "$SUMMER" 200 60 --hpad +5 ET
-check "$SUMMER" 200 60 --hpad " 5" ET
-check "$SUMMER" 200 60 --hpad 5%% ET
-check "$SUMMER" 200 60 --hpad %5 ET
-check "$SUMMER" 200 60 --hpad "" ET
-check "$SUMMER" 200 60 --hpad twenty ET
-check "$SUMMER" 200 60 --vpad 1000 ET
-check "$SUMMER" 200 60 --vpad 50% -n 1 ET,PT,UTC
-check "$SUMMER" 200 60 --hpad 50% ET,PT,UTC
+check "$SUMMER" 200 60 --scale 1 --halign=center ET
+check "$SUMMER" 200 60 --scale 1 --halign center ET
+check "$SUMMER" 200 60 --scale 1 --halign bogus ET
+check "$SUMMER" 200 60 --scale 1 --halign top ET
+check "$SUMMER" 200 60 --scale 1 --valign left ET
+check "$SUMMER" 200 60 --scale 1 --halign ET
+check "$SUMMER" 200 60 --scale 1 --halign
+check "$SUMMER" 200 60 --scale 1 --hpad
+check "$SUMMER" 200 60 --scale 1 --hpad 10 ET
+check "$SUMMER" 200 60 --scale 1 --hpad 10% ET
+check "$SUMMER" 200 60 --scale 1 --hpad=10% ET
+check "$SUMMER" 200 60 --scale 1 --hpad 010 ET
+check "$SUMMER" 200 60 --scale 1 --hpad 101 ET
+check "$SUMMER" 200 60 --scale 1 --hpad 100% ET
+check "$SUMMER" 200 60 --scale 1 --hpad -5 ET
+check "$SUMMER" 200 60 --scale 1 --hpad +5 ET
+check "$SUMMER" 200 60 --scale 1 --hpad " 5" ET
+check "$SUMMER" 200 60 --scale 1 --hpad 5%% ET
+check "$SUMMER" 200 60 --scale 1 --hpad %5 ET
+check "$SUMMER" 200 60 --scale 1 --hpad "" ET
+check "$SUMMER" 200 60 --scale 1 --hpad twenty ET
+check "$SUMMER" 200 60 --scale 1 --vpad 1000 ET
+check "$SUMMER" 200 60 --scale 1 --vpad 50% -n 1 ET,PT,UTC
+check "$SUMMER" 200 60 --scale 1 --hpad 50% ET,PT,UTC
 
 echo "== width fit =="
 for cols in 1 22 23 24 48 49 50 74 75 76 200; do
 	for n in 1 2 3 4; do
-		check "$SUMMER" "$cols" 60 ET,PT,UTC,JP,GB -n "$n"
+		check "$SUMMER" "$cols" 60 --scale 1 ET,PT,UTC,JP,GB -n "$n"
 	done
 done
 
 echo "== height fit =="
 for lines in 11 12 13 24 25 26 38 39 60; do
-	check "$SUMMER" 200 "$lines" ET,PT,UTC,JP,GB -n 2
+	check "$SUMMER" 200 "$lines" --scale 1 ET,PT,UTC,JP,GB -n 2
 done
 
 echo "== unknown terminal size =="
@@ -278,9 +312,46 @@ fi
 
 echo "== cell ratios =="
 for ratio in 1.7 2.0 2.1 2.4 2.9 3.3; do
-	check "$SUMMER" 200 60 ET,PT,UTC -n 2
+	check "$SUMMER" 200 60 --scale 1 ET,PT,UTC -n 2
 done
 ratio=
+for r in 1.7 2.0 2.4 2.9 3.3; do
+	check "$SUMMER" 200 60 --scale 1 --cell-ratio "$r" ET,PT,UTC -n 2
+done
+# The flag wins when both are set.
+ratio=1.7
+check "$SUMMER" 200 60 --scale 1 --cell-ratio 2.9 ET,PT,UTC -n 2
+ratio=
+
+echo "== auto scale =="
+for size in "80 24" "100 30" "200 60" "40 15" "300 90"; do
+	set -- $size
+	check "$SUMMER" "$1" "$2" --scale auto ET
+	check "$SUMMER" "$1" "$2" --scale auto ET,PT,UTC
+	check "$SUMMER" "$1" "$2" --scale auto ET,PT,UTC,JP,GB,NZ
+	check "$SUMMER" "$1" "$2" --scale auto -n 1 ET,PT,UTC
+	check "$SUMMER" "$1" "$2" --scale auto -n 2 ET,PT,UTC,JP
+	check "$SUMMER" "$1" "$2" --scale auto --hpad 10% ET,PT,UTC
+	check "$SUMMER" "$1" "$2" --scale auto --vpad 5% --valign top ET,PT,UTC
+	check "$SUMMER" "$1" "$2" --scale auto --cell-ratio 2.6 ET,PT,UTC
+done
+check "$SUMMER" 10 5 --scale auto ET,PT,UTC
+check "$SUMMER" 0 0 --scale auto ET,PT,UTC
+
+# -n auto (the default, alongside --scale auto) searches per-row counts too,
+# so a lopsided window -- wide and short, or narrow and tall -- can still
+# grow the face as big as a squarer one would: extreme aspect ratios are
+# exactly where a fixed per-row cap would have left it smaller than it had to
+# be.
+echo "== per-row auto =="
+for size in "300 15" "15 300" "400 20" "20 400" "500 10" "10 500"; do
+	set -- $size
+	check "$SUMMER" "$1" "$2" ET,PT,UTC,JP,GB,NZ
+	check "$SUMMER" "$1" "$2" -n auto ET,PT,UTC,JP,GB,NZ
+	check "$SUMMER" "$1" "$2" -n 3 ET,PT,UTC,JP,GB,NZ
+done
+check "$SUMMER" 80 24 --scale 1 -n auto ET,PT,UTC,JP,GB,NZ
+check "$SUMMER" 80 24 --scale 2 -n auto ET,PT,UTC,JP,GB,NZ
 
 # Every case below must be frozen: an unfrozen clock never exits on its own,
 # and with stdin at /dev/null there is no q to stop it either.

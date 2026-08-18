@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clock"
+version = "0.1.0"
+description = "Analog terminal clocks, one face per time zone"
+requires-python = ">=3.9"
+readme = "README.md"
+
+[project.scripts]
+clock = "clock:main"
+
+[tool.setuptools]
+py-modules = ["clock"]

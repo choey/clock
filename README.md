@@ -6,7 +6,7 @@ independent implementations — Python and Go — that render byte-for-byte
 identical output.
 
 ```sh
-clock 10001,PT,Jakarta,UTC --per-row 2
+clock 10001,PT,Jakarta,UTC --per-row 2 --scale 1
 ```
 
 ![Four clocks, in a 2x2 grid: PDT, EDT, UTC and WIB](screenshot.png)
@@ -50,17 +50,31 @@ shebang — so the Python side needs only a copy or a symlink, no build step:
 cp clock.py /usr/local/bin/clock
 ```
 
+or, to manage it like any other Python tool instead:
+
+```sh
+pip install .
+```
+
+which puts a `clock` entry point on your `PATH` inside whatever environment
+you ran `pip` in — a virtualenv, or `pipx install .` for one isolated from
+your other Python packages. `pip install -e .` does the same but re-reads
+`clock.py` from this checkout on every run, for working on it in place.
+
 ## Usage
 
 ```
 clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
       [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
-      [ZONES]
+      [--cell-ratio N] [--scale N] [ZONES]
 ```
 
 With no arguments you get one clock, in your local zone. Otherwise `ZONES` is a
 comma-separated list, and `-n` caps how many sit side by side before the grid
-wraps to a new row (default 3).
+wraps to a new row. By default `-n` is `auto` too, alongside `--scale`: rather
+than a fixed cap it picks whichever count grows the clocks the most, which
+for a wide, short window can be more than the plain default (3) and for a
+tall, narrow one can be fewer. Give it a number to cap it the old way instead.
 
 Flags may go before or after the zone list — all four of these are the same
 command:
@@ -76,7 +90,11 @@ clock --per-row 2 ET,PT,UTC
 
 The clocks are centred in the window, across and down, and the space around
 and between them is shared out evenly — so they sit in from the edges rather
-than against them, and the grid re-settles as the window changes.
+than against them, and the grid re-settles as the window changes. With the
+default `--scale auto` this usually has little to work with, since the
+clocks have already grown to use most of it; see [Tuning](#tuning) for that.
+It still decides the axis auto-scale didn't need to fill, and everything
+below still applies in full at a fixed `--scale`.
 
 | flag | takes | default |
 |---|---|---|
@@ -238,6 +256,11 @@ usual. Every readout carries its weekday, for the same reason a photograph
 wants a date on it. Redirect that same command to a file and it draws the one
 frame and exits, instead of staying up.
 
+`CLOCK_FREEZE` pins the time, not the size: with the default `--scale auto`,
+the same command still comes out a different size in a different window. Add
+a fixed `--scale` too — `--scale 1` for these README frames — for a screenshot
+that reproduces byte for byte regardless of what window it's taken in.
+
 ### Colour
 
 The three hands are coloured apart — hour yellow, minute cyan, second red, in
@@ -386,10 +409,17 @@ regenerate](#when-to-regenerate) for when they need to be.
 
 ## Tuning
 
-`CLOCK_CELL_RATIO` is your font's cell height / width, and is the only knob
-that decides whether the face is round. Braille dots are square at exactly 2;
-most fonts sit near 2.1, which is the default. Raise it if the face looks
-squished, lower it if it bulges sideways.
+`--cell-ratio` is your font's cell height / width, and is the only knob that
+decides whether the face is round. Braille dots are square at exactly 2; most
+fonts sit near 2.1, which is the default. Raise it if the face looks squished,
+lower it if it bulges sideways.
+
+```sh
+clock --cell-ratio 2.6
+```
+
+`CLOCK_CELL_RATIO` sets the same thing, for a terminal you'd rather configure
+once than pass a flag to every time; `--cell-ratio` wins if both are set.
 
 ```sh
 CLOCK_CELL_RATIO=2.6 python3 clock.py
@@ -407,8 +437,36 @@ height = rows * (ROWS + 2) + (rows - 1) * VGAP
 so one clock is 23x13, three across is 75x13, four zones at `-n 2` is 49x27,
 and five zones at `-n 2` is 49x41. `GAP` and `VGAP`, 3 and 1, are the least
 space the layout will leave between clocks: that is the size a grid packs down
-to, and what decides how many faces fit. Given a bigger window it spreads out
-from there, as [Layout](#layout) describes.
+to, and what decides how many faces fit.
+
+By default `--scale` is `auto`: rather than a fixed size with the window's
+extra room spread out as padding, it picks the largest size that still fits
+using nothing more than `--hpad`/`--vpad`'s own minimum gap — so growing the
+window grows the clocks themselves, not the space around them. It re-solves
+every frame, so resizing the window live resizes the clocks with it. Whichever
+axis isn't the tight one still has room left over, and that's exactly what
+[Layout](#layout)'s halign/valign/hpad/vpad describe — a wide window with one
+short row of clocks, say, still centres them top-to-bottom.
+
+`-n`'s own default, `auto`, is what actually lets that maximum be found:
+against a wide, short window a narrow cap forces more rows of clocks than the
+window needs, and each of those rows steals height the face could have used
+instead, so `-n auto` searches per-row counts too rather than assuming the
+plain default (3) is the right shape for whatever window it finds. Cap `-n`
+to a number and `--scale auto` still maximises the face, just against
+whatever fixed shape that cap leaves it.
+
+Give `--scale` a number instead for a fixed size, unrelated to the window:
+`--scale 2` is twice the plain default (11 rows), `--scale 0.5` is half. A
+fixed size is what leaves the window's leftover room as padding, the way
+[Layout](#layout) and the geometry above describe — and it is also where a
+fixed `-n` stops being just a cap on `-n auto`'s search and starts deciding
+the grid's shape outright, exactly as it always did.
+
+```sh
+clock --scale 1.5
+clock --scale auto -n auto   # the defaults; only worth naming to be explicit
+```
 
 ## Terminal requirements
 

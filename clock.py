@@ -40,11 +40,12 @@ USAGE = """clock - analog terminal clocks
 
 usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
              [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
-             [ZONES]
+             [--cell-ratio N] [--scale N] [ZONES]
 
   ZONES              comma-separated zone names, described below; default is
                       your local zone
-  -n, --per-row N    clocks per row before wrapping (default 3, reduced to fit)
+  -n, --per-row N    clocks per row before wrapping, reduced to fit; auto
+                      (default) picks whatever grows --scale auto the most
   --color[=WHEN]     colour the hands: always, auto (default), never or off
   --no-color         same as --color=never
   --day[=WHEN]       weekday on the readout: always, auto (default), never
@@ -56,6 +57,10 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
                       like 10%
   --vpad SPACE       between rows: even (default), or a share of the height
                       like 5%
+  --cell-ratio N     font cell height / width (default 2.1); raise if the
+                      face looks squished, lower if it bulges sideways
+  --scale N          resize every face by this factor; auto (default) fills
+                      the window, at minimum padding
   -h, --help         this message
 
 A zone is an IANA name (Europe/Berlin), the city off the end of one where
@@ -69,7 +74,9 @@ The hands are coloured on a terminal and plain when redirected; NO_COLOR
 turns the colour off everywhere. Auto puts a weekday on the readouts only
 when the clocks on screen disagree about the date. An even fill spreads the
 clocks over the whole window; --hpad 10% sets the gaps instead, as a share of
-the window, and then the alignment decides where the grid sits.
+the window, and then the alignment decides where the grid sits. CLOCK_CELL_RATIO
+sets the same thing as --cell-ratio, for when it wants to be set once per
+terminal rather than typed every time; the flag wins if both are given.
 
 Space holds the frame still, for a screenshot, and h or ? opens the key list.
 Press q or Ctrl+C to quit.
@@ -105,28 +112,71 @@ MAX_PER_ROW = 64  # an upper bound so a typo can't ask for a million faces
 # all ten values instead of sitting still. Reads as a live clock.
 TICK = 0.019
 
-ROWS = 11  # face height, in terminal rows
+DEFAULT_ROWS_N = 11  # face height, in terminal rows, at --scale 1
 DEFAULT_CELL_RATIO = 2.1  # cell height / width; braille dots are square at 2
 
+# ROWS keeps a face big enough for the hour numerals to have somewhere to
+# sit; MAX_ROWS_N is just a guard against a typo asking for a giant canvas.
+MIN_ROWS_N = 4
+MAX_ROWS_N = 200
 
-def _cell_ratio():
-    """How tall a terminal cell is relative to its width.
+# ROWS, CELL_RATIO and COLS start at the defaults and are set for real in
+# run(), once --scale, --cell-ratio and CLOCK_CELL_RATIO have been read;
+# nothing touches any of them before then.
+ROWS = DEFAULT_ROWS_N
+CELL_RATIO = DEFAULT_CELL_RATIO
+COLS = math.floor(ROWS * DEFAULT_CELL_RATIO + 0.5)  # face width, in terminal columns
+GAP = 3  # fewest blank columns between adjacent faces
+VGAP = 1  # fewest blank rows between rows of faces
+
+
+def _positive_float(value):
+    return not (math.isnan(value) or math.isinf(value)) and value > 0
+
+
+def env_cell_ratio():
+    """How tall a terminal cell is relative to its width, from CLOCK_CELL_RATIO.
 
     This is the only knob that decides whether the face is round, and it varies
     by font and line spacing. Override without editing: CLOCK_CELL_RATIO=2.7
     Raise it if the face looks squished, lower it if it bulges sideways.
+
+    Unlike --cell-ratio, an environment variable might be stale or set for
+    some other program, so a bad value is not a user error -- it is simply
+    ignored, the same way an unset one is.
     """
     try:
         value = float(os.environ.get("CLOCK_CELL_RATIO", ""))
     except ValueError:
         return DEFAULT_CELL_RATIO
-    return value if value > 0 else DEFAULT_CELL_RATIO
+    return value if _positive_float(value) else DEFAULT_CELL_RATIO
 
 
-CELL_RATIO = _cell_ratio()
-COLS = math.floor(ROWS * CELL_RATIO + 0.5)  # face width, in terminal columns
-GAP = 3  # fewest blank columns between adjacent faces
-VGAP = 1  # fewest blank rows between rows of faces
+def parse_ratio(val):
+    """Read a positive, finite decimal for --cell-ratio.
+
+    Delegates to float() rather than a hand-rolled scan, the same as
+    CLOCK_CELL_RATIO already does: this knob shapes one face, not a zone or a
+    count, and does not carry the same cross-language byte-for-byte stakes.
+    """
+    try:
+        value = float(val)
+    except ValueError:
+        value = None
+    if value is None or not _positive_float(value):
+        raise ClockError(f'--cell-ratio wants a positive number, e.g. --cell-ratio 2.6, got "{val}"')
+    return value
+
+
+def parse_scale(val):
+    """Read a positive, finite decimal for --scale."""
+    try:
+        value = float(val)
+    except ValueError:
+        value = None
+    if value is None or not _positive_float(value):
+        raise ClockError(f'--scale wants auto or a positive number, e.g. --scale 1.5, got "{val}"')
+    return value
 
 # Where the grid sits when it does not fill the window, and what --halign and
 # --valign accept. Same order as clock.go's tables, and the wording of the
@@ -388,6 +438,8 @@ NEEDS = {
     "valign": "--valign center",
     "hpad": "--hpad 10%",
     "vpad": "--vpad 5%",
+    "cell-ratio": "--cell-ratio 2.6",
+    "scale": "--scale 1.5",
 }
 
 
@@ -432,12 +484,16 @@ def parse_args(argv):
     with status 2, and abbreviates long options -- none of which the Go port
     can reproduce. Both implementations run this algorithm verbatim.
     """
-    per_row = DEFAULT_PER_ROW
+    per_row = DEFAULT_PER_ROW  # only used when an explicit -n/--per-row overrides per_row_auto below
     color_when = "auto"
     day_when = ""  # unset: run() picks it, since a pinned clock differs
     halign, valign = "center", "center"
     hpad, vpad = None, None  # None is the even fill
     quiet = False
+    cell_ratio_flag = None  # None: run() falls back to CLOCK_CELL_RATIO, then the default
+    scale_flag = None  # unset unless a specific --scale overrides scale_auto below
+    scale_auto = True  # the default: run() re-solves ROWS every frame to fill the window
+    per_row_auto = True  # the default: run() also searches per-row counts, to maximise ROWS
     positional = []
     end_of_flags = False
 
@@ -458,7 +514,11 @@ def parse_args(argv):
                     if i >= len(argv):
                         raise ClockError("--per-row needs a number, e.g. --per-row 2")
                     val = argv[i]
-                per_row = parse_count(val, "--per-row", MAX_PER_ROW)
+                if val == "auto":
+                    per_row_auto = True
+                else:
+                    per_row = parse_count(val, "--per-row", MAX_PER_ROW)
+                    per_row_auto = False
             elif name == "color":
                 # Bare --color means always, and takes no separate argument:
                 # "clock --color ET" names a zone list, exactly as ls and git
@@ -478,8 +538,8 @@ def parse_args(argv):
                 if sep:
                     raise ClockError("--quiet takes no value")
                 quiet = True
-            elif name in ("halign", "valign", "hpad", "vpad"):
-                # These four want a value, and take it either way round, as
+            elif name in ("halign", "valign", "hpad", "vpad", "cell-ratio", "scale"):
+                # These six want a value, and take it either way round, as
                 # --per-row does: there is no bare form to be ambiguous with.
                 if not sep:
                     i += 1
@@ -492,8 +552,15 @@ def parse_args(argv):
                     valign = parse_choice(name, val, VALIGNS)
                 elif name == "hpad":
                     hpad = parse_pad(name, val)
-                else:
+                elif name == "vpad":
                     vpad = parse_pad(name, val)
+                elif name == "cell-ratio":
+                    cell_ratio_flag = parse_ratio(val)
+                elif val == "auto":
+                    scale_auto = True
+                else:
+                    scale_flag = parse_scale(val)
+                    scale_auto = False
             else:
                 raise ClockError(f"unknown option: --{name}")
         elif a == "-q":
@@ -509,7 +576,11 @@ def parse_args(argv):
                 rest = argv[i]
             elif rest[0] == "=":
                 raise ClockError('-n takes its value as "-n N" or "-nN", not "-n=N"')
-            per_row = parse_count(rest, "-n", MAX_PER_ROW)
+            if rest == "auto":
+                per_row_auto = True
+            else:
+                per_row = parse_count(rest, "-n", MAX_PER_ROW)
+                per_row_auto = False
         else:
             positional.append(a)
         i += 1
@@ -526,6 +597,10 @@ def parse_args(argv):
         day_when,
         (halign, valign, hpad, vpad),
         quiet,
+        cell_ratio_flag,
+        scale_flag,
+        scale_auto,
+        per_row_auto,
     )
 
 
@@ -1160,21 +1235,68 @@ def center_modal(box, term_cols, term_rows):
 def overlay_modal(rows, box, top, left):
     """Stamp box onto rows at (top, left).
 
-    Extends rows with blank lines and pads short ones with spaces so the box
-    always lands intact regardless of what the grid drew there. rows must be
-    plain text -- no ANSI -- which run guarantees by turning colour off for
-    any frame a modal is going to be stamped onto, so a modal never has to
-    reason about resuming a hand's colour on the far side of it.
+    Extends rows with blank lines so the box always lands intact regardless
+    of what the grid drew there.
     """
     out = list(rows) + [""] * (top + len(box) - len(rows))
     for i, line in enumerate(box):
         r = top + i
-        existing = out[r]
-        if len(existing) < left:
-            existing += " " * (left - len(existing))
-        tail = existing[left + len(line):]
-        out[r] = existing[:left] + line + tail
+        out[r] = splice_row(out[r], left, len(line), line)
     return out
+
+
+def splice_row(row, col, width, insert):
+    """Overwrite the visible columns [col, col + width) of row with insert.
+
+    insert is plain text, never coloured itself, while whatever ANSI colour
+    row carried outside that span is preserved and correctly resumed on the
+    far side. row may already be full of colour escapes (a face's hand can
+    pass under where a modal lands) or may have none at all (--color=never,
+    or a redirected frame); either way nothing outside [col, col + width)
+    changes.
+    """
+    before, after = [], []
+    active = ""  # the last SGR escape seen so far, "" meaning none yet
+    start_active = end_active = ""
+    start_captured = end_captured = False
+    visible = 0
+    i, n = 0, len(row)
+    while i < n:
+        if row[i] == "\x1b":
+            j = row.index("m", i) + 1
+            seq = row[i:j]
+            active = seq
+            if visible < col:
+                before.append(seq)
+            elif visible >= col + width:
+                after.append(seq)
+            i = j
+            continue
+        if not start_captured and visible >= col:
+            start_captured, start_active = True, active
+        if not end_captured and visible >= col + width:
+            end_captured, end_active = True, active
+        if visible < col:
+            before.append(row[i])
+        elif visible >= col + width:
+            after.append(row[i])
+        visible += 1
+        i += 1
+    if not start_captured:
+        start_active = active
+    if not end_captured:
+        end_active = active
+    if visible < col:
+        before.append(" " * (col - visible))
+    result = "".join(before)
+    if start_active and start_active != DEFAULT_FG:
+        result += DEFAULT_FG
+    result += insert
+    if after:
+        if end_active:
+            result += end_active
+        result += "".join(after)
+    return result
 
 
 def fold(text, width):
@@ -1275,7 +1397,7 @@ def fit_per_row(want, n, term_cols, gap):
     if max_fit < 1:
         raise ClockError(
             f"terminal is {term_cols} columns wide and one clock face needs "
-            f"{COLS}; widen the window, or lower CLOCK_CELL_RATIO"
+            f"{COLS}; widen the window, or lower --cell-ratio"
         )
     return min(want, max_fit)
 
@@ -1292,6 +1414,48 @@ def fit_height(chunks, term_rows, vgap):
             f"{chunks} rows of clocks need {height} lines and this terminal "
             f"has {term_rows}; raise --per-row, or name fewer zones"
         )
+
+
+def auto_scale(want_per_row, num_faces, cols, lines, hpad, vpad):
+    """What --scale auto resolves to every frame.
+
+    The largest ROWS (and its matching COLS) that lets num_faces fit
+    cols x lines at no more than want_per_row per row, using no more than
+    hpad/vpad's own minimum gap on each axis -- the same floor fit_per_row
+    and fit_height already enforce, so a maximised face never asks for less
+    room than an explicit --hpad would once drawn. Larger ROWS can only ever
+    need as much or more space (a wider face fits no more per row, and a
+    taller one needs no fewer lines), so the first size that fits, searched
+    from the top down, is the largest one that does.
+
+    -n auto passes num_faces itself as want_per_row -- no cap at all, in
+    effect, since fit_per_row already clamps want to num_faces on its own --
+    rather than searching per-row counts separately. fit_per_row always uses
+    the most faces a row can hold up to the cap, which is also the fewest
+    chunks (and so the least height) any per-row choice at that ROWS could
+    need, so an uncapped want already finds whichever per-row count each
+    candidate ROWS fits best through, without a second search: capping lower
+    could only ever force more chunks than that ROWS needed, never fewer.
+
+    Sets the module-level ROWS and COLS to the winner; if nothing in range
+    fits, it leaves them at MIN_ROWS_N so the fit_per_row/fit_height call
+    right after this one reports why.
+    """
+    global ROWS, COLS
+    for n in range(MAX_ROWS_N, MIN_ROWS_N - 1, -1):
+        ROWS = n
+        COLS = math.floor(n * CELL_RATIO + 0.5)
+        try:
+            per_row = fit_per_row(want_per_row, num_faces, cols, gap_floor(cols, hpad, GAP))
+        except ClockError:
+            continue
+        try:
+            fit_height(chunk_count(num_faces, per_row), lines, gap_floor(lines, vpad, VGAP))
+        except ClockError:
+            continue
+        return
+    ROWS = MIN_ROWS_N
+    COLS = math.floor(MIN_ROWS_N * CELL_RATIO + 0.5)
 
 
 @contextlib.contextmanager
@@ -1345,12 +1509,49 @@ def _terminate(_signum, _frame):
 
 def run(argv):
     """Everything that can fail happens before the terminal is touched."""
+    global ROWS, CELL_RATIO, COLS
     frozen = freeze()
-    want_per_row, zone_list, color_when, day_when, geometry, quiet = parse_args(argv)
+    (
+        want_per_row,
+        zone_list,
+        color_when,
+        day_when,
+        geometry,
+        quiet,
+        cell_ratio_flag,
+        scale_flag,
+        scale_auto,
+        per_row_auto,
+    ) = parse_args(argv)
     halign, valign, hpad, vpad = geometry
     zones = resolve_zones(zone_list, frozen or datetime.now(timezone.utc))
 
     color = use_color(color_when)
+
+    # --cell-ratio wins over CLOCK_CELL_RATIO, which wins over the default.
+    CELL_RATIO = cell_ratio_flag if cell_ratio_flag is not None else env_cell_ratio()
+
+    # --scale resizes the whole face, keeping the same shape: ROWS moves and
+    # COLS follows it, through the cell-ratio arithmetic above. --scale auto
+    # instead re-solves both every frame, in the main loop, against whatever
+    # the terminal measures to.
+    if not scale_auto:
+        scale = scale_flag if scale_flag is not None else 1.0
+        ROWS = math.floor(DEFAULT_ROWS_N * scale + 0.5)
+        if ROWS < MIN_ROWS_N or ROWS > MAX_ROWS_N:
+            raise ClockError(
+                f"--scale {scale:g} makes each face {ROWS} rows tall; want "
+                f"{MIN_ROWS_N} to {MAX_ROWS_N} rows, roughly --scale "
+                f"{MIN_ROWS_N / DEFAULT_ROWS_N:.2f} to --scale {MAX_ROWS_N / DEFAULT_ROWS_N:.2f}"
+            )
+        COLS = math.floor(ROWS * CELL_RATIO + 0.5)
+
+    # -n auto's whole point is choosing whatever per-row count lets --scale
+    # auto grow the face furthest; with a fixed --scale there is no face size
+    # left for it to affect, so it falls back to the plain default cap.
+    if per_row_auto and not scale_auto:
+        want_per_row = DEFAULT_PER_ROW
+        per_row_auto = False
 
     # A pinned clock is a still of one instant, and an undated still records
     # half of it, so the weekday goes under every face unless --day says
@@ -1399,6 +1600,21 @@ def run(argv):
                 # step with the Go port's loop.
                 cols, lines = term_size()
                 faces = order_faces(merge_zones(zones, now), now)
+
+                if scale_auto:
+                    if per_row_auto:
+                        want_per_row = DEFAULT_PER_ROW  # overridden below whenever there is a window to measure
+                    if cols > 0 and lines > 0:
+                        if per_row_auto:
+                            want_per_row = len(faces)  # no real cap: see auto_scale's own comment
+                        auto_scale(want_per_row, len(faces), cols, lines, hpad, vpad)
+                    else:
+                        # Nothing measurable to fill, so there is nothing to
+                        # solve -- same as any other window that cannot be
+                        # measured.
+                        ROWS = DEFAULT_ROWS_N
+                        COLS = math.floor(DEFAULT_ROWS_N * CELL_RATIO + 0.5)
+
                 # The key list and the startup hint are the same kind of
                 # thing -- a modal laid over the clocks -- so only one shows
                 # at a time, and the key list, being asked for, wins over a
@@ -1444,11 +1660,7 @@ def run(argv):
                         chunks, ROWS + 2, lines, VGAP, vpad, valign
                     )
                     lay = Layout(gap_n, extra, left, vgap, vextra, top, leaned)
-                    # Colour comes off whenever a modal is about to be
-                    # stamped on top: overlay_modal works in plain text, so
-                    # nothing under the modal is left carrying a hand's
-                    # colour past it.
-                    rows = frame(faces, now, per_row, color and not show_modal, day_when, lay)
+                    rows = frame(faces, now, per_row, color, day_when, lay)
                 if show_modal:
                     rows = overlay_modal(rows, modal, modal_top, modal_left)
 

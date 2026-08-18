@@ -6,7 +6,7 @@ independent implementations — Python and Go — that render byte-for-byte
 identical output.
 
 ```sh
-clock 10001,PT,Jakarta,UTC --per-row 2 --scale 1
+./clock.py 10001,PT,Jakarta,UTC
 ```
 
 ![Four clocks, in a 2x2 grid: PDT, EDT, UTC and WIB](screenshot.png)

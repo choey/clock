@@ -6,13 +6,17 @@ constants compiled into the source, so a lookup is a binary search and a short
 scan.
 
 ```go
-name, err := ziptz.Zone("94110")   // "America/Los_Angeles"
-loc, err := ziptz.Location("10001")
+name, err := ziptz.Zone("94110")          // "America/Los_Angeles"
+loc, err := ziptz.Location("10001")       // *time.Location
+abb, err := ziptz.Abbrev("94110", when)   // "PST" in January, "PDT" in July
+gen, err := ziptz.Generic("94110")        // "PT", whatever the date
 ```
 
 ```python
-ziptz.zone("94110")        # 'America/Los_Angeles'
-ziptz.location("10001")    # ZoneInfo(key='America/New_York')
+ziptz.zone("94110")           # 'America/Los_Angeles'
+ziptz.location("10001")       # ZoneInfo(key='America/New_York')
+ziptz.abbrev("94110", when)   # 'PST' in January, 'PDT' in July
+ziptz.generic("94110")        # 'PT', whatever the date
 ```
 
 The two implementations answer identically for every ZIP code, down to the
@@ -65,12 +69,41 @@ complete install.
 | `Zone(token) (string, error)` | `zone(token) -> str` | the IANA name for a 3- or 5-digit ZIP |
 | `Location(token) (*time.Location, error)` | `location(token) -> ZoneInfo` | the same, loaded from the system tz database |
 | `PrefixZone(p3) string` | `prefix_zone(p3) -> str` | the majority zone for a prefix, `""` if unassigned |
+| `Abbrev(token, at) (string, error)` | `abbrev(token, at=None) -> str` | the abbreviation at that instant, e.g. `PDT` |
+| `Generic(token) (string, error)` | `generic(token) -> str` | the name without daylight saving, e.g. `PT` |
 | `ExactZone(zip5) string` | `exact_zone(zip5) -> str` | the exception for one ZIP, `""` if its prefix is right |
 
-`Zone` and `Location` report an error for anything that is not three or five
-ASCII digits, and for prefixes the Postal Service has never assigned. Python
-raises `ZipError`, a `ValueError`. Both error texts are written to be printed
-as-is.
+All four report an error for anything that is not three or five ASCII digits,
+and for prefixes the Postal Service has never assigned. Python raises
+`ZipError`, a `ValueError`. Both error texts are written to be printed as-is.
+
+### The three names for one zone
+
+`Zone` gives the IANA name, `Abbrev` the abbreviation at an instant, `Generic`
+the abbreviation with the daylight-saving question left out — CLDR's terms for
+the last two are the specific and generic non-location short formats.
+
+```
+94110  →  America/Los_Angeles      PST in January, PDT in July      PT
+85001  →  America/Phoenix          MST all year                     MST
+99546  →  America/Adak             HST in January, HDT in July      HAT
+```
+
+Which to print depends on whether you have an instant to be right about. A
+label on a clock face has one; a form field asking which coast you are on does
+not.
+
+They come from different places, which decides what each needs and when each
+can be wrong. `Abbrev` asks the system's time zone database, so it follows
+rule changes without a new release of this library — but needs that database
+present, and needs the instant. `Generic` is a table here, eleven entries, and
+so answers on a machine with no tzdata at all. A zone that never shifts has no
+pair to generalise over, so its generic name is simply its abbreviation:
+Phoenix is `MST`, Honolulu `HST`, and the tests hold every entry to that rule.
+
+Go has no default arguments, so `Abbrev` always takes the instant; Python's
+defaults to now. Pass an aware `datetime` — a naive one is read as system
+local time, the way `astimezone()` reads it.
 
 ## Data
 

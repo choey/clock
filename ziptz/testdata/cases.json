@@ -12,6 +12,12 @@
     "are pinned here deliberately, so that fixing one fails this file and",
     "makes someone update it.",
     "",
+    "\"zones\" is the same idea for the other three answers: one representative",
+    "ZIP per zone, the generic name it must give, and the abbreviation it must",
+    "give at each instant in \"instants\" -- one in January, one in July, so a",
+    "zone that observes daylight saving is caught doing it. Every zone the",
+    "tables can return must appear, and the suites fail if one is missing.",
+    "",
     "Add a case here and both suites pick it up with no other edit."
   ],
   "cases": [
@@ -81,5 +87,24 @@
     {"token": "١٢٣", "error": "malformed", "why": "Arabic-Indic digits: Python's isdigit() accepts these, so the ASCII check must not rely on it alone"},
     {"token": "９４１１０", "error": "malformed", "why": "fullwidth digits, the same trap at five characters"},
     {"token": "94١10", "error": "malformed", "why": "one non-ASCII digit among four ASCII ones"}
+  ],
+
+  "instants": {
+    "winter": "2026-01-15T12:00:00Z",
+    "summer": "2026-07-15T12:00:00Z"
+  },
+
+  "zones": [
+    {"token": "10001", "zone": "America/New_York", "generic": "ET", "winter": "EST", "summer": "EDT", "why": ""},
+    {"token": "60601", "zone": "America/Chicago", "generic": "CT", "winter": "CST", "summer": "CDT", "why": ""},
+    {"token": "80202", "zone": "America/Denver", "generic": "MT", "winter": "MST", "summer": "MDT", "why": ""},
+    {"token": "94110", "zone": "America/Los_Angeles", "generic": "PT", "winter": "PST", "summer": "PDT", "why": ""},
+    {"token": "99501", "zone": "America/Anchorage", "generic": "AKT", "winter": "AKST", "summer": "AKDT", "why": ""},
+    {"token": "99546", "zone": "America/Adak", "generic": "HAT", "winter": "HST", "summer": "HDT", "why": "the Aleutians keep Hawaii-Aleutian time and, unlike Hawaii, do shift"},
+    {"token": "85001", "zone": "America/Phoenix", "generic": "MST", "winter": "MST", "summer": "MST", "why": "Arizona never shifts, so its generic name is just its abbreviation"},
+    {"token": "96813", "zone": "Pacific/Honolulu", "generic": "HST", "winter": "HST", "summer": "HST", "why": "nor does Hawaii"},
+    {"token": "00601", "zone": "America/Puerto_Rico", "generic": "AST", "winter": "AST", "summer": "AST", "why": "nor Puerto Rico"},
+    {"token": "96910", "zone": "Pacific/Guam", "generic": "ChST", "winter": "ChST", "summer": "ChST", "why": "nor Guam, whose abbreviation is mixed case"},
+    {"token": "96799", "zone": "Pacific/Pago_Pago", "generic": "SST", "winter": "SST", "summer": "SST", "why": "nor American Samoa"}
   ]
 }

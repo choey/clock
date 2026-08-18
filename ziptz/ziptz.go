@@ -1,8 +1,10 @@
 // Package ziptz resolves US ZIP codes to IANA time zones from about 1.3 KB of
 // tables.
 //
-//	name, err := ziptz.Zone("94110")   // "America/Los_Angeles"
+//	name, err := ziptz.Zone("94110")            // "America/Los_Angeles"
 //	loc, err := ziptz.Location("10001")
+//	abb, err := ziptz.Abbrev("94110", when)     // "PST" in January, "PDT" in July
+//	gen, err := ziptz.Generic("94110")          // "PT", whatever the date
 //
 // Give all five digits and the answer is exact. Three digits -- the prefix
 // alone -- gets the majority zone for that prefix, which is right for 33,558 of
@@ -55,6 +57,31 @@ var zones = map[byte]string{
 	'R': "America/Puerto_Rico",
 	'S': "Pacific/Pago_Pago",
 	'Z': "America/Phoenix",
+}
+
+// generic is each zone's name with the daylight-saving question left out:
+// "PT" covers both PST and PDT, and is what to print when the instant is not
+// decided yet or does not matter. CLDR calls this the generic non-location
+// short format, and the pair Abbrev returns the specific one.
+//
+// A zone that never shifts has no pair to generalise over, so its generic name
+// is simply its abbreviation -- Phoenix is MST in January and in July, and MST
+// generically. The tests hold every entry here to that rule.
+//
+// One line per entry, in the same order as ziptz.py's, so the two can be
+// compared without parsing either.
+var generic = map[string]string{
+	"America/Adak":        "HAT",
+	"America/Anchorage":   "AKT",
+	"America/Chicago":     "CT",
+	"America/Denver":      "MT",
+	"America/Los_Angeles": "PT",
+	"America/New_York":    "ET",
+	"America/Phoenix":     "MST",
+	"America/Puerto_Rico": "AST",
+	"Pacific/Guam":        "ChST",
+	"Pacific/Honolulu":    "HST",
+	"Pacific/Pago_Pago":   "SST",
 }
 
 // exceptions are the ZIPs a 3-digit prefix gets wrong. A prefix that straddles
@@ -166,6 +193,38 @@ func Location(token string) (*time.Location, error) {
 			token[:3], name)
 	}
 	return loc, nil
+}
+
+// Abbrev is the zone's abbreviation at one instant: "PST" in January, "PDT" in
+// July. The instant decides it, so there is no default; Python's abbrev()
+// takes the same argument and defaults it to now.
+//
+// The abbreviation comes from the system's time zone database rather than from
+// a table here, so it stays right through rule changes, and needs that
+// database present -- unlike Generic, which does not.
+//
+// It reports an error for the same reasons as Location.
+func Abbrev(token string, at time.Time) (string, error) {
+	loc, err := Location(token)
+	if err != nil {
+		return "", err
+	}
+	return at.In(loc).Format("MST"), nil
+}
+
+// Generic is the zone's name with daylight saving left out: "PT" for Los
+// Angeles. What to print when the instant is not decided yet or does not
+// matter. A zone that never shifts gives its one abbreviation instead: Phoenix
+// is "MST", Honolulu "HST".
+//
+// It reads no time zone database, so this answers on a system that has none,
+// and reports an error for the same reasons as Zone.
+func Generic(token string) (string, error) {
+	name, err := Zone(token)
+	if err != nil {
+		return "", err
+	}
+	return generic[name], nil
 }
 
 // isZIP reports whether the token is three or five ASCII digits.

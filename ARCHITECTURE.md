@@ -151,7 +151,10 @@ See [ZIP code accuracy](README.md#zip-code-accuracy) in the README for what
 this guarantees; this is how it's built. None of it is in the clock: it is
 [`ziptz`](ziptz/), a library beside it — `ziptz.go` and `ziptz.py`, one Go
 module and one Python module, each installable on its own — and the clock
-calls `Location`/`location` and prints whatever error comes back. Go links it
+calls `Location`/`location` and prints whatever error comes back. The library
+also names zones — `Abbrev` for `PDT`, `Generic` for `PT` — which the clock
+does not use: it labels arbitrary zones, not only the ones a ZIP can reach, so
+it asks tzdata directly for every face. Go links it
 in at build time; Python imports it if it's there and says what to install if
 it isn't, since a missing ZIP table is no reason not to draw a clock.
 

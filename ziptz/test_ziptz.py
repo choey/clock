@@ -7,6 +7,7 @@ run by both libraries, so neither can quietly stop agreeing with the other.
 Add a case there rather than here.
 """
 
+import datetime
 import json
 import pathlib
 import unittest
@@ -20,9 +21,25 @@ ERROR_KINDS = {
 }
 
 
-def load_cases():
+def load():
     path = pathlib.Path(__file__).resolve().parent / "testdata" / "cases.json"
-    cases = json.loads(path.read_text(encoding="utf-8"))["cases"]
+    data = json.loads(path.read_text(encoding="utf-8"))
+    # Every zone the tables can return needs a case, or one could go untested.
+    assert len(data["zones"]) == len(ziptz.ZONES), (
+        f"{len(data['zones'])} zone cases for {len(ziptz.ZONES)} zones: "
+        "every zone the tables can return needs one"
+    )
+    data["instants"] = {
+        name: datetime.datetime.strptime(when, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc
+        )
+        for name, when in data["instants"].items()
+    }
+    return data
+
+
+def load_cases():
+    cases = load()["cases"]
     # A truncated or renamed file would otherwise pass as zero cases run.
     assert len(cases) >= 50, f"only {len(cases)} cases in {path}; it looks truncated"
     for case in cases:
@@ -35,7 +52,10 @@ def load_cases():
     return cases
 
 
+DATA = load()
 CASES = load_cases()
+ZONE_CASES = DATA["zones"]
+WINTER, SUMMER = DATA["instants"]["winter"], DATA["instants"]["summer"]
 
 
 class TestZone(unittest.TestCase):
@@ -129,6 +149,57 @@ class TestTables(unittest.TestCase):
         """Every assigned prefix has to resolve, or the clock has a hole in it."""
         assigned = sum(1 for n in range(1000) if ziptz.prefix_zone(f"{n:03d}"))
         self.assertGreater(assigned, 800)
+
+
+class TestAbbrev(unittest.TestCase):
+    def test_cases(self):
+        for case in ZONE_CASES:
+            for season, at in (("winter", WINTER), ("summer", SUMMER)):
+                with self.subTest(zone=case["zone"], season=season, why=case["why"]):
+                    try:
+                        got = ziptz.abbrev(case["token"], at)
+                    except ziptz.ZipError as exc:
+                        if "time zone database lacks" not in str(exc):
+                            raise
+                        self.skipTest(f"this system's tz database lacks {case['zone']}")
+                    self.assertEqual(got, case[season], case["why"])
+
+    def test_defaults_to_now(self):
+        self.assertEqual(
+            ziptz.abbrev("94110"), ziptz.abbrev("94110", datetime.datetime.now(datetime.timezone.utc))
+        )
+
+
+class TestGeneric(unittest.TestCase):
+    def test_cases(self):
+        for case in ZONE_CASES:
+            with self.subTest(zone=case["zone"], why=case["why"]):
+                got = ziptz.generic(case["token"])
+                self.assertEqual(got, case["generic"], case["why"])
+                # A zone that never shifts has no pair to generalise over, so
+                # its generic name has to be the one abbreviation it ever uses.
+                if case["winter"] == case["summer"]:
+                    self.assertEqual(got, case["winter"])
+
+    def test_covers_every_zone(self):
+        """Every zone the tables can return needs a generic name, or generic()
+        raises KeyError for it."""
+        self.assertEqual(set(ziptz.GENERIC), set(ziptz.ZONES.values()))
+
+
+class TestAbbrevAndGenericRejectWhatZoneDoes(unittest.TestCase):
+    def test_cases(self):
+        for case in CASES:
+            if "error" not in case:
+                continue
+            with self.subTest(token=case["token"], why=case["why"]):
+                want = ERROR_KINDS[case["error"]]
+                with self.assertRaises(ziptz.ZipError) as caught:
+                    ziptz.abbrev(case["token"], SUMMER)
+                self.assertIn(want, str(caught.exception))
+                with self.assertRaises(ziptz.ZipError) as caught:
+                    ziptz.generic(case["token"])
+                self.assertIn(want, str(caught.exception))
 
 
 if __name__ == "__main__":

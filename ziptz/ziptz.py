@@ -5,6 +5,10 @@
     'America/Los_Angeles'
     >>> ziptz.location("10001").key
     'America/New_York'
+    >>> ziptz.abbrev("94110", datetime(2026, 7, 15, tzinfo=timezone.utc))
+    'PDT'
+    >>> ziptz.generic("94110")
+    'PT'
 
 Give all five digits and the answer is exact. Three digits -- the prefix alone
 -- gets the majority zone for that prefix, which is right for 33,558 of the
@@ -24,9 +28,18 @@ generated into the two implementations in one pass by tools/genzips.py, and
 must never be edited by hand.
 """
 
+from datetime import datetime, timezone as _timezone
 from zoneinfo import ZoneInfo
 
-__all__ = ["ZipError", "zone", "location", "prefix_zone", "exact_zone"]
+__all__ = [
+    "ZipError",
+    "zone",
+    "location",
+    "abbrev",
+    "generic",
+    "prefix_zone",
+    "exact_zone",
+]
 
 __version__ = "0.1.0"
 
@@ -56,6 +69,31 @@ ZONES = {
     "R": "America/Puerto_Rico",
     "S": "Pacific/Pago_Pago",
     "Z": "America/Phoenix",
+}
+
+# Each zone's name with the daylight-saving question left out: "PT" covers
+# both PST and PDT, and is what to print when the instant is not decided yet or
+# does not matter. CLDR calls this the generic non-location short format, and
+# the pair abbrev() returns the specific one.
+#
+# A zone that never shifts has no pair to generalise over, so its generic name
+# is simply its abbreviation -- Phoenix is MST in January and in July, and MST
+# generically. The tests hold every entry here to that rule.
+#
+# One line per entry, in the same order as ziptz.go's, so the two can be
+# compared without parsing either.
+GENERIC = {
+    "America/Adak": "HAT",
+    "America/Anchorage": "AKT",
+    "America/Chicago": "CT",
+    "America/Denver": "MT",
+    "America/Los_Angeles": "PT",
+    "America/New_York": "ET",
+    "America/Phoenix": "MST",
+    "America/Puerto_Rico": "AST",
+    "Pacific/Guam": "ChST",
+    "Pacific/Honolulu": "HST",
+    "Pacific/Pago_Pago": "SST",
 }
 
 # The ZIPs a 3-digit prefix gets wrong. A prefix that straddles a zone boundary
@@ -151,3 +189,36 @@ def location(token):
         raise ZipError(
             f"ZIP {token[:3]} means {name}, which this system's time zone database lacks"
         ) from None
+
+
+def abbrev(token, at=None):
+    """The zone's abbreviation at one instant: "PST" in January, "PDT" in July.
+
+    The instant decides it, so pass the one you mean; `at` defaults to now, and
+    an aware datetime is expected -- a naive one is read as system local time,
+    the way astimezone() reads it. Go has no default and takes the instant
+    always.
+
+    The abbreviation comes from the system's time zone database rather than
+    from a table here, so it stays right through rule changes, and needs that
+    database present -- unlike generic(), which does not.
+
+    Raises ZipError for the same reasons as location().
+    """
+    tz = location(token)
+    if at is None:
+        at = datetime.now(_timezone.utc)
+    return at.astimezone(tz).tzname()
+
+
+def generic(token):
+    """The zone's name with daylight saving left out: "PT" for Los Angeles.
+
+    What to print when the instant is not decided yet or does not matter. A
+    zone that never shifts gives its one abbreviation instead: Phoenix is
+    "MST", Honolulu "HST".
+
+    Reads no time zone database, so this answers on a system that has none.
+    Raises ZipError for the same reasons as zone().
+    """
+    return GENERIC[zone(token)]

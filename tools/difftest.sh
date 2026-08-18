@@ -420,6 +420,18 @@ else
 	fail=$((fail + 1))
 fi
 
+sed -n 's|^	"\([A-Za-z_/]*\)": *"\([A-Za-z]*\)",$|\1=\2|p' ziptz/ziptz.go >"$out/go.gen"
+sed -n 's|^    "\([A-Za-z_/]*\)": "\([A-Za-z]*\)",$|\1=\2|p' ziptz/ziptz.py >"$out/py.gen"
+if [ -s "$out/go.gen" ] && cmp -s "$out/go.gen" "$out/py.gen"; then
+	pass=$((pass + 1))
+	[ -z "$verbose" ] || printf 'ok   generic name tables match (%s entries)\n' \
+		"$(wc -l <"$out/go.gen" | tr -d ' ')"
+else
+	echo 'FAIL generic name tables differ between ziptz.go and ziptz.py'
+	diff -u "$out/py.gen" "$out/go.gen" || true
+	fail=$((fail + 1))
+fi
+
 # The key list is only reachable from a keypress, so no rendered case can
 # cover it; the table it is built from can still be held to the same order.
 sed -n 's/^	{"\([a-z]*\)", "\([A-Za-z, +]*\)"},$/\1=\2/p' clock.go >"$out/go.keys"

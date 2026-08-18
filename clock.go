@@ -1081,8 +1081,9 @@ func zoneLabel(abbr string, tokens []string) string {
 // however two tokens were spelled, and whether or not one resolves onto the
 // other, they are one clock if they read alike. That is a property of the
 // instant, not of the zones -- PDT and PT are one clock in July and two in
-// January -- so this regroups every frame rather than once at startup, and a
-// grid crossing a daylight-saving boundary splits itself as it happens.
+// January -- so this regroups as the clock runs rather than once at startup,
+// and a grid crossing a daylight-saving boundary splits itself as it happens.
+// The loop calls it once a second, which is as often as its answer can change.
 func mergeZones(zones []request, now time.Time) []dial {
 	type group struct {
 		abbr   string
@@ -1139,8 +1140,13 @@ func utcOffset(now time.Time, loc *time.Location) int {
 // -- which is how UTC and GMT, two faces because they are labelled
 // differently, stay where you put them.
 //
-// Redone every frame, like the merging: an offset is a property of the
-// instant, so a zone entering daylight saving slides a place along.
+// Redone as the clock runs, like the merging: an offset is a property of the
+// instant, so a zone entering daylight saving slides a place along. Sorting on
+// the offset rather than on the time each face reads is what keeps this from
+// also changing at every midnight.
+//
+// It sorts the slice it is given, where Python's returns a new list; both are
+// handed a slice mergeZones has just built, so nothing else can see either.
 func orderFaces(faces []dial, now time.Time) []dial {
 	sort.SliceStable(faces, func(i, j int) bool {
 		return utcOffset(now, faces[i].loc) < utcOffset(now, faces[j].loc)
@@ -1942,6 +1948,12 @@ func run() error {
 	// Off the wall clock, not the frame's: a clock pinned with CLOCK_FREEZE
 	// never advances, and the hint still has to give up after three seconds.
 	flashUntil := time.Now().Add(flashFor)
+	// Which faces there are, and in what order, changes only when some zone's
+	// offset changes -- and a tz transition always lands on a whole second, so
+	// recomputing once a second cannot miss one. See inside the loop.
+	var faceSecond int64
+	var faces []dial
+
 	for {
 		now := time.Now()
 		if pinned {
@@ -1957,7 +1969,19 @@ func run() error {
 		// Python one, where a signal handler would interact with sleep()
 		// under PEP 475 and drift out of step.
 		cols, lines := termSize()
-		faces := orderFaces(mergeZones(zones, now), now)
+
+		// Unlike the size, this is not re-measured every frame. Merging and
+		// ordering both turn on the zones' offsets at now, which move only at
+		// a tz transition, and a transition happens on a whole second -- so a
+		// second is the coarsest interval that cannot skip one, and at 19ms
+		// frames that is ~50x less work. It is also the only state in this
+		// loop the difftest cannot see: every case draws one frame, so the
+		// cache is always cold there. Unix() floors, which is what clock.py's
+		// key does too, so the two agree before 1970 as well as after.
+		if second := now.Unix(); faces == nil || second != faceSecond {
+			faceSecond = second
+			faces = orderFaces(mergeZones(zones, now), now)
+		}
 
 		if scaleAuto {
 			if perRowAuto {

@@ -929,8 +929,9 @@ def merge_zones(zones, now):
     two tokens were spelled, and whether or not one resolves onto the other,
     they are one clock if they read alike. That is a property of the instant,
     not of the zones -- PDT and PT are one clock in July and two in January --
-    so this regroups every frame rather than once at startup, and a grid
-    crossing a daylight-saving boundary splits itself as it happens.
+    so this regroups as the clock runs rather than once at startup, and a grid
+    crossing a daylight-saving boundary splits itself as it happens. The loop
+    calls it once a second, which is as often as its answer can change.
     """
     out, index = [], {}
     for token, zone in zones:
@@ -966,8 +967,10 @@ def order_faces(faces, now):
     exactly that reason -- which is how UTC and GMT, two faces because they
     are labelled differently, stay where you put them.
 
-    Redone every frame, like the merging: an offset is a property of the
-    instant, so a zone entering daylight saving slides a place along.
+    Redone as the clock runs, like the merging: an offset is a property of the
+    instant, so a zone entering daylight saving slides a place along. Sorting
+    on the offset rather than on the time each face reads is what keeps this
+    from also changing at every midnight.
     """
     return sorted(faces, key=lambda face: utc_offset(now, face[1]))
 
@@ -1574,6 +1577,10 @@ def run(argv):
 
     sys.stdout.write((ENTER_ALT if full_screen else "") + HIDE_CURSOR)
     height = 0
+    # Which faces there are, and in what order, changes only when some zone's
+    # offset changes -- and a tz transition always lands on a whole second, so
+    # recomputing once a second cannot miss one. See the loop below.
+    face_second, faces = None, None
     try:
         with quiet_terminal() as interactive:
             while True:
@@ -1587,7 +1594,20 @@ def run(argv):
                 # handler would interact with the sleep below and drift out of
                 # step with the Go port's loop.
                 cols, lines = term_size()
-                faces = order_faces(merge_zones(zones, now), now)
+
+                # Unlike the size, this is not re-measured every frame. Merging
+                # and ordering both turn on the zones' offsets at `now`, which
+                # move only at a tz transition, and a transition happens on a
+                # whole second -- so a second is the coarsest interval that
+                # cannot skip one, and at 19ms frames that is ~50x less work.
+                # It is also the only state in this loop the difftest cannot
+                # see: every case draws one frame, so the cache is always cold
+                # there. Keep the key floored, not truncated, or the two ports
+                # disagree before 1970.
+                second = math.floor(now.timestamp())
+                if second != face_second:
+                    face_second = second
+                    faces = order_faces(merge_zones(zones, now), now)
 
                 if scale_auto:
                     if per_row_auto:

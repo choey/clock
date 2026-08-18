@@ -181,8 +181,8 @@ Sorting on the offset is the same thing. Every face renders one instant, so
 what a clock reads is that instant plus its offset, and the westernmost zone is
 the one furthest behind. Two faces on the *same* offset — `UTC` and `GMT` are
 two faces, since they are labelled differently — keep the order you typed them
-in. Like the merging, the sort is redone every frame, so a zone entering
-daylight saving slides a place along as it happens.
+in. Like the merging, the sort is redone once a second as the clock runs, so a
+zone entering daylight saving slides a place along as it happens.
 
 ### Different days
 
@@ -390,9 +390,11 @@ it, with those spellings too — `UK,BST` reads `BST/UK`, while `PDT,PDT` was
 never ambiguous and stays plain `PDT`.
 
 Whether two zones agree is a property of the instant, not of the zones, so the
-grouping is redone every frame. `PT` and `PDT` are one face in July and two in
-January, and a clock left running across the boundary splits itself as it
-happens.
+grouping is redone as the clock runs rather than fixed at startup. `PT` and
+`PDT` are one face in July and two in January, and a clock left running across
+the boundary splits itself as it happens — within a frame of the transition,
+since the grouping is recomputed once a second, the coarsest interval that
+cannot skip one.
 
 ### ZIP code accuracy
 

@@ -28,7 +28,12 @@ FROZEN = "2026-07-15T09:53:07.123456Z"
 SEED = 20260715
 
 ZONES = ["UTC", "ET,PT", "ET,PT,UTC", "ET,PT,UTC,JP", "ET,PT,UTC,JP,GB,NZ",
-         "94110", "ET,PT,UTC,JP,GB,NZ,IN,CN,BR,ZA"]
+         "94110", "ET,PT,UTC,JP,GB,NZ,IN,CN,BR,ZA",
+         # More faces than any window here can hold in one row, so the grid
+         # wraps and the short last row's gutters have to line up with the
+         # rows above it.
+         ",".join(["UTC", "ET", "PT", "MT", "CT", "JST", "GMT", "IST", "NZT",
+                   "AKT", "HT", "BST", "CET", "SGT", "KST", "AET", "UTC", "ET"])]
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 SGR = re.compile(r"\x1b\[([0-9;]*)m")
@@ -97,7 +102,8 @@ def main():
             extra = rng.choice([[], ["-n", "1"], ["-n", "2"], ["-n", "auto"],
                                 ["--scale", "1"], ["--scale", "2"], ["--scale", "auto"],
                                 ["--halign", "right"], ["--valign", "bottom"],
-                                ["--hpad", "4"], ["--vpad", "2"],
+                                ["--hpad", "10%"], ["--vpad", "20%"],
+                                ["--hpad", "even"], ["--vpad", "even"],
                                 ["--color=always"], ["--color=always", "--day=always"]])
             impl, binary = rng.choice(list(zip(("go", "py"), binaries)))
             status, painted, complaint = render(binary, cols, lines, zones, extra)

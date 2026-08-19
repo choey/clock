@@ -162,6 +162,35 @@ centred (odd) case does not. Reported and diagnosed against a live Ghostty
 session: `--scale` values landing on an even `rowsN` looked wrong, odd ones
 did not, with zero exceptions across five tested values.
 
+## What the tests can and cannot see
+
+Seven harnesses, because no one of them can see everything. `make test` runs
+them all; the README says how to run each on its own.
+
+| harness | proves | blind to |
+|---|---|---|
+| `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share | anything wrong in both, which is how they are always changed |
+| `tools/golden/` | what the clock actually draws, at sixteen sizes | the seventeenth size |
+| `tools/fitfuzz.py` | invariants at arbitrary sizes: nothing overflows the window, every line ends at the default colour, no escape outside the eight it may write | whether the picture is *right*, only that it is well formed |
+| `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations frame for frame | a real terminal emulator; and signal timing, where it compares loosely on purpose |
+| `tools/errcover.py` | every error message the clock can print is printed by some case | two that need a machine with no tz database, exempted by name |
+| `tools/docnums.py` | the figures in the prose match the tables, and every flag and variable is documented | prose that is wrong in a way no number captures |
+| `ziptz`: suites + `make sweep` | both libraries answer alike for all 101,000 ZIP inputs, and the tables are well formed | whether the underlying data is *true*, which is `genzips.py`'s problem |
+
+What nothing covers, and why:
+
+- **Windows.** Neither implementation runs there; difftest cross-compiles for
+  it, so the message it prints instead is a build check, not a behaviour one.
+- **A machine with no tz database.** Two error paths need one. Go will not
+  give its database up even when `ZONEINFO` points nowhere — it falls back to
+  the copy inside the binary — so this cannot be arranged from outside.
+- **tzdata drift.** The goldens hold zone abbreviations as bytes. A tzdata
+  release that renames one fails them, which is the right place for it to
+  surface but reads as a test failure rather than as news.
+- **A real terminal.** The pty is the same interface, but not the same
+  program: an emulator's own quirks are not in scope here.
+
+
 ## ZIP resolution
 
 See [ZIP code accuracy](README.md#zip-code-accuracy) in the README for what

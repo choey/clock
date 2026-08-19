@@ -170,6 +170,12 @@ def states(painted):
 # is up. Taken from the table both implementations build it from.
 HELP_MARK = b"hold the frame"
 
+# The hint the clock puts up for its first three seconds, unless -q. Every
+# other case here passes -q, so without this the hint and the modal path it
+# takes would go untested on a terminal -- and it cannot be tested anywhere
+# else, since a redirected clock never shows it.
+FLASH_MARK = b"Press q or Ctrl+C to quit"
+
 
 def helped(state_list):
     """Which of the painted states had the key list up."""
@@ -200,7 +206,7 @@ def report(ok, name, detail=""):
         print(f"FAIL {name}{': ' + detail if detail else ''}")
 
 
-def compare(name, keys, expect=None, freeze=FROZEN, loose=False):
+def compare(name, keys, expect=None, freeze=FROZEN, loose=False, args=("-q", "UTC")):
     """Both implementations, same keys: same states, same exit status.
 
     `expect` is the key list's state through the run -- one flag per distinct
@@ -214,7 +220,7 @@ def compare(name, keys, expect=None, freeze=FROZEN, loose=False):
     """
     seen = {}
     for impl, argv in IMPLS:
-        painted, status = run(argv + ["-q", "UTC"], keys, freeze=freeze)
+        painted, status = run(argv + list(args), keys, freeze=freeze)
         seen[impl] = (states(painted), status, painted)
 
     (go_states, go_status, go_painted) = seen["go"]
@@ -351,6 +357,16 @@ def main():
         compare("Q quits too", [b"Q"], [0, 0])
         compare("Ctrl+C quits", [b"\x03"], [0], loose=True)
         compare("space on a pinned clock has nothing to hold", [b" ", b" "], [0, 0])
+
+        print("== the startup hint ==")
+        compare("without -q, the hint is up", [], args=("UTC",))
+        compare("the key list replaces the hint, and gives it back",
+                [b"h", b"h"], args=("UTC",))
+        for impl, argv in IMPLS:
+            painted, _ = run(argv + ["UTC"], [])
+            report(FLASH_MARK in painted, f"{impl} shows the hint without -q")
+            painted, _ = run(argv + ["-q", "UTC"], [])
+            report(FLASH_MARK not in painted, f"{impl} shows no hint with -q")
         # The clock re-measures every frame rather than trapping SIGWINCH, so
         # this is the only thing that can drag a window: difftest pins one size
         # per run and never changes it.

@@ -554,6 +554,23 @@ Windows, and diffs the generated tables out of the two `ziptz` files.
 tools/difftest.sh -v
 ```
 
+`CLOCK_FRAMES` makes a case a *sequence* rather than a frame: it draws that
+many, stepping the pinned instant by `CLOCK_STEP` milliseconds each time — one
+tick, 19ms, by default — and compares the whole run.
+
+```sh
+CLOCK_FREEZE=2026-11-01T05:59:59.900000Z CLOCK_FRAMES=21 clock ET,PT,EST,UTC
+```
+
+That covers what a single frame cannot show, and what nothing else in the
+harness reaches: the second hand sweeping between whole seconds, the rewind
+repainting over the frame before it, and the faces regrouping mid-run — the
+one above steps across the US fall-back, where `ET` lands on the fixed `EST`
+and the two faces become one. Since the grouping is cached on the instant's
+whole second, a one-frame case can never outlive that cache; a sequence can.
+Both variables need `CLOCK_FREEZE`, are refused if it is absent, and like it
+are dev hooks kept out of `--help`.
+
 `ziptz` has tests of its own, and holds its two libraries to one shared list
 of cases in `ziptz/testdata/cases.json` — the same idea as the difftest, a
 rung down. `make test` runs those and the difftest together.

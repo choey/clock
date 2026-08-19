@@ -245,6 +245,50 @@ def freeze():
     return frozen.replace(tzinfo=timezone.utc)
 
 
+def env_whole(name, lowest, default):
+    """One whole number out of the environment, or the default if unset.
+
+    Unlike CLOCK_CELL_RATIO, a bad value here is a hard error rather than
+    something to shrug off: these are the diff harness's knobs, and a typo that
+    quietly fell back to the default would leave a test claiming to cover a
+    sequence it never drew. Nine digits at most, so that Python's unbounded int
+    and Go's Atoi accept exactly the same strings.
+    """
+    value = os.environ.get(name, "")
+    if not value:
+        return default
+    if value.isascii() and value.isdigit() and len(value) <= 9 and int(value) >= lowest:
+        return int(value)
+    raise ClockError(
+        f"{name} wants a whole number of {lowest} or more, at most nine digits, "
+        f'got "{value}"'
+    )
+
+
+def sequence(frozen):
+    """How many frames a pinned clock draws, and how far the instant moves
+    between them.
+
+    CLOCK_FRAMES draws that many instead of one, stepping the pinned instant by
+    CLOCK_STEP milliseconds each time -- one tick by default, so the sequence
+    advances exactly as a live clock would. It is what lets the harness compare
+    what a single frame cannot show: the second hand sweeping, the rewind that
+    repaints over the frame before it, and the faces regrouping as a zone
+    crosses a daylight-saving boundary.
+
+    Only where a pinned clock already draws and exits, which is redirected; on
+    a terminal one frame still stays up, so this cannot animate what is meant
+    to hold still. Dev hook, not in --help.
+    """
+    frames = env_whole("CLOCK_FRAMES", 1, 1)
+    step = env_whole("CLOCK_STEP", 0, round(TICK * 1000))
+    if frozen is None and (frames != 1 or os.environ.get("CLOCK_STEP", "")):
+        raise ClockError(
+            "CLOCK_FRAMES and CLOCK_STEP need CLOCK_FREEZE, the instant they step from"
+        )
+    return frames, timedelta(milliseconds=step)
+
+
 # Hour numerals, every one two characters wide. A cell spans 2 dots, so an
 # even-width string centres on a cell boundary while an odd-width one centres
 # half a cell off it: "12" stacks exactly over "06", but never over "6".
@@ -1574,6 +1618,11 @@ def run(argv):
     # out. On a terminal there is someone watching, so it stays up instead --
     # quitting would restore the screen and take the frame with it.
     one_shot = frozen is not None and not full_screen
+    # A pinned clock draws one frame unless CLOCK_FRAMES asks for a sequence;
+    # `drawn` is which frame of it this is, and so how far the instant has
+    # moved from the pinned one.
+    frames, step = sequence(frozen)
+    drawn = 0
 
     sys.stdout.write((ENTER_ALT if full_screen else "") + HIDE_CURSOR)
     height = 0
@@ -1585,6 +1634,8 @@ def run(argv):
         with quiet_terminal() as interactive:
             while True:
                 now = frozen if frozen is not None else datetime.now(timezone.utc)
+                if one_shot:
+                    now += step * drawn
                 if held is not None:
                     now = held
 
@@ -1600,10 +1651,13 @@ def run(argv):
                 # move only at a tz transition, and a transition happens on a
                 # whole second -- so a second is the coarsest interval that
                 # cannot skip one, and at 19ms frames that is ~50x less work.
-                # It is also the only state in this loop the difftest cannot
-                # see: every case draws one frame, so the cache is always cold
-                # there. Keep the key floored, not truncated, or the two ports
-                # disagree before 1970.
+                # Floored, not truncated: Go's Unix() floors, where int()
+                # would truncate, so before 1970 the two would hold different
+                # numbers here. Nothing drawn would differ -- the key decides
+                # only when the recompute lands, and the one second the two
+                # would disagree about, the one straddling the epoch, has no
+                # zone changing offset inside it -- but a key that is the same
+                # number in both needs no such argument to be trusted.
                 second = math.floor(now.timestamp())
                 if second != face_second:
                     face_second = second
@@ -1691,7 +1745,10 @@ def run(argv):
                 height = len(rows)
 
                 if one_shot:
-                    break
+                    drawn += 1
+                    if drawn >= frames:
+                        break
+                    continue
                 if interactive:
                     quitting = False
                     for key in pending_keys():

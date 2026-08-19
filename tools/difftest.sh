@@ -26,6 +26,17 @@ fail=0
 # Build once: `go run .` recompiles per invocation, and there are hundreds.
 go build -o "$out/clock" .
 
+# One sequence: frames and step (ms), then a normal check() case. CLOCK_FRAMES
+# steps the pinned instant and draws that many frames, so this compares what a
+# single frame cannot show -- the second hand sweeping, the rewind repainting
+# over the frame before it, and the faces regrouping mid-run.
+sequence() {
+	frames=$1 step=$2
+	shift 2
+	check "$@"
+	frames= step=
+}
+
 # One case: CLOCK_FREEZE, COLUMNS, LINES, then the argv to pass to both.
 check() {
 	freeze=$1 cols=$2 lines=$3
@@ -40,16 +51,25 @@ check() {
 
 	# ratio and tzdir are globals the caller sets; passing them through env
 	# rather than exporting keeps one section's values out of the next one's.
-	env CLOCK_FREEZE="$freeze" COLUMNS="$cols" LINES="$lines" \
+	# In an if, not `|| true`: `cmd || true` leaves $? holding true's status,
+	# so both sides read 0 however the clock exited and the comparison below
+	# was comparing nothing. An if condition is exempt from set -e too.
+	if env CLOCK_FREEZE="$freeze" COLUMNS="$cols" LINES="$lines" \
 		CLOCK_CELL_RATIO="${ratio:-}" TZDIR="${tzdir:-}" \
-		"$out/clock" "$@" >"$out/go.out" 2>"$out/go.err" </dev/null || true
-	go_status=$?
-	env CLOCK_FREEZE="$freeze" COLUMNS="$cols" LINES="$lines" \
+		CLOCK_FRAMES="${frames:-}" CLOCK_STEP="${step:-}" \
+		"$out/clock" "$@" >"$out/go.out" 2>"$out/go.err" </dev/null
+	then go_status=0
+	else go_status=$?
+	fi
+	if env CLOCK_FREEZE="$freeze" COLUMNS="$cols" LINES="$lines" \
 		CLOCK_CELL_RATIO="${ratio:-}" TZDIR="${tzdir:-}" \
-		python3 clock.py "$@" >"$out/py.out" 2>"$out/py.err" </dev/null || true
-	py_status=$?
+		CLOCK_FRAMES="${frames:-}" CLOCK_STEP="${step:-}" \
+		python3 clock.py "$@" >"$out/py.out" 2>"$out/py.err" </dev/null
+	then py_status=0
+	else py_status=$?
+	fi
 
-	label="[$cols x $lines${ratio:+ r=$ratio}${tzdir:+ tz=$tzdir}] $*"
+	label="[$cols x $lines${ratio:+ r=$ratio}${tzdir:+ tz=$tzdir}${frames:+ x$frames}${step:+ @${step}ms}] $*"
 	if ! cmp -s "$out/go.out" "$out/py.out"; then
 		printf 'FAIL stdout %s\n' "$label"
 		diff -u "$out/py.out" "$out/go.out" | head -20
@@ -374,6 +394,80 @@ check nonsense 200 60 ET
 check 2026-07-15T09:53:07Z 200 60 ET
 check 2026-07-15T09:53:07.123Z 200 60 ET
 check 2026-13-99T09:53:07.123456Z 200 60 ET
+
+# Everything above compares one frame. These compare a run of them: CLOCK_FRAMES
+# steps the pinned instant and draws that many, so the diff covers what a single
+# frame cannot show -- the second hand sweeping between whole seconds, the
+# rewind repainting over the frame before it, and the faces regrouping when a
+# zone crosses a boundary mid-run. That last is the only state in the frame loop
+# nothing else here reaches: the merge is cached on the second, and one frame
+# never outlives its cache.
+echo "== frame sequences =="
+sequence 60 19 "$SUMMER" 200 60 ET,PT,UTC                   # a full second of sweep
+sequence 60 19 "$SUMMER" 80 24 UTC                          # and in a small window
+sequence 12 250 "$SUMMER" 200 60 ET,PT,UTC                  # coarser steps, three seconds
+sequence 8 0 "$SUMMER" 200 60 ET,UTC                        # a still frame, repainted
+sequence 21 19 2026-07-15T09:59:59.900000Z 200 60 ET,UTC    # over a minute
+sequence 21 19 2026-07-15T23:59:59.900000Z 200 60 UTC       # over midnight
+sequence 21 19 2026-12-31T23:59:59.900000Z 200 60 UTC       # over a year
+
+# Daylight saving, in both directions: ET falls back onto the fixed EST and the
+# two faces become one, then springs forward and they part again. Nothing else
+# in this file can see that happen -- it needs two frames on either side of the
+# instant it happens at.
+sequence 21 19 2026-11-01T05:59:59.900000Z 200 60 ET,PT,EST,UTC
+sequence 21 19 2026-03-08T09:59:59.900000Z 200 60 ET,PT,EST,UTC
+sequence 21 19 2026-11-01T05:59:59.900000Z 200 60 --day auto ET,PT,EST,UTC
+
+# Before 1970, where a negative instant runs through every date and offset
+# calculation in both ports. Not a test of the merge cache's key: that is
+# floored in both, but truncating instead would still draw the same frames,
+# since the only second the two keys would disagree about is the one
+# straddling the epoch and no zone changes offset inside it.
+sequence 60 19 1969-12-31T23:59:59.500000Z 200 60 ET,UTC
+sequence 21 19 1969-07-20T20:17:39.900000Z 200 60 ET,PT,UTC
+
+# Odd values, not all of them wrong: "09" is nine frames in both, "٣" is a
+# digit only to Python's isdigit(), and ten digits is one too many for Atoi to
+# be trusted with. Whether each is taken or refused matters less than the two
+# implementations agreeing on which.
+echo "== sequence validation =="
+check "$SUMMER" 200 60 ET  # baseline: the vars empty, as every case above has them
+for odd in 0 abc -1 1.5 +1 " 1" 1234567890 09 ٣; do
+	frames=$odd
+	step=
+	check "$SUMMER" 200 60 ET
+	frames=
+	step=$odd
+	check "$SUMMER" 200 60 ET
+done
+frames=
+step=
+
+# CLOCK_FRAMES without CLOCK_FREEZE is refused before the loop starts, so this
+# exits on its own -- but a regression would leave a clock running forever, so
+# the output is bounded rather than trusted. head closes the pipe, and both
+# implementations die on the write.
+echo "== unfrozen sequence validation =="
+for unfrozen in "CLOCK_FRAMES=3" "CLOCK_STEP=19" "CLOCK_FRAMES=1 CLOCK_STEP=19"; do
+	# set +e inside the subshell: the clock is meant to fail here, and set -e
+	# would take the subshell down with it before the status was written.
+	( set +e; env -u CLOCK_FREEZE COLUMNS=200 LINES=60 $unfrozen \
+		"$out/clock" ET 2>"$out/go.err"; echo $? >"$out/go.st" ) |
+		head -c 4096 >"$out/go.out"
+	( set +e; env -u CLOCK_FREEZE COLUMNS=200 LINES=60 $unfrozen \
+		python3 clock.py ET 2>"$out/py.err"; echo $? >"$out/py.st" ) |
+		head -c 4096 >"$out/py.out"
+	if cmp -s "$out/go.out" "$out/py.out" && cmp -s "$out/go.err" "$out/py.err" &&
+		cmp -s "$out/go.st" "$out/py.st"; then
+		pass=$((pass + 1))
+		[ -z "$verbose" ] || printf 'ok   [unfrozen] %s\n' "$unfrozen"
+	else
+		printf 'FAIL [unfrozen] %s\n' "$unfrozen"
+		diff -u "$out/py.err" "$out/go.err" | head -10 || true
+		fail=$((fail + 1))
+	fi
+done
 
 echo "== embedded table parity =="
 go_runs=$(sed -n 's/^const runs = "\(.*\)".*/\1/p' ziptz/ziptz.go)

@@ -76,7 +76,9 @@ the old frame, and its upper half is left behind smeared into the new one.
 makes the frame's position independent of whatever happened to the last one.
 
 Piped output has no resize to survive and keeps the rewind, which is also what
-lets `tools/difftest.sh` compare the two implementations byte for byte.
+lets `tools/difftest.sh` compare the two implementations byte for byte — and,
+with `CLOCK_FRAMES`, compare a run of frames rather than one, so the rewind
+itself is diffed along with everything else that only shows between frames.
 
 **Modals.** The key list and the startup quit hint are stamped onto the
 finished, already-coloured frame after the grid is drawn — never mixed into a

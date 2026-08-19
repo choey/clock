@@ -207,6 +207,56 @@ func freeze() (time.Time, bool, error) {
 	return t, true, nil
 }
 
+// envWhole reads one whole number out of the environment, or the default if it
+// is unset.
+//
+// Unlike CLOCK_CELL_RATIO, a bad value here is a hard error rather than
+// something to shrug off: these are the diff harness's knobs, and a typo that
+// quietly fell back to the default would leave a test claiming to cover a
+// sequence it never drew. Nine digits at most, so that Atoi and Python's
+// unbounded int accept exactly the same strings.
+func envWhole(name string, lowest, def int) (int, error) {
+	v := os.Getenv(name)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err == nil && allDigits(v) && len(v) <= 9 && n >= lowest {
+		return n, nil
+	}
+	return 0, fmt.Errorf(
+		"%s wants a whole number of %d or more, at most nine digits, got \"%s\"", name, lowest, v)
+}
+
+// sequence is how many frames a pinned clock draws, and how far the instant
+// moves between them.
+//
+// CLOCK_FRAMES draws that many instead of one, stepping the pinned instant by
+// CLOCK_STEP milliseconds each time -- one tick by default, so the sequence
+// advances exactly as a live clock would. It is what lets the harness compare
+// what a single frame cannot show: the second hand sweeping, the rewind that
+// repaints over the frame before it, and the faces regrouping as a zone
+// crosses a daylight-saving boundary.
+//
+// Only where a pinned clock already draws and exits, which is redirected; on a
+// terminal one frame still stays up, so this cannot animate what is meant to
+// hold still. Dev hook, not in --help.
+func sequence(pinned bool) (int, time.Duration, error) {
+	frames, err := envWhole("CLOCK_FRAMES", 1, 1)
+	if err != nil {
+		return 0, 0, err
+	}
+	step, err := envWhole("CLOCK_STEP", 0, int(tick/time.Millisecond))
+	if err != nil {
+		return 0, 0, err
+	}
+	if !pinned && (frames != 1 || os.Getenv("CLOCK_STEP") != "") {
+		return 0, 0, fmt.Errorf(
+			"CLOCK_FRAMES and CLOCK_STEP need CLOCK_FREEZE, the instant they step from")
+	}
+	return frames, time.Duration(step) * time.Millisecond, nil
+}
+
 // Hour numerals, every one two characters wide. A cell spans 2 dots, so an
 // even-width string centres on a cell boundary while an odd-width one centres
 // half a cell off it: "12" stacks exactly over "06", but never over "6".
@@ -1927,6 +1977,14 @@ func run() error {
 	// out. On a terminal there is someone watching, so it stays up instead --
 	// quitting would restore the screen and take the frame with it.
 	oneShot := pinned && !fullScreen
+	// A pinned clock draws one frame unless CLOCK_FRAMES asks for a sequence;
+	// drawn is which frame of it this is, and so how far the instant has moved
+	// from the pinned one.
+	frames, step, err := sequence(pinned)
+	if err != nil {
+		return err
+	}
+	drawn := 0
 
 	if fullScreen {
 		fmt.Print(enterAlt)
@@ -1959,6 +2017,9 @@ func run() error {
 		if pinned {
 			now = frozen
 		}
+		if oneShot {
+			now = now.Add(time.Duration(drawn) * step)
+		}
 		if holding {
 			now = held
 		}
@@ -1974,10 +2035,10 @@ func run() error {
 		// ordering both turn on the zones' offsets at now, which move only at
 		// a tz transition, and a transition happens on a whole second -- so a
 		// second is the coarsest interval that cannot skip one, and at 19ms
-		// frames that is ~50x less work. It is also the only state in this
-		// loop the difftest cannot see: every case draws one frame, so the
-		// cache is always cold there. Unix() floors, which is what clock.py's
-		// key does too, so the two agree before 1970 as well as after.
+		// frames that is ~50x less work. Unix() floors, and clock.py floors
+		// rather than truncating to match it, so the two hold the same number
+		// here before 1970 as well as after -- see the longer note there for
+		// why nothing drawn would differ either way.
 		if second := now.Unix(); faces == nil || second != faceSecond {
 			faceSecond = second
 			faces = orderFaces(mergeZones(zones, now), now)
@@ -2077,7 +2138,11 @@ func run() error {
 		height = len(rows)
 
 		if oneShot {
-			return nil
+			drawn++
+			if drawn >= frames {
+				return nil
+			}
+			continue
 		}
 
 		// wait out the tick, consuming keys without repainting for each one

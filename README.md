@@ -604,6 +604,11 @@ nothing new. Holding is checked on a live clock instead, where there is
 something to hold: both must paint one readout over and over while held, and
 many while running.
 
+`.github/workflows/test.yml` runs all of that on push and pull request, on the
+floor and the ceiling of what the project claims to support — Go 1.21 with
+Python 3.9, and current versions of both. The floor is the one that matters:
+`pyproject.toml` promises 3.9 and nothing but that job checks it.
+
 `ziptz` has tests of its own, and holds its two libraries to one shared list
 of cases in `ziptz/testdata/cases.json` — the same idea as the difftest, a
 rung down. `make test` runs those and the difftest together.

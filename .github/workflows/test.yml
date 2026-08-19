@@ -1,0 +1,59 @@
+# Runs what the README tells a contributor to run, on every push and pull
+# request. Nothing here is clever: if it does not match `make test` locally,
+# the local one is the definition and this is wrong.
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    # The floor and the ceiling. The floor is what the project promises --
+    # go.mod says 1.21 and pyproject says 3.9 -- and is where a syntax or
+    # stdlib slip shows up. The ceiling is where a deprecation shows up first.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - go: "1.21"
+            python: "3.9"
+          - go: "stable"
+            python: "3.13"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: gofmt
+        # gofmt prints the files it would change and says nothing otherwise, so
+        # any output at all is the failure.
+        run: |
+          unformatted=$(gofmt -l . ziptz)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would rewrite:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        run: |
+          go vet .
+          cd ziptz && go vet ./...
+
+      - name: compile the Python side
+        run: python3 -m compileall -q clock.py ziptz tools
+
+      # difftest, keytest and both ziptz suites. The goldens in tools/golden
+      # are bytes rendered on someone's machine, so this is also where a
+      # tzdata change that moves a zone abbreviation would first show up --
+      # as a golden failing, which is the right place for it to appear.
+      - name: make test
+        run: make test

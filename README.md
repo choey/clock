@@ -604,6 +604,18 @@ nothing new. Holding is checked on a live clock instead, where there is
 something to hold: both must paint one readout over and over while held, and
 many while running.
 
+difftest also keeps everything the Python clock writes to stderr and, at the
+end, checks that every message `clock.py` can raise turned up in it —
+`tools/errcover.py`. A message nothing ever prints is a message nothing tests,
+and it looks exactly like one nobody has broken yet. Two are exempt, with the
+reason written down: both need a machine with no working tz database, and Go
+will not give its up even then, falling back to the copy inside the binary.
+
+That check is what turned up the clock's one Python-only behaviour going
+untested: without `ziptz` installed, a ZIP token says what to install while
+every zone name, abbreviation and country code still works. Two cases now run
+`clock.py` from a directory where the library is not there to import.
+
 `tools/docnums.py` holds the prose to the tables. The documents quote figures
 that come out of the data — 233 ZIPs across 30 prefixes, 157 range records, 34
 zones folded onto 11 letters — and regenerating the tables would leave those

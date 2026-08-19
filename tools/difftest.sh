@@ -17,6 +17,9 @@ cd "$(dirname "$0")/.."
 
 out=${TMPDIR:-/tmp}/clock-difftest.$$
 mkdir -p "$out"
+# Every complaint the Python clock makes, kept for the error coverage check at
+# the bottom: a message nothing ever prints is a message nothing tests.
+: >"$out/all.err"
 trap 'rm -rf "$out"' EXIT
 
 verbose=${1:-}
@@ -102,6 +105,7 @@ check() {
 	else py_status=$?
 	fi
 
+	cat "$out/py.err" >>"$out/all.err"
 	label="[$cols x $lines${ratio:+ r=$ratio}${tzdir:+ tz=$tzdir}${frames:+ x$frames}${step:+ @${step}ms}] $*"
 	if ! cmp -s "$out/go.out" "$out/py.out"; then
 		printf 'FAIL stdout %s\n' "$label"
@@ -491,6 +495,7 @@ for unfrozen in "CLOCK_FRAMES=3" "CLOCK_STEP=19" "CLOCK_FRAMES=1 CLOCK_STEP=19";
 	( set +e; env -u CLOCK_FREEZE COLUMNS=200 LINES=60 $unfrozen \
 		python3 clock.py ET 2>"$out/py.err"; echo $? >"$out/py.st" ) |
 		head -c 4096 >"$out/py.out"
+	cat "$out/py.err" >>"$out/all.err"
 	if cmp -s "$out/go.out" "$out/py.out" && cmp -s "$out/go.err" "$out/py.err" &&
 		cmp -s "$out/go.st" "$out/py.st"; then
 		pass=$((pass + 1))
@@ -527,6 +532,40 @@ step=19
 golden sequence-3        "$SUMMER" 80 24 UTC
 frames=
 step=
+
+# The one thing the Python clock does that the Go one cannot: run without
+# ziptz. Go links the library in at build time; Python imports it if it is
+# there and names it if it is not, so every zone name still works and only ZIP
+# tokens are refused. Nothing else can reach that message -- a clone always has
+# ziptz/ sitting beside clock.py.
+echo "== without ziptz =="
+mkdir -p "$out/alone"
+cp clock.py "$out/alone/clock.py"
+alone_err="$out/alone.err"
+if (cd "$out/alone" && env -u PYTHONPATH COLUMNS=80 LINES=24 \
+	CLOCK_FREEZE="$SUMMER" python3 clock.py 94110 >/dev/null 2>"$alone_err"); then
+	echo 'FAIL a ZIP without ziptz should have failed'
+	fail=$((fail + 1))
+elif grep -q 'is a ZIP code, and resolving one needs the ziptz' "$alone_err"; then
+	pass=$((pass + 1))
+	[ -z "$verbose" ] || printf 'ok   a ZIP without ziptz says what to install\n'
+else
+	echo 'FAIL a ZIP without ziptz said something unexpected:'
+	cat "$alone_err"
+	fail=$((fail + 1))
+fi
+cat "$alone_err" >>"$out/all.err"
+
+# ... and everything else still works there, since only ZIP tokens need it.
+if (cd "$out/alone" && env -u PYTHONPATH COLUMNS=80 LINES=24 \
+	CLOCK_FREEZE="$SUMMER" python3 clock.py ET,PT,Berlin >/dev/null 2>"$alone_err"); then
+	pass=$((pass + 1))
+	[ -z "$verbose" ] || printf 'ok   zone names still work without ziptz\n'
+else
+	echo 'FAIL without ziptz, a clock with no ZIP in it should still run:'
+	cat "$alone_err"
+	fail=$((fail + 1))
+fi
 
 echo "== embedded table parity =="
 go_runs=$(sed -n 's/^const runs = "\(.*\)".*/\1/p' ziptz/ziptz.go)
@@ -644,6 +683,18 @@ for target in linux/amd64 linux/arm64 linux/mips darwin/arm64 windows/amd64; do
 		fail=$((fail + 1))
 	fi
 done
+
+echo "== error coverage =="
+# Not `out=$(...)`: out is the scratch directory the EXIT trap removes, and
+# shadowing it here would leave the directory behind and try to remove a
+# message instead.
+if coverage=$(tools/errcover.py "$out/all.err"); then
+	pass=$((pass + 1))
+	[ -z "$verbose" ] || echo "$coverage"
+else
+	echo "$coverage"
+	fail=$((fail + 1))
+fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

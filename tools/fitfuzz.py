@@ -36,6 +36,7 @@ ZONES = ["UTC", "ET,PT", "ET,PT,UTC", "ET,PT,UTC,JP", "ET,PT,UTC,JP,GB,NZ",
                    "AKT", "HT", "BST", "CET", "SGT", "KST", "AET", "UTC", "ET"])]
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+READOUT = re.compile(r"(?:[A-Z][a-z][a-z] )?\d\d:\d\d:\d\d\.\d\d\d")
 SGR = re.compile(r"\x1b\[([0-9;]*)m")
 
 # Every escape the clock is allowed to write. Anything else is either a bug or
@@ -157,6 +158,25 @@ def main():
             if stray - ALLOWED:
                 print(f"FAIL {what}: escapes the clock should not write: {sorted(stray - ALLOWED)}")
                 failures += 1
+
+            # One readout per face, so counting them per line counts the
+            # faces in that row. -n is a cap on that count, and the only way
+            # a row can hold more than it is if the wrap is not working.
+            plain = ANSI.sub("", painted)
+            per_line = [len(READOUT.findall(line)) for line in plain.split("\n")]
+            if "-n" in extra:
+                asked = extra[extra.index("-n") + 1]
+                if asked != "auto" and max(per_line, default=0) > int(asked):
+                    print(f"FAIL {what}: a row holds {max(per_line)} faces, -n said {asked}")
+                    failures += 1
+
+            # --day=always puts a weekday on every readout, or on none of them
+            # if the faces are too narrow to hold one -- never on some.
+            if "--day=always" in extra:
+                dated = [len(re.findall(r"[A-Z][a-z][a-z] \d\d:", line)) for line in plain.split("\n")]
+                if any(0 < d < n for d, n in zip(dated, per_line)):
+                    print(f"FAIL {what}: some readouts in a row carry a weekday and some do not")
+                    failures += 1
 
             # Where the grid sits, when it was told where to sit. Only the
             # edge it was pushed against is checked: the other one is

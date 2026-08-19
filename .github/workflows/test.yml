@@ -51,7 +51,7 @@ jobs:
       - name: compile the Python side
         run: python3 -m compileall -q clock.py ziptz tools
 
-      # difftest, keytest and both ziptz suites. The goldens in tools/golden
+      # difftest, keytest, fitfuzz, docnums and both ziptz suites. The goldens in tools/golden
       # are bytes rendered on someone's machine, so this is also where a
       # tzdata change that moves a zone abbreviation would first show up --
       # as a golden failing, which is the right place for it to appear.

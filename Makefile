@@ -11,6 +11,7 @@ run-py:
 test: test-lib
 	tools/difftest.sh
 	tools/keytest.py
+	tools/fitfuzz.py
 	tools/docnums.py
 
 test-lib:

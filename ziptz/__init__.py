@@ -8,4 +8,4 @@ with no package around it. Both give the same names.
 """
 
 from .ziptz import *  # noqa: F401,F403
-from .ziptz import EXCEPTIONS, RUNS, ZONES, __version__  # noqa: F401
+from .ziptz import EXCEPTIONS, GENERIC, RUNS, ZONES, __version__  # noqa: F401

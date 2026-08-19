@@ -8,8 +8,10 @@ Add a case there rather than here.
 """
 
 import datetime
+import importlib.util
 import json
 import pathlib
+import sys
 import unittest
 
 import ziptz
@@ -200,6 +202,60 @@ class TestAbbrevAndGenericRejectWhatZoneDoes(unittest.TestCase):
                 with self.assertRaises(ziptz.ZipError) as caught:
                     ziptz.generic(case["token"])
                 self.assertIn(want, str(caught.exception))
+
+
+class TestPackageAndModuleAgree(unittest.TestCase):
+    """ziptz imports two ways and both have to answer the same.
+
+    A copy of ziptz.py on its own is a module; the directory around it is a
+    package, and __init__.py hands through to the module. Only the package form
+    goes into a wheel, so a name the hand-off forgets is invisible everywhere
+    except an installed copy -- which is exactly how GENERIC went missing from
+    it once. This compares the two rather than trusting the list.
+    """
+
+    @staticmethod
+    def both():
+        here = pathlib.Path(__file__).resolve().parent
+        spec = importlib.util.spec_from_file_location("_ziptz_mod", here / "ziptz.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # A package, not a module: the search location is what lets its
+        # `from .ziptz import ...` resolve, and it has to be in sys.modules
+        # before exec for the relative import to find its parent.
+        spec = importlib.util.spec_from_file_location(
+            "_ziptz_pkg", here / "__init__.py", submodule_search_locations=[str(here)]
+        )
+        package = importlib.util.module_from_spec(spec)
+        sys.modules["_ziptz_pkg"] = package
+        try:
+            spec.loader.exec_module(package)
+        finally:
+            del sys.modules["_ziptz_pkg"]
+        return module, package
+
+    def test_package_re_exports_everything_public(self):
+        module, package = self.both()
+        # What the module means to expose: its __all__, its tables, its version
+        # -- and not the names it imported to build them.
+        wanted = (
+            set(module.__all__)
+            | {name for name in vars(module) if name.isupper()}
+            | {"__version__"}
+        )
+        missing = sorted(name for name in wanted if not hasattr(package, name))
+        self.assertEqual(missing, [], "names __init__.py does not hand through")
+
+    def test_both_answer_alike(self):
+        module, package = self.both()
+        for case in CASES:
+            if "zone" not in case:
+                continue
+            with self.subTest(token=case["token"]):
+                self.assertEqual(
+                    module.zone(case["token"]), package.zone(case["token"])
+                )
 
 
 if __name__ == "__main__":

@@ -62,6 +62,12 @@ a package of your own, or `ziptz.py` next to whatever imports it. That is what
 `clock.py` itself supports — `cp clock.py ziptz/ziptz.py /usr/local/bin/` is a
 complete install.
 
+Python therefore imports two ways, and both answer the same: `ziptz.py` alone
+is a module, and the directory around it is a package whose `__init__.py`
+hands through to that module — which is what lets a clone `import ziptz` with
+nothing installed. A test compares the two, since only the package form is
+what a wheel contains.
+
 ## API
 
 | Go | Python | |
@@ -172,6 +178,14 @@ zones/ZONES in both ziptz libraries.
 
 ```sh
 make test        # both, or: make test-go / make test-py
+```
+
+An installed copy carries its tests and their data, so it can prove itself
+where it landed rather than only in a checkout:
+
+```sh
+python3 -m unittest ziptz.test_ziptz
+go test github.com/choey/clock/ziptz
 ```
 
 The cases are the point: `testdata/cases.json` holds them, and both suites

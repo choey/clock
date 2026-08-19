@@ -18,3 +18,9 @@ packages = ["ziptz"]
 
 [tool.setuptools.package-dir]
 ziptz = "."
+
+# The shared cases go with the test module that reads them, so an installed
+# copy can still prove itself -- `python3 -m unittest ziptz.test_ziptz`. Go
+# ships its tests to whoever fetches the module too; this keeps that even.
+[tool.setuptools.package-data]
+ziptz = ["testdata/*.json"]

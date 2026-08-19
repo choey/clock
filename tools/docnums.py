@@ -70,6 +70,30 @@ CLAIMS = (
 WORDS = {"eleven": 11, "ten": 10, "twelve": 12, "thirty": 30, "forty": 40}
 
 
+def documented(verbose):
+    """Every flag and variable the program knows, mentioned in the README.
+
+    A flag added to the usage text and nowhere else is a flag nobody finds:
+    --help is what you read when you already know it exists.
+    """
+    clock = (ROOT / "clock.py").read_text(encoding="utf-8")
+    usage = re.search(r'USAGE = """(.*?)"""', clock, re.S).group(1)
+    names = sorted(set(re.findall(r"--[a-z][a-z-]+", usage)))
+    names += sorted(set(re.findall(r"CLOCK_[A-Z_]+", clock)))
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    passed = failed = 0
+    for name in names:
+        if name in readme:
+            passed += 1
+            if verbose:
+                print(f"ok   README.md documents {name}")
+        else:
+            print(f"FAIL README.md never mentions {name}, which the program accepts")
+            failed += 1
+    return passed, failed
+
+
 def main():
     verbose = "-v" in sys.argv[1:]
     figures = tables()
@@ -113,6 +137,9 @@ def main():
         else:
             print(f"FAIL {path}: does not say {right:,} of {total:,}")
             failed += 1
+
+    more_passed, more_failed = documented(verbose)
+    passed, failed = passed + more_passed, failed + more_failed
 
     print(f"\n{passed} passed, {failed} failed")
     return 1 if failed else 0

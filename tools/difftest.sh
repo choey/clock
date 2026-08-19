@@ -561,6 +561,21 @@ else
 	fail=$((fail + 1))
 fi
 
+# ziptz says its version in three places, and a release that disagrees with
+# itself is a bug report waiting to happen: Go's const, Python's dunder, and
+# the one pip stamps into the wheel.
+go_ver=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' ziptz/ziptz.go)
+py_ver=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' ziptz/ziptz.py)
+toml_ver=$(sed -n 's/^version = "\(.*\)"$/\1/p' ziptz/pyproject.toml)
+if [ -n "$go_ver" ] && [ "$go_ver" = "$py_ver" ] && [ "$go_ver" = "$toml_ver" ]; then
+	pass=$((pass + 1))
+	[ -z "$verbose" ] || printf 'ok   ziptz version agrees everywhere (%s)\n' "$go_ver"
+else
+	printf 'FAIL ziptz version differs: go=%s py=%s pyproject=%s\n' \
+		"$go_ver" "$py_ver" "$toml_ver"
+	fail=$((fail + 1))
+fi
+
 sed -n "s/^	'\(.\)': \"\([A-Za-z_/]*\)\",\$/\1=\2/p" ziptz/ziptz.go >"$out/go.zip"
 sed -n 's/^    "\(.\)": "\([A-Za-z_/]*\)",$/\1=\2/p' ziptz/ziptz.py >"$out/py.zip"
 if [ -s "$out/go.zip" ] && cmp -s "$out/go.zip" "$out/py.zip"; then

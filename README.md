@@ -585,6 +585,25 @@ whole second, a one-frame case can never outlive that cache; a sequence can.
 Both variables need `CLOCK_FREEZE`, are refused if it is absent, and like it
 are dev hooks kept out of `--help`.
 
+`tools/keytest.py` covers what difftest cannot reach at all: the keys. Space,
+`h`, `?` and `q` are read only from a terminal in cbreak mode, so nothing
+redirected ever presses one — difftest compares the table the key list is
+built from, not what pressing `h` does. Each implementation runs under a pty,
+both get the same keys at the same points, and what they paint is compared.
+
+```sh
+tools/keytest.py -v
+```
+
+A clock repaints every 19ms whether or not anything changed, so the streams are
+collapsed to their *distinct* frames first: how many repaints landed between
+two keystrokes is the machine's speed, not the clock's behaviour. Pinned with
+`CLOCK_FREEZE`, what is left is exactly the states the keys walked through —
+`h` `q` ends on a frame with the key list still up, an unknown key paints
+nothing new. Holding is checked on a live clock instead, where there is
+something to hold: both must paint one readout over and over while held, and
+many while running.
+
 `ziptz` has tests of its own, and holds its two libraries to one shared list
 of cases in `ziptz/testdata/cases.json` — the same idea as the difftest, a
 rung down. `make test` runs those and the difftest together.

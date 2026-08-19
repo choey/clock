@@ -6,10 +6,11 @@ run-go:
 run-py:
 	python3 clock.py
 
-# Proves the two clocks render identical output, then that the two ziptz
-# libraries answer identically.
+# Proves the two clocks render identical output and answer the keyboard alike,
+# then that the two ziptz libraries answer identically.
 test: test-lib
 	tools/difftest.sh
+	tools/keytest.py
 
 test-lib:
 	$(MAKE) -C ziptz test

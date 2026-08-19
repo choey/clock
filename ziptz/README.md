@@ -117,7 +117,7 @@ US Census ZCTA Gazetteer centroids (a US Government work, public domain)
 resolved through [timezone-boundary-builder](
 https://github.com/evansiroky/timezone-boundary-builder) (ODbL), by way of
 [timezonefinder](https://github.com/jannikmi/timezonefinder). The generated
-output is roughly forty range boundaries and a list of exceptions — an
+output is 157 range records, 94 of which name a zone, and 233 exceptions — an
 aggregate, not a substantial extract — but both sources are credited here and
 in the source.
 

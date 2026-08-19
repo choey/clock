@@ -604,6 +604,13 @@ nothing new. Holding is checked on a live clock instead, where there is
 something to hold: both must paint one readout over and over while held, and
 many while running.
 
+`tools/docnums.py` holds the prose to the tables. The documents quote figures
+that come out of the data — 233 ZIPs across 30 prefixes, 157 range records, 34
+zones folded onto 11 letters — and regenerating the tables would leave those
+sentences quietly false, since they still read fine and nothing else reads
+prose. It recomputes each from the shipped tables and checks the file says it.
+Dropping one exception group makes four documents fail at once.
+
 `.github/workflows/test.yml` runs all of that on push and pull request, on the
 floor and the ceiling of what the project claims to support — Go 1.21 with
 Python 3.9, and current versions of both. The floor is the one that matters:

@@ -16,9 +16,9 @@ run, so regenerating costs nothing but the timezonefinder pass.
 
 Data: US Census ZCTA Gazetteer centroids (a US Government work, public domain)
 resolved through timezonefinder, whose boundaries come from
-timezone-boundary-builder (ODbL). The output is roughly forty range boundaries
--- an aggregate, not a substantial extract -- but both sources are credited in
-the generated comment and in the README.
+timezone-boundary-builder (ODbL). The output is 157 range records and 233
+exceptions -- an aggregate, not a substantial extract -- but both sources are
+credited in the generated comment and in the README.
 
 Accuracy: one zone per 3-digit prefix, decided by majority of the ZCTAs under
 it, plus an exception list naming every individual ZIP that majority gets

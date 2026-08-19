@@ -44,17 +44,25 @@ SHOW_CURSOR = b"\x1b[?25h"
 SETTLE = 0.25
 
 
-def run(argv, keys, freeze=FROZEN, settle=SETTLE):
+def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None):
     """One clock under a pty, fed `keys`, returning everything it painted.
 
     Each key is written after the frames from the previous one have had time to
     land, so the sequence of states is the sequence of keystrokes.
+
+    `sizes` resizes the window instead, to each in turn. The clock reads
+    COLUMNS and LINES ahead of the terminal itself, so those are left unset for
+    a resize run -- otherwise it would keep drawing the old size at a window
+    that had changed, which is the bug this would be trying to find.
     """
     master, slave = pty.openpty()
     # The clock reads COLUMNS/LINES first and the ioctl second; set both, so it
     # cannot matter which one it happens to believe.
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", LINES, COLS, 0, 0))
     env = dict(os.environ, COLUMNS=str(COLS), LINES=str(LINES), TERM="xterm-256color")
+    if sizes is not None:
+        env.pop("COLUMNS", None)
+        env.pop("LINES", None)
     if freeze:
         env["CLOCK_FREEZE"] = freeze
     else:
@@ -67,6 +75,14 @@ def run(argv, keys, freeze=FROZEN, settle=SETTLE):
     # machine, which is the worst way to find out.
     mode = termios.tcgetattr(slave)
     mode[3] &= ~(termios.ECHO | termios.ICANON)  # lflag
+    # Output post-processing off too, which is not about echo at all: with it
+    # on, the driver turns each \n into \r\n, and at a write boundary it can
+    # emit the \r twice for one newline. Whether that happens depends on how a
+    # 2.8KB frame gets split into write() calls, which differs between a Go
+    # string printed whole and a Python buffer flushed -- so it would be the
+    # terminal's chunking under comparison, not the clocks'. With OPOST off
+    # both write the same 17 newlines and no carriage returns at all.
+    mode[1] &= ~termios.OPOST  # oflag
     termios.tcsetattr(slave, termios.TCSANOW, mode)
 
     proc = subprocess.Popen(
@@ -101,6 +117,13 @@ def run(argv, keys, freeze=FROZEN, settle=SETTLE):
         if not drain(0.05):
             break
     drain(settle)
+
+    for cols, lines in sizes or ():
+        if proc.poll() is not None:
+            break
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", lines, cols, 0, 0))
+        if not drain(settle):
+            break
 
     for key in keys:
         if proc.poll() is not None:
@@ -228,6 +251,51 @@ def compare(name, keys, expect=None, freeze=FROZEN, loose=False):
     report(True, name)
 
 
+# A frame with no braille on it drew no clock face, which on a terminal means
+# the window was too small and the clock said so instead -- a complaint it
+# clears again when the window grows, where redirected output would have
+# exited. Nothing but a resize reaches that path.
+#
+# Recognised by what is missing rather than by the words: the complaint wraps
+# to the window, and at twelve columns "widen the window" is spread over three
+# lines with nothing to match against.
+BRAILLE = (b"\xe2\xa0", b"\xe2\xa1", b"\xe2\xa2", b"\xe2\xa3")
+
+
+def complaining(frame):
+    return not any(prefix in frame for prefix in BRAILLE)
+
+
+def compare_resize(name, extra, sizes, expect_complaint):
+    """Both implementations, same window sizes: same frames, same complaints.
+
+    The clock re-measures every frame rather than trapping SIGWINCH, so a
+    window dragged smaller reflows on the next tick -- and dragged smaller than
+    the clocks can fit, says so and keeps measuring until it fits again.
+    """
+    seen = {}
+    for impl, argv in IMPLS:
+        painted, status = run(argv + ["-q"] + extra, [], sizes=sizes)
+        seen[impl] = (states(painted), status)
+
+    (go_states, go_status), (py_states, py_status) = seen["go"], seen["py"]
+    if go_status != py_status:
+        report(False, name, f"exit status go={go_status} py={py_status}")
+        return
+    if len(go_states) != len(py_states):
+        report(False, name, f"{len(go_states)} states from go, {len(py_states)} from py")
+        return
+    for i, (g, p) in enumerate(zip(go_states, py_states)):
+        if g != p:
+            report(False, name, f"state {i} differs\n  go: {g[:160]!r}\n  py: {p[:160]!r}")
+            return
+    complained = [complaining(s) for s in go_states[1:]]
+    if complained != [bool(f) for f in expect_complaint]:
+        report(False, name, f"complaints went {complained}, expected {expect_complaint}")
+        return
+    report(True, name)
+
+
 def compare_hold(name):
     """Space holds the clock, and pressing it again lets go.
 
@@ -283,6 +351,23 @@ def main():
         compare("Q quits too", [b"Q"], [0, 0])
         compare("Ctrl+C quits", [b"\x03"], [0], loose=True)
         compare("space on a pinned clock has nothing to hold", [b" ", b" "], [0, 0])
+        # The clock re-measures every frame rather than trapping SIGWINCH, so
+        # this is the only thing that can drag a window: difftest pins one size
+        # per run and never changes it.
+        print("== resize ==")
+        compare_resize("shrink, then grow", ["ET,PT,UTC"], [(40, 12), (200, 50)], [0, 0, 0, 0])
+        compare_resize("a nudge that changes nothing", ["ET,PT,UTC"], [(80, 24)], [0, 0])
+        compare_resize("auto scale follows the window down", ["-n", "auto", "ET,PT,UTC"],
+                       [(200, 50), (60, 20), (200, 50)], [0, 0, 0, 0, 0])
+        # At a fixed scale the faces cannot shrink, so a small enough window is
+        # one they do not fit -- which on a terminal complains and keeps
+        # measuring, where redirected it would have exited. Nothing else
+        # reaches that path.
+        compare_resize("too narrow to fit, then wide enough again", ["--scale", "1", "ET,PT,UTC"],
+                       [(12, 20), (120, 40)], [0, 1, 0, 0])
+        compare_resize("too short to fit, then tall enough again", ["--scale", "1", "ET,PT,UTC"],
+                       [(120, 6), (120, 40)], [0, 1, 0, 0])
+
         print("== hold ==")
         compare_hold("space holds a running clock, and again lets go")
     finally:

@@ -616,6 +616,14 @@ floor and the ceiling of what the project claims to support — Go 1.21 with
 Python 3.9, and current versions of both. The floor is the one that matters:
 `pyproject.toml` promises 3.9 and nothing but that job checks it.
 
+It resizes the window too, which difftest cannot: that pins `COLUMNS`/`LINES`
+for a run and never changes them, so the re-measure the clock does every frame
+— the reason it does not trap `SIGWINCH` — went untested until now. The cases
+drag the window smaller and larger, and at a fixed `--scale` drag it smaller
+than the clocks can fit, which on a terminal complains and keeps measuring
+where redirected output would have exited. A clock that measured once at
+startup fails four of them.
+
 `ziptz` has tests of its own, and holds its two libraries to one shared list
 of cases in `ziptz/testdata/cases.json` — the same idea as the difftest, a
 rung down. `make test` runs those and the difftest together.

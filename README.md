@@ -554,6 +554,20 @@ Windows, and diffs the generated tables out of the two `ziptz` files.
 tools/difftest.sh -v
 ```
 
+What none of that can see is a change that alters the picture in *both*
+implementations — which is how every change is made, in one pass. So sixteen
+frames are kept as bytes in `tools/golden/`, one of each kind of picture the
+clock can draw, and compared after the two are compared with each other.
+Shortening the second hand in both passes all 900 differential cases and fails
+15 of the 16 goldens.
+
+```sh
+BLESS=1 tools/difftest.sh    # accept the new rendering, deliberately
+```
+
+The diff in the commit is the only review those get, so bless on purpose and
+read it.
+
 `CLOCK_FRAMES` makes a case a *sequence* rather than a frame: it draws that
 many, stepping the pinned instant by `CLOCK_STEP` milliseconds each time — one
 tick, 19ms, by default — and compares the whole run.

@@ -37,6 +37,39 @@ sequence() {
 	frames= step=
 }
 
+# One golden frame: a name to store it under, then a normal check() case.
+#
+# Everything else in this file compares the two implementations against each
+# other, which cannot see a change that alters the picture in both -- and both
+# is how they are always changed, in one pass. These pin the picture itself: the
+# bytes were looked at once, and stay until someone deliberately accepts new
+# ones. That the two agree is still checked first; a golden only means anything
+# once it does.
+#
+# BLESS=1 tools/difftest.sh rewrites them all. Do that on purpose, and read the
+# diff in the commit -- it is the only review these get.
+golden() {
+	name=$1
+	shift
+	check "$@" || true
+	if [ -n "${BLESS:-}" ]; then
+		cp "$out/go.out" "tools/golden/$name"
+		printf 'blessed %s\n' "$name"
+		return
+	fi
+	if [ ! -f "tools/golden/$name" ]; then
+		printf 'FAIL golden %s is missing (BLESS=1 to create it)\n' "$name"
+		fail=$((fail + 1))
+	elif cmp -s "$out/go.out" "tools/golden/$name"; then
+		pass=$((pass + 1))
+		[ -z "$verbose" ] || printf 'ok   golden %s\n' "$name"
+	else
+		printf 'FAIL golden %s: the rendering changed (BLESS=1 to accept)\n' "$name"
+		diff -u "tools/golden/$name" "$out/go.out" | head -20 || true
+		fail=$((fail + 1))
+	fi
+}
+
 # One case: CLOCK_FREEZE, COLUMNS, LINES, then the argv to pass to both.
 check() {
 	freeze=$1 cols=$2 lines=$3
@@ -468,6 +501,32 @@ for unfrozen in "CLOCK_FRAMES=3" "CLOCK_STEP=19" "CLOCK_FRAMES=1 CLOCK_STEP=19";
 		fail=$((fail + 1))
 	fi
 done
+
+# One of each kind of picture the clock can draw, kept as bytes. Few enough to
+# read in a diff, spread wide enough that most rendering changes touch one.
+echo "== golden frames =="
+golden one-face          "$SUMMER" 80 24 UTC
+golden grid-2x2          "$SUMMER" 80 24 -n 2 ET,PT,UTC,JP
+golden stacked           "$SUMMER" 60 40 -n 1 ET,PT
+golden wide-row          "$SUMMER" 200 30 ET,PT,UTC,JP,GB,NZ
+golden colour            "$SUMMER" 80 24 --color=always UTC
+golden weekday           "$SUMMER" 120 24 --day=always ET,JP
+golden zip               "$SUMMER" 80 24 94110
+golden scale-2           "$SUMMER" 120 40 --scale 2 UTC
+golden auto-scale        "$SUMMER" 200 60 -n auto ET,PT,UTC
+golden aligned           "$SUMMER" 120 40 --halign right --valign bottom UTC
+# 02:00Z is the point: ET is still on Tuesday where JP is on Wednesday, so
+# --day=auto turns the weekday on. At $SUMMER it stays off.
+golden date-split        2026-07-15T02:00:00.000000Z 120 24 --day=auto ET,JP
+golden date-together     "$SUMMER" 120 24 --day=auto ET,JP
+golden too-narrow        "$SUMMER" 20 24 ET,PT,UTC
+golden fixed-offset      "$SUMMER" 80 24 PST,PDT
+golden winter            "$WINTER" 120 24 ET,PT,UTC
+frames=3
+step=19
+golden sequence-3        "$SUMMER" 80 24 UTC
+frames=
+step=
 
 echo "== embedded table parity =="
 go_runs=$(sed -n 's/^const runs = "\(.*\)".*/\1/p' ziptz/ziptz.go)

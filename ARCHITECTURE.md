@@ -80,6 +80,11 @@ lets `tools/difftest.sh` compare the two implementations byte for byte — and,
 with `CLOCK_FRAMES`, compare a run of frames rather than one, so the rewind
 itself is diffed along with everything else that only shows between frames.
 
+Comparing the two proves they agree, which is not the same as proving either
+is right: a mistake made in both — and both is how they are always changed —
+looks like agreement. `tools/golden/` is the other half, sixteen renderings
+kept as bytes and compared against what the clock draws today.
+
 **Modals.** The key list and the startup quit hint are stamped onto the
 finished, already-coloured frame after the grid is drawn — never mixed into a
 face's own rows. The splice is ANSI-aware: it walks each row it touches,

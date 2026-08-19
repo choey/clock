@@ -148,6 +148,13 @@ for zones in "" ET ET,PT,UTC local UTC EST MST GMT CET Asia/Kathmandu Etc/GMT+5 
 done
 
 # A city off the end of an IANA name, where zone.tab makes it unambiguous.
+# Offsets that are not whole hours, which the ordering sorts on and the merge
+# keys off: Chatham is +12:45, Eucla +8:45, Kathmandu +5:45, Kolkata +5:30.
+check "$SUMMER" 200 60 Pacific/Chatham,Australia/Eucla,Asia/Kathmandu,Asia/Kolkata
+check "$SUMMER" 200 60 Pacific/Chatham,UTC,Australia/Eucla
+check "$WINTER" 200 60 Pacific/Chatham,Australia/Eucla,Asia/Kathmandu,Asia/Kolkata
+check "$SUMMER" 200 60 --day=always Pacific/Chatham,Asia/Kolkata
+
 echo "== city shorthand =="
 for zones in Berlin Jakarta berlin JAKARTA Kathmandu Bogota New_York NEW_YORK \
 	Indianapolis Indiana/Indianapolis Center North_Dakota/Center \

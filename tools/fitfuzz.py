@@ -31,6 +31,12 @@ ZONES = ["UTC", "ET,PT", "ET,PT,UTC", "ET,PT,UTC,JP", "ET,PT,UTC,JP,GB,NZ",
          "94110", "ET,PT,UTC,JP,GB,NZ,IN,CN,BR,ZA"]
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+SGR = re.compile(r"\x1b\[([0-9;]*)m")
+
+# Every escape the clock is allowed to write. Anything else is either a bug or
+# a deliberate addition that should be added here on purpose.
+ALLOWED = {("", "J"), ("", "K"), ("31", "m"), ("33", "m"), ("36", "m"),
+           ("39", "m"), ("?25", "h"), ("?25", "l")}
 
 
 def widths(painted):
@@ -42,6 +48,23 @@ def widths(painted):
     """
     body = ANSI.sub("", painted)
     return [len(line) for line in body.split("\n") if line != ""]
+
+
+def bleeds(painted):
+    """Lines that end with a colour still in force.
+
+    Each face's cells set a colour and put it back; a line that ends without
+    putting it back paints the rest of the terminal's row, and the next line's
+    margin, in whatever the last hand happened to be.
+    """
+    out = []
+    for i, line in enumerate(painted.split("\n")):
+        state = "39"
+        for found in SGR.finditer(line):
+            state = found.group(1) or "0"
+        if state not in ("39", "0"):
+            out.append(i)
+    return out
 
 
 def render(binary, cols, lines, zones, extra):
@@ -74,7 +97,8 @@ def main():
             extra = rng.choice([[], ["-n", "1"], ["-n", "2"], ["-n", "auto"],
                                 ["--scale", "1"], ["--scale", "2"], ["--scale", "auto"],
                                 ["--halign", "right"], ["--valign", "bottom"],
-                                ["--hpad", "4"], ["--vpad", "2"]])
+                                ["--hpad", "4"], ["--vpad", "2"],
+                                ["--color=always"], ["--color=always", "--day=always"]])
             impl, binary = rng.choice(list(zip(("go", "py"), binaries)))
             status, painted, complaint = render(binary, cols, lines, zones, extra)
             what = f"{impl} {cols}x{lines} {' '.join(extra)} {zones}"
@@ -97,6 +121,14 @@ def main():
             tall = len(widths(painted))
             if tall > lines:
                 print(f"FAIL {what}: {tall} lines drawn into a {lines}-line window")
+                failures += 1
+            left = bleeds(painted)
+            if left:
+                print(f"FAIL {what}: {len(left)} lines end with a colour still set")
+                failures += 1
+            stray = set(re.findall(r"\x1b\[([0-9;?]*)([A-Za-z])", painted))
+            if stray - ALLOWED:
+                print(f"FAIL {what}: escapes the clock should not write: {sorted(stray - ALLOWED)}")
                 failures += 1
     finally:
         (ROOT / "clock-fitfuzz").unlink(missing_ok=True)

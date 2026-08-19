@@ -188,9 +188,14 @@ python3 -m unittest ziptz.test_ziptz
 go test github.com/choey/clock/ziptz
 ```
 
-The cases are the point: `testdata/cases.json` holds them, and both suites
-read it, so the two libraries are held to one list rather than to two that can
-drift. Each case is a token and either the zone it must resolve to or the kind
+The data is the point: `testdata/cases.json` holds the cases, the zones, the
+figures the generated tables should contain, and — in `checks` — the names of
+the properties both suites must test. Each suite maps every name to a test and
+fails on one it does not implement, so neither can quietly cover less than the
+other. Cases alone were not enough: the structural checks around them were
+written twice, once per language, and two hand-written lists drift — one suite
+had a check on the exception suffixes being in order for a while before the
+other did. Each case is a token and either the zone it must resolve to or the kind
 of failure it must produce, with a note saying why it is there.
 
 ```json
@@ -207,7 +212,6 @@ fullwidth digits that Python's `isdigit()` accepts and this must not), and the
 **known gaps** — the ZIPs that resolve wrongly or not at all, pinned so that
 fixing one fails the file and makes someone update it.
 
-On top of the shared cases each suite checks the generated tables themselves:
-records the right width, prefixes ascending, suffixes ascending, every letter
-one that `zones`/`ZONES` knows, and every exception actually disagreeing with
-the prefix it overrides.
+Only two things are language-only, and the file says which: Go has no default
+arguments, so `abbrev`'s default of now is Python's to test, and only Python
+can be imported two ways, as a module and as a package.

@@ -18,8 +18,50 @@
     "zone that observes daylight saving is caught doing it. Every zone the",
     "tables can return must appear, and the suites fail if one is missing.",
     "",
-    "Add a case here and both suites pick it up with no other edit."
+    "Add a case here and both suites pick it up with no other edit.",
+    "",
+    "\"tables\" is what the generated tables should contain, and \"checks\" names",
+    "every property both suites have to test. Cases alone were not enough: the",
+    "structural checks around them were written twice, once per language, and",
+    "two hand-written lists drift -- one suite had a check on the exception",
+    "suffixes being in order for a while before the other did. Now the list",
+    "lives here, each suite maps every name to a test, and a suite missing a",
+    "name fails rather than quietly testing less than the other.",
+    "",
+    "\"language_only\" is for what genuinely cannot be shared: Go has no default",
+    "arguments, and only Python can be imported two ways."
   ],
+
+  "tables": {
+    "runs": 157,
+    "runs_named": 94,
+    "exceptions": 233,
+    "exception_prefixes": 30,
+    "letters": 11,
+    "generics": 11,
+    "assigned_prefixes": 896
+  },
+
+  "checks": [
+    "zone-cases",
+    "location-cases",
+    "abbrev-cases",
+    "generic-cases",
+    "abbrev-and-generic-refuse-what-zone-refuses",
+    "table-figures",
+    "runs-ascending",
+    "runs-letters-known",
+    "exceptions-ascending",
+    "exceptions-beat-their-prefix",
+    "every-zone-has-a-case",
+    "generic-covers-every-zone",
+    "non-shifting-zones-are-their-own-generic"
+  ],
+
+  "language_only": {
+    "python": ["abbrev-defaults-to-now", "package-and-module-agree"],
+    "go": []
+  },
   "cases": [
     {"token": "94110", "zone": "America/Los_Angeles", "why": "San Francisco, an ordinary five-digit lookup"},
     {"token": "941", "zone": "America/Los_Angeles", "why": "and its prefix, which agrees"},

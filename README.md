@@ -626,6 +626,11 @@ golden because no golden has that size. It is seeded, so a failure repeats.
 tools/fitfuzz.py 400
 ```
 
+It checks where the grid sits, too, when it was told: `--halign left` leaves
+no margin on the left, `right` ends at the last column, `center` balances the
+two to within a column, and the same three vertically. Making `clock.py`
+ignore `--valign` fails it within a few dozen sizes.
+
 It found one on its first run, in both implementations: the readout under a
 face is a fixed twelve characters, the layout measured only the face, and a
 window narrow enough to shrink the face below twelve wrote the readout past

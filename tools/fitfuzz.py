@@ -72,6 +72,25 @@ def bleeds(painted):
     return out
 
 
+def margins(painted, lines):
+    """(left, right, top, bottom) blank space around what was drawn.
+
+    The bottom is measured against the window rather than against the output:
+    a clock leaves the rows under itself alone and lets clear-below deal with
+    them, so a bottom margin is a thing that was never written. Blank rows
+    above it are written, since something has to push the grid down.
+    """
+    rows = ANSI.sub("", painted).split("\n")
+    while rows and rows[-1] == "":
+        rows.pop()
+    used = [i for i, line in enumerate(rows) if line.strip()]
+    if not used:
+        return None
+    left = min(len(line) - len(line.lstrip(" ")) for line in rows if line.strip())
+    right = max(len(line.rstrip(" ")) for line in rows)
+    return left, right, used[0], lines - (used[-1] + 1)
+
+
 def render(binary, cols, lines, zones, extra):
     proc = subprocess.run(
         [*binary, *extra, zones],
@@ -99,12 +118,14 @@ def main():
             cols = rng.choice([rng.randint(1, 40), rng.randint(40, 120), rng.randint(120, 400)])
             lines = rng.choice([rng.randint(1, 12), rng.randint(12, 40), rng.randint(40, 120)])
             zones = rng.choice(ZONES)
+            align = rng.choice([[], ["--halign", "left"], ["--halign", "center"],
+                                ["--halign", "right"], ["--valign", "top"],
+                                ["--valign", "center"], ["--valign", "bottom"]])
             extra = rng.choice([[], ["-n", "1"], ["-n", "2"], ["-n", "auto"],
                                 ["--scale", "1"], ["--scale", "2"], ["--scale", "auto"],
-                                ["--halign", "right"], ["--valign", "bottom"],
                                 ["--hpad", "10%"], ["--vpad", "20%"],
                                 ["--hpad", "even"], ["--vpad", "even"],
-                                ["--color=always"], ["--color=always", "--day=always"]])
+                                ["--color=always"], ["--color=always", "--day=always"]]) + align
             impl, binary = rng.choice(list(zip(("go", "py"), binaries)))
             status, painted, complaint = render(binary, cols, lines, zones, extra)
             what = f"{impl} {cols}x{lines} {' '.join(extra)} {zones}"
@@ -136,6 +157,33 @@ def main():
             if stray - ALLOWED:
                 print(f"FAIL {what}: escapes the clock should not write: {sorted(stray - ALLOWED)}")
                 failures += 1
+
+            # Where the grid sits, when it was told where to sit. Only the
+            # edge it was pushed against is checked: the other one is
+            # whatever is left over, and centring is checked as balance
+            # rather than as a number.
+            edges = margins(painted, lines)
+            if edges and align:
+                left, right, top, bottom = edges
+                axis, where = align
+                complaint = None
+                if axis == "--valign":
+                    where = {"top": "top", "center": "vcenter", "bottom": "bottom"}[where]
+                if where == "left" and left != 0:
+                    complaint = f"left-aligned but {left} columns of margin"
+                elif where == "right" and right != cols:
+                    complaint = f"right-aligned but ends at column {right} of {cols}"
+                elif where == "center" and abs(left - (cols - right)) > 1:
+                    complaint = f"centred but margins are {left} and {cols - right}"
+                elif where == "vcenter" and abs(top - bottom) > 1:
+                    complaint = f"centred but margins are {top} and {bottom} rows"
+                elif where == "top" and top != 0:
+                    complaint = f"top-aligned but {top} rows of margin"
+                elif where == "bottom" and bottom != 0:
+                    complaint = f"bottom-aligned but {bottom} rows of margin"
+                if complaint:
+                    print(f"FAIL {what}: {complaint}")
+                    failures += 1
     finally:
         (ROOT / "clock-fitfuzz").unlink(missing_ok=True)
 

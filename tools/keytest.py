@@ -355,7 +355,10 @@ def main():
         # this is the only thing that can drag a window: difftest pins one size
         # per run and never changes it.
         print("== resize ==")
-        compare_resize("shrink, then grow", ["ET,PT,UTC"], [(40, 12), (200, 50)], [0, 0, 0, 0])
+        # 60 columns, not 40: three faces need three cells of at least the
+        # readout's twelve, plus gaps, and 40 is not enough for that -- which
+        # is a complaint, and complaints are what the two cases below are for.
+        compare_resize("shrink, then grow", ["ET,PT,UTC"], [(60, 20), (200, 50)], [0, 0, 0, 0])
         compare_resize("a nudge that changes nothing", ["ET,PT,UTC"], [(80, 24)], [0, 0])
         compare_resize("auto scale follows the window down", ["-n", "auto", "ET,PT,UTC"],
                        [(200, 50), (60, 20), (200, 50)], [0, 0, 0, 0, 0])

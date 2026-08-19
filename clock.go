@@ -1243,6 +1243,26 @@ var dayNames = [7]string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
 // so a very low CLOCK_CELL_RATIO loses the weekday rather than the alignment.
 const dayCols = 16
 
+// readoutCols is "02:53:07.123" -- what digital writes under every face, and
+// the narrowest a face's column can be however small the face itself gets. A
+// face is drawn to whatever colsN the scale asks for, but the readout
+// underneath is a fixed twelve characters and cannot be shrunk, so the *cell* a
+// face occupies is the wider of the two. Without this a narrow enough window
+// lays out by face width and then writes a readout straight past the right
+// edge -- which wraps, and a wrapped line desynchronises the rewind exactly as
+// fitPerRow exists to prevent. The weekday is the same problem solved the other
+// way: at dayCols it is dropped rather than widening every cell to hold it.
+const readoutCols = 12
+
+// cellCols is how wide one face's column is: the face, or its readout if that
+// is wider.
+func cellCols() int {
+	if colsN > readoutCols {
+		return colsN
+	}
+	return readoutCols
+}
+
 // calDay is a calendar date, comparable with ==.
 type calDay struct {
 	year  int
@@ -1459,18 +1479,25 @@ func frame(faces []dial, now time.Time, perRow int, color bool, dayWhen string, 
 			times[i] = now.In(d.loc)
 			drawn[i] = face(times[i], color)
 		}
+		// The face is colsN wide and its cell may be wider, so the face rows
+		// are padded into it. Plain spaces on either side of already-coloured
+		// rows, rather than centring them: centring counts characters, and a
+		// coloured row is mostly escape bytes.
+		cell := cellCols()
+		padLeft := strings.Repeat(" ", (cell-colsN)/2)
+		padRight := strings.Repeat(" ", cell-colsN-len(padLeft))
 		for r := 0; r < rowsN; r++ {
 			parts := make([]string, len(drawn))
 			for i := range drawn {
-				parts[i] = drawn[i][r]
+				parts[i] = padLeft + drawn[i][r] + padRight
 			}
 			rows = append(rows, row(parts))
 		}
 		labels := make([]string, len(chunk))
 		digits := make([]string, len(chunk))
 		for i, d := range chunk {
-			labels[i] = center(truncate(d.label, colsN), colsN, lay.extraLeft)
-			digits[i] = center(digital(times[i], weekday), colsN, lay.extraLeft)
+			labels[i] = center(truncate(d.label, cell), cell, lay.extraLeft)
+			digits[i] = center(digital(times[i], weekday), cell, lay.extraLeft)
 		}
 		rows = append(rows, row(labels))
 		rows = append(rows, row(digits))
@@ -1727,11 +1754,12 @@ func fitPerRow(want, n, termCols, gap int) (int, error) {
 	if termCols <= 0 {
 		return want, nil // not a terminal: honour what was asked for
 	}
-	maxFit := (termCols + gap) / (colsN + gap)
+	cell := cellCols()
+	maxFit := (termCols + gap) / (cell + gap)
 	if maxFit < 1 {
 		return 0, fmt.Errorf(
 			"terminal is %d columns wide and one clock face needs %d; widen the window, or lower --cell-ratio",
-			termCols, colsN)
+			termCols, cell)
 	}
 	if want > maxFit {
 		want = maxFit
@@ -2103,7 +2131,7 @@ func run() error {
 			// column off centre -- and with a gutter to swallow the odd
 			// column, dead centre.
 			var lay layout
-			lay.gap, lay.extra, lay.left, lay.extraLeft = spread(perRow, colsN, cols, gap, geo.hpad, geo.halign)
+			lay.gap, lay.extra, lay.left, lay.extraLeft = spread(perRow, cellCols(), cols, gap, geo.hpad, geo.halign)
 			lay.vgap, lay.vextra, lay.top, _ = spread(chunks, rowsN+2, lines, vgap, geo.vpad, geo.valign)
 			rows = frame(faces, now, perRow, color, dayWhen, lay)
 		}

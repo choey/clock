@@ -148,6 +148,17 @@ SYMMETRY_WINDOW = 8
 ROWS = DEFAULT_ROWS_N
 CELL_RATIO = DEFAULT_CELL_RATIO
 COLS = math.floor(ROWS * DEFAULT_CELL_RATIO + 0.5)  # face width, in terminal columns
+
+# "02:53:07.123" -- what digital() writes under every face, and the narrowest a
+# face's column can be however small the face itself gets. A face is drawn to
+# whatever COLS the scale asks for, but the readout underneath is a fixed
+# twelve characters and cannot be shrunk, so the *cell* a face occupies is the
+# wider of the two. Without this a narrow enough window lays out by face width
+# and then writes a readout straight past the right edge -- which wraps, and a
+# wrapped line desynchronises the rewind exactly as fit_per_row exists to
+# prevent. The weekday is the same problem solved the other way: at DAY_COLS it
+# is dropped rather than widening every cell to hold it.
+READOUT_COLS = 12
 GAP = 3  # fewest blank columns between adjacent faces
 VGAP = 1  # fewest blank rows between rows of faces
 
@@ -1172,6 +1183,13 @@ def frame(faces, now, per_row, color, day_when, lay):
     fixed place in the row rather than at whatever the last one happens to be.
     """
     indent = " " * lay.left
+    # The face is COLS wide and its cell may be wider, so the face rows are
+    # padded into it. Plain spaces on either side of already-coloured rows,
+    # rather than centring them: centring counts characters, and a coloured row
+    # is mostly escape bytes.
+    cell = cell_cols()
+    pad_left = " " * ((cell - COLS) // 2)
+    pad_right = " " * (cell - COLS - len(pad_left))
 
     def gutter(i):
         """The i'th gap of a row: the widened one is always the last of a full
@@ -1193,12 +1211,14 @@ def frame(faces, now, per_row, color, day_when, lay):
             rows.extend([""] * (lay.vgap + wide))
         times = [in_zone(now, z) for _, z in chunk]
         drawn = [face(t, color) for t in times]
-        rows.extend(row(list(line)) for line in zip(*drawn))
-        rows.append(
-            row([center(truncate(label, COLS), COLS, lay.extra_left) for label, _ in chunk])
+        rows.extend(
+            row([pad_left + part + pad_right for part in line]) for line in zip(*drawn)
         )
         rows.append(
-            row([center(digital(t, weekday), COLS, lay.extra_left) for t in times])
+            row([center(truncate(label, cell), cell, lay.extra_left) for label, _ in chunk])
+        )
+        rows.append(
+            row([center(digital(t, weekday), cell, lay.extra_left) for t in times])
         )
     return rows
 
@@ -1383,6 +1403,11 @@ def term_size():
     return cols, rows
 
 
+def cell_cols():
+    """How wide one face's column is: the face, or its readout if that is wider."""
+    return max(COLS, READOUT_COLS)
+
+
 def fit_per_row(want, n, term_cols, gap):
     """Reduce the requested faces-per-row to what the window can hold.
 
@@ -1392,11 +1417,12 @@ def fit_per_row(want, n, term_cols, gap):
     want = min(want, n)
     if term_cols <= 0:
         return want  # not a terminal: honour what was asked for
-    max_fit = (term_cols + gap) // (COLS + gap)
+    cell = cell_cols()
+    max_fit = (term_cols + gap) // (cell + gap)
     if max_fit < 1:
         raise ClockError(
             f"terminal is {term_cols} columns wide and one clock face needs "
-            f"{COLS}; widen the window, or lower --cell-ratio"
+            f"{cell}; widen the window, or lower --cell-ratio"
         )
     return min(want, max_fit)
 
@@ -1716,7 +1742,7 @@ def run(argv):
                     # more than a column off centre -- and with a gutter to
                     # swallow the odd column, dead centre.
                     gap_n, extra, left, leaned = spread(
-                        per_row, COLS, cols, GAP, hpad, halign
+                        per_row, cell_cols(), cols, GAP, hpad, halign
                     )
                     vgap, vextra, top, _ = spread(
                         chunks, ROWS + 2, lines, VGAP, vpad, valign

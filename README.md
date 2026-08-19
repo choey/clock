@@ -616,6 +616,23 @@ untested: without `ziptz` installed, a ZIP token says what to install while
 every zone name, abbreviation and country code still works. Two cases now run
 `clock.py` from a directory where the library is not there to import.
 
+`tools/fitfuzz.py` throws window sizes at both implementations and checks what
+comes back fits in them: no line wider than the window, no more lines than it
+has. That is the same blind spot the goldens cover, generatively — a grid that
+overflows overflows in both implementations, agrees with itself, and matches no
+golden because no golden has that size. It is seeded, so a failure repeats.
+
+```sh
+tools/fitfuzz.py 400
+```
+
+It found one on its first run, in both implementations: the readout under a
+face is a fixed twelve characters, the layout measured only the face, and a
+window narrow enough to shrink the face below twelve wrote the readout past
+the right edge — where it wraps, and a wrapped line desynchronises the repaint
+that `fit_per_row` exists to protect. A face's column is now the wider of the
+face and its readout.
+
 `tools/docnums.py` holds the prose to the tables. The documents quote figures
 that come out of the data — 233 ZIPs across 30 prefixes, 157 range records, 34
 zones folded onto 11 letters — and regenerating the tables would leave those

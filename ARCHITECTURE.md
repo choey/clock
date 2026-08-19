@@ -83,7 +83,17 @@ itself is diffed along with everything else that only shows between frames.
 Comparing the two proves they agree, which is not the same as proving either
 is right: a mistake made in both — and both is how they are always changed —
 looks like agreement. `tools/golden/` is the other half, sixteen renderings
-kept as bytes and compared against what the clock draws today.
+kept as bytes and compared against what the clock draws today, and
+`tools/fitfuzz.py` is the generative version of the same idea: many window
+sizes, each checked against an invariant rather than against the other
+implementation.
+
+**Cell width.** A face is `COLS` wide, but the cell it occupies is
+`max(COLS, 12)` — the readout under it is a fixed twelve characters and cannot
+shrink along with the face. Everything that measures the grid measures cells,
+and the face is padded into its cell when drawn. The weekday is the same
+problem solved the other way: below `DAY_COLS` it is dropped rather than
+widening every cell to hold it.
 
 **Modals.** The key list and the startup quit hint are stamped onto the
 finished, already-coloured frame after the grid is drawn — never mixed into a

@@ -12,6 +12,7 @@ test: test-lib
 	tools/difftest.sh
 	tools/keytest.py
 	tools/fitfuzz.py
+	tools/argfuzz.py
 	tools/docnums.py
 
 test-lib:

@@ -720,6 +720,20 @@ leaves it alone. Run it when a change makes you wonder.
 tools/framecost.py
 ```
 
+`tools/argfuzz.py` is the same idea aimed at the arguments rather than the
+window. It mutates ordinary invocations into badly spelt ones — a digit
+swapped for the Arabic-Indic digit that means the same thing, a space in front
+of a number, a zone name in a case nobody types, a value handed to the flag
+next door — and requires both implementations to answer identically. That is
+where the two standard libraries part company, and where five bugs were found
+in an afternoon: `--scale ١` drew a clock in Python and complained in Go,
+`--cell-ratio 0x1p2` did the reverse, and `İstanbul` resolved under one and
+not the other. The seed is fixed, so a failure repeats.
+
+```sh
+tools/argfuzz.py -v --cases 2000 --seed 3
+```
+
 `ziptz` has tests of its own, and holds its two libraries to one shared list
 of cases in `ziptz/testdata/cases.json` — the same idea as the difftest, a
 rung down. `make test` runs those and the difftest together.

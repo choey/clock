@@ -594,7 +594,11 @@ whole second, a one-frame case can never outlive that cache; a sequence can.
 Both variables need `CLOCK_FREEZE`, are refused if it is absent, and like it
 are dev hooks kept out of `--help`.
 
-`tools/keytest.py` covers what difftest cannot reach at all: the keys. Space,
+`tools/keytest.py` covers what difftest cannot reach at all: the keys, and one
+thing that is not a key -- whether stdout is a terminal at all. `/dev/null` is
+a character device, and a clock that reads that as a terminal runs forever
+instead of drawing its frame and exiting; difftest redirects to regular files
+and has no timeout, so it would hang rather than say so. Space,
 `h`, `?` and `q` are read only from a terminal in cbreak mode, so nothing
 redirected ever presses one — difftest compares the table the key list is
 built from, not what pressing `h` does. Each implementation runs under a pty,

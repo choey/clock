@@ -7,6 +7,11 @@ compares the table the key list is built from, not what pressing h does. This
 runs each implementation under a pty, gives both the same keys at the same
 points, and compares what they paint.
 
+It is also the only harness that can put a file descriptor of a chosen kind
+under a clock and then give up waiting: difftest redirects to regular files
+and has no timeout, so a clock that mistook one for a terminal would hang it
+rather than fail it. See the character-device case below.
+
 A clock repaints every 19ms whether or not anything changed, so how many
 repaints land between two keystrokes is timing, not behaviour. The streams are
 therefore collapsed to their *distinct* frames before comparing -- frames are
@@ -340,6 +345,39 @@ def compare_hold(name):
     report(True, name)
 
 
+def not_a_terminal(name):
+    """A character device that is not a terminal is still redirected output.
+
+    The clock decides full-screen or one-frame-and-exit from stdout, and
+    /dev/null is a character device -- so the obvious test, "is this a
+    character device", says terminal and is wrong. Under it the Go clock took
+    the alternate screen and ran forever where clock.py drew its frame and
+    exited, with every difftest case redirecting to a regular file and seeing
+    nothing.
+
+    Pinned, so both have exactly one frame to draw: whichever takes longer
+    than that has decided it is talking to a terminal.
+    """
+    env = dict(os.environ, CLOCK_FREEZE=FROZEN, COLUMNS=str(COLS), LINES=str(LINES))
+    for impl, argv in IMPLS:
+        with open(os.devnull, "wb") as sink:
+            proc = subprocess.Popen(
+                argv + ["-q", "UTC"], stdin=subprocess.DEVNULL, stdout=sink,
+                stderr=subprocess.PIPE, env=env, cwd=ROOT,
+            )
+            try:
+                _, err = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                report(False, name, f"{impl} never exited: it took /dev/null for a terminal")
+                return
+        if proc.returncode != 0:
+            report(False, name, f"{impl}: exit status {proc.returncode}, {err!r}")
+            return
+    report(True, name)
+
+
 def main():
     print("== building ==")
     subprocess.run(["go", "build", "-o", "clock-keytest", "."], cwd=ROOT, check=True)
@@ -367,6 +405,9 @@ def main():
             report(FLASH_MARK in painted, f"{impl} shows the hint without -q")
             painted, _ = run(argv + ["-q", "UTC"], [])
             report(FLASH_MARK not in painted, f"{impl} shows no hint with -q")
+        print("== stdout that is not a terminal ==")
+        not_a_terminal("/dev/null is a character device, not a terminal")
+
         # The clock re-measures every frame rather than trapping SIGWINCH, so
         # this is the only thing that can drag a window: difftest pins one size
         # per run and never changes it.

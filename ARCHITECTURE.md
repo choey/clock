@@ -75,6 +75,16 @@ the old frame, and its upper half is left behind smeared into the new one.
 `ESC[J` only ever clears downwards, so it cannot mop that up. Owning a screen
 makes the frame's position independent of whatever happened to the last one.
 
+**What counts as a terminal.** Both ports ask stdout the same question, and it
+is the one `isatty(3)` asks: does this descriptor have a termios? Go's obvious
+alternative -- `Stat` and `ModeCharDevice` -- answers a different question, and
+differs on exactly the case people redirect to: `/dev/null` is a character
+device, so under it the Go clock took the alternate screen and ran forever
+where clock.py drew one frame and exited. Every redirection in difftest goes to
+a regular file, which both got right, so the disagreement sat there unseen;
+`tools/keytest.py` is where it is pinned now, since catching it means being
+willing to stop waiting.
+
 Piped output has no resize to survive and keeps the rewind, which is also what
 lets `tools/difftest.sh` compare the two implementations byte for byte — and,
 with `CLOCK_FRAMES`, compare a run of frames rather than one, so the rewind
@@ -172,7 +182,7 @@ them all; the README says how to run each on its own.
 | `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share | anything wrong in both, which is how they are always changed |
 | `tools/golden/` | what the clock actually draws, at sixteen sizes | the size nobody thought to keep |
 | `tools/fitfuzz.py` | invariants at arbitrary sizes: nothing overflows the window, every line ends at the default colour, no escape outside the eight it may write | whether the picture is *right*, only that it is well formed |
-| `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations frame for frame | a real terminal emulator; and signal timing, where it compares loosely on purpose |
+| `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations frame for frame; and that a character device is not therefore a terminal | a real terminal emulator; and signal timing, where it compares loosely on purpose |
 | `tools/errcover.py` | every error message the clock can print is printed by some case | two that need a machine with no tz database, exempted by name |
 | `tools/docnums.py` | the figures in the prose match the tables, and every flag and variable is documented | prose that is wrong in a way no number captures |
 | `ziptz`: suites + `make sweep` | both libraries answer alike for all 101,000 ZIP inputs, and the tables are well formed | whether the underlying data is *true*, which is `genzips.py`'s problem |

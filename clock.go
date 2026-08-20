@@ -1523,12 +1523,19 @@ func frame(faces []dial, now time.Time, perRow int, color bool, dayWhen string, 
 	return rows
 }
 
-// isTerminal reports whether f is a character device, i.e. a terminal rather
-// than a pipe or a file. Matches Python's sys.stdout.isatty() for the cases
-// that matter here.
+// isTerminal reports whether f is a terminal rather than a pipe, a file, or
+// some other character device. The ioctl is what isatty(3) itself does, and
+// so is what Python's sys.stdout.isatty() does on the other side of the port:
+// a terminal is a thing with a termios, not a thing with a device number.
+//
+// Asking os.Stat for ModeCharDevice instead is the obvious version and is
+// wrong in exactly one place that matters -- /dev/null is a character device.
+// Under it, `clock >/dev/null` took the alternate screen and ran forever
+// where clock.py drew one frame and exited, and nothing caught it: every
+// redirection in difftest goes to a regular file.
 func isTerminal(f *os.File) bool {
-	info, err := f.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	var t syscall.Termios
+	return ioctlTermios(f.Fd(), tcGet, &t) == nil
 }
 
 // modalBox draws content inside a one-line border, used for both the key

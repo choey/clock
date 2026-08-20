@@ -220,9 +220,13 @@ What nothing covers, and why:
 
 - **Windows.** Neither implementation runs there; difftest cross-compiles for
   it, so the message it prints instead is a build check, not a behaviour one.
-- **A machine with no tz database.** Two error paths need one. Go will not
-  give its database up even when `ZONEINFO` points nowhere — it falls back to
-  the copy inside the binary — so this cannot be arranged from outside.
+- **A machine with no tz database.** Two error paths need one, and neither
+  implementation can be pointed at nothing from outside. Go falls through
+  `ZONEINFO` to the system directories it knows and then to the copy in the Go
+  installation, `$GOROOT/lib/time/zoneinfo.zip`; Python's `zoneinfo` does not
+  read `TZDIR` at all, its search path being fixed when it was built. And the
+  `zone.tab` reader takes `TZDIR` as somewhere to look *before* the usual
+  places, never instead of them.
 - **tzdata drift.** The goldens hold zone abbreviations as bytes, so a release
   that renames one fails them. That is the right place for it to surface, and
   the diff is the wrong place to learn it from: a renamed zone and a broken

@@ -9,18 +9,28 @@ on:
 
 jobs:
   test:
-    # The floor and the ceiling. The floor is what the project promises --
-    # go.mod says 1.21 and pyproject says 3.9 -- and is where a syntax or
-    # stdlib slip shows up. The ceiling is where a deprecation shows up first.
+    # The floor and the ceiling, and both platforms the README promises.
+    # The floor is what the project says it needs -- go.mod says 1.21 and
+    # pyproject says 3.9 -- and is where a syntax or stdlib slip shows up. The
+    # ceiling is where a deprecation shows up first. macOS runs the ceiling
+    # only: the floor's Python has no build for the arm64 runners, and what
+    # macOS is here to catch is the platform, not the version -- term_bsd.go
+    # is compiled nowhere else, and termios, select and the pty are BSD's
+    # rather than glibc's.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - go: "1.21"
+          - os: ubuntu-latest
+            go: "1.21"
             python: "3.9"
-          - go: "stable"
+          - os: ubuntu-latest
+            go: "stable"
             python: "3.13"
-    runs-on: ubuntu-latest
+          - os: macos-latest
+            go: "stable"
+            python: "3.13"
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 

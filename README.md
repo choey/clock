@@ -648,7 +648,12 @@ Dropping one exception group makes four documents fail at once.
 `.github/workflows/test.yml` runs all of that on push and pull request, on the
 floor and the ceiling of what the project claims to support — Go 1.21 with
 Python 3.9, and current versions of both. The floor is the one that matters:
-`pyproject.toml` promises 3.9 and nothing but that job checks it.
+`pyproject.toml` promises 3.9 and nothing but that job checks it. A third job
+runs the ceiling on macOS, the other platform [Terminal
+requirements](#terminal-requirements) promises: `term_bsd.go` is compiled
+nowhere else, and termios, `select` and the pty are BSD's there rather than
+glibc's. It runs the ceiling only — the floor's Python has no build for the
+arm64 runners, and macOS is there for the platform, not the version.
 
 It resizes the window too, which difftest cannot: that pins `COLUMNS`/`LINES`
 for a run and never changes them, so the re-measure the clock does every frame

@@ -207,7 +207,13 @@ func freeze() (time.Time, bool, error) {
 	// parsers are loose in their own directions -- Go takes a one-digit month,
 	// Python takes fewer than six fractional digits -- and the round trip is
 	// the one cheap check that pins them to the same set of strings.
-	if err != nil || t.Format(freezeLayout) != v {
+	//
+	// Except at the very bottom of the range, which the round trip cannot see:
+	// Python's datetime starts at year 1 and Go's time does not, so year 0
+	// parsed here and formatted back to "0000" quite happily while clock.py
+	// refused it. One explicit bound, so the two agree over the whole range
+	// rather than over most of it.
+	if err != nil || t.Year() < 1 || t.Format(freezeLayout) != v {
 		return time.Time{}, false, fmt.Errorf(
 			"CLOCK_FREEZE wants an instant like 2026-07-15T09:53:07.123456Z, got \"%s\"", v)
 	}

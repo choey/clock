@@ -521,6 +521,13 @@ check nonsense 200 60 ET
 check 2026-07-15T09:53:07Z 200 60 ET
 check 2026-07-15T09:53:07.123Z 200 60 ET
 check 2026-13-99T09:53:07.123456Z 200 60 ET
+# The ends of the range, which the round-trip check inside freeze() cannot see
+# on its own: Go's time has a year 0 and Python's datetime starts at 1, so the
+# first of these was a drawn frame on one side and a complaint on the other.
+check 0000-01-01T00:00:00.000000Z 200 60 UTC
+check 0001-01-01T00:00:00.000000Z 200 60 UTC
+check 9999-12-31T23:59:59.999999Z 200 60 UTC
+check 1969-12-31T23:59:59.999999Z 200 60 UTC
 
 # Everything above compares one frame. These compare a run of them: CLOCK_FRAMES
 # steps the pinned instant and draws that many, so the diff covers what a single

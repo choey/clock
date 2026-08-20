@@ -109,6 +109,16 @@ golden() {
 	fi
 }
 
+# One CLOCK_CELL_RATIO value, through an ordinary case. The variable is read
+# where the flag is absent, and a value it cannot use is not an error there --
+# an environment variable may be stale or meant for something else -- so what
+# is being compared is which values the two implementations decide to ignore.
+check_ratio_env() {
+	ratio=$1
+	check "$SUMMER" 200 60 UTC
+	ratio=
+}
+
 # One case: CLOCK_FREEZE, COLUMNS, LINES, then the argv to pass to both.
 check() {
 	freeze=$1 cols=$2 lines=$3
@@ -279,6 +289,21 @@ check "$SUMMER" 200 60 --cell-ratio -1 ET
 check "$SUMMER" 200 60 --cell-ratio bogus ET
 check "$SUMMER" 200 60 --cell-ratio inf ET
 check "$SUMMER" 200 60 --cell-ratio nan ET
+
+# Numbers spelled the way one language reads and the other does not. Python's
+# float() takes surrounding whitespace and any Unicode digit; Go's ParseFloat
+# takes a hexadecimal float and neither of those. Each of these once drew a
+# clock under one implementation and printed a complaint under the other --
+# --scale U+0661 was a face 1.0 wide in Python and an error in Go. The three
+# knobs that read a decimal are all here, since they now share one reader:
+# the two flags refuse, and the environment variable falls back to the default,
+# which is what it does with any value it cannot use.
+for n in " 1" "1 " "	1" "1
+" "١" "１" "١.٥" "１.５" "0x1p2" "0x1" "1_0" "1__0" "1,5" "" "+1" "-1" ".5" "5." "1e1" "1e400" "1e-400"; do
+	check "$SUMMER" 200 60 --scale "$n" UTC
+	check "$SUMMER" 200 60 --cell-ratio "$n" UTC
+	check_ratio_env "$n"
+done
 check "$SUMMER" 200 60 --scale=1.5 ET,PT
 check "$SUMMER" 200 60 --scale 1.5 ET,PT
 check "$SUMMER" 200 60 --scale 0.5 ET,PT

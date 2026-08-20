@@ -254,6 +254,26 @@ say nothing.
 Only where the local zone is wanted, though: no zone list, or the `local`
 token. `clock UTC` never asks `TZ` anything and is not refused for it.
 
+## Numbers on the command line
+
+The counts (`-n`, `--per-row`, the pads) have always been read by a hand-rolled
+scan, because `int()` and `strconv.Atoi` do not accept the same strings and the
+difference would be a face count that one implementation drew and the other
+refused. The decimals (`--scale`, `--cell-ratio`, `CLOCK_CELL_RATIO`) were left
+to `float()` and `ParseFloat`, on the reasoning — written into both files —
+that a knob shaping one face does not carry the same stakes.
+
+It does. `float()` reads surrounding whitespace and any Unicode decimal digit,
+so `--scale ١` and `--scale " 1"` drew a clock; `ParseFloat` reads neither, and
+printed a complaint. `ParseFloat` reads a hexadecimal float, `0x1p2`, which
+`float()` refuses, so `--cell-ratio 0x1p2` went the other way. Thirty spellings
+disagreed in all, across the three knobs.
+
+The fix is not a third hand-rolled scan but a gate in front of the two existing
+ones: the string may contain only `0123456789+-._eE`, and what survives that is
+read the same by both — exponents, underscores and all. Each language still
+does its own parse, which is where the shared cases in difftest keep it honest.
+
 ## ZIP resolution
 
 See [ZIP code accuracy](README.md#zip-code-accuracy) in the README for what

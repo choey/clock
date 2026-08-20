@@ -175,8 +175,33 @@ GAP = 3  # fewest blank columns between adjacent faces
 VGAP = 1  # fewest blank rows between rows of faces
 
 
-def _positive_float(value):
-    return not (math.isnan(value) or math.isinf(value)) and value > 0
+# The characters a number may be spelled with here, which is the intersection
+# of what the two languages read rather than what either offers. float() takes
+# surrounding whitespace and non-ASCII digits -- "\u0661" and "\uff11" are both
+# one to it -- where Go's ParseFloat takes neither; ParseFloat takes a
+# hexadecimal float, "0x1p2", where float() does not. Every one of those was a
+# clock drawn by one implementation and a complaint printed by the other. What
+# is left after this is read identically by both, underscores and exponents
+# included, so the parse itself can still be each language's own.
+NUMBER_CHARS = frozenset("0123456789+-._eE")
+
+
+def positive_number(val):
+    """A positive, finite decimal out of a string, or None.
+
+    --scale, --cell-ratio and CLOCK_CELL_RATIO are the same question asked
+    three times; this is the one answer, so a value one of them takes cannot
+    be a value another refuses.
+    """
+    if not val or not NUMBER_CHARS.issuperset(val):
+        return None
+    try:
+        value = float(val)
+    except ValueError:
+        return None
+    if math.isnan(value) or math.isinf(value) or value <= 0:
+        return None
+    return value
 
 
 def env_cell_ratio():
@@ -190,36 +215,22 @@ def env_cell_ratio():
     some other program, so a bad value is not a user error -- it is simply
     ignored, the same way an unset one is.
     """
-    try:
-        value = float(os.environ.get("CLOCK_CELL_RATIO", ""))
-    except ValueError:
-        return DEFAULT_CELL_RATIO
-    return value if _positive_float(value) else DEFAULT_CELL_RATIO
+    value = positive_number(os.environ.get("CLOCK_CELL_RATIO", ""))
+    return DEFAULT_CELL_RATIO if value is None else value
 
 
 def parse_ratio(val):
-    """Read a positive, finite decimal for --cell-ratio.
-
-    Delegates to float() rather than a hand-rolled scan, the same as
-    CLOCK_CELL_RATIO already does: this knob shapes one face, not a zone or a
-    count, and does not carry the same cross-language byte-for-byte stakes.
-    """
-    try:
-        value = float(val)
-    except ValueError:
-        value = None
-    if value is None or not _positive_float(value):
+    """Read a positive, finite decimal for --cell-ratio."""
+    value = positive_number(val)
+    if value is None:
         raise ClockError(f'--cell-ratio wants a positive number, e.g. --cell-ratio 2.6, got "{val}"')
     return value
 
 
 def parse_scale(val):
     """Read a positive, finite decimal for --scale."""
-    try:
-        value = float(val)
-    except ValueError:
-        value = None
-    if value is None or not _positive_float(value):
+    value = positive_number(val)
+    if value is None:
         raise ClockError(f'--scale wants auto or a positive number, e.g. --scale 1.5, got "{val}"')
     return value
 

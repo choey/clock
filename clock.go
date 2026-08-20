@@ -180,8 +180,8 @@ var colsN = int(math.Floor(defaultRowsN*defaultCellRatio + 0.5))
 // stale or set for some other program, so a bad value is not a user error --
 // it is simply ignored, the same way an unset one is.
 func envCellRatio() float64 {
-	v, err := strconv.ParseFloat(os.Getenv("CLOCK_CELL_RATIO"), 64)
-	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
+	v, ok := positiveFloat(os.Getenv("CLOCK_CELL_RATIO"))
+	if !ok {
 		return defaultCellRatio
 	}
 	return v
@@ -625,11 +625,29 @@ func parseScale(val string) (float64, error) {
 	return v, nil
 }
 
-// positiveFloat is what --cell-ratio and --scale share: neither shapes a
-// zone or a count, so unlike those this delegates to strconv.ParseFloat
-// rather than a hand-rolled scan, and does not carry the same
-// cross-language byte-for-byte stakes.
+// numberChars is what a number may be spelled with here, which is the
+// intersection of what the two languages read rather than what either offers.
+// ParseFloat takes a hexadecimal float, "0x1p2", where Python's float() does
+// not; float() takes surrounding whitespace and non-ASCII digits -- "\u0661"
+// and "\uff11" are both a one to it -- where ParseFloat takes neither. Every
+// one of those was a clock drawn by one implementation and a complaint printed
+// by the other. What is left after this is read identically by both,
+// underscores and exponents included, so the parse itself can still be each
+// language's own.
+const numberChars = "0123456789+-._eE"
+
+// positiveFloat is what --cell-ratio, --scale and CLOCK_CELL_RATIO share: the
+// same question asked three times, so a value one of them takes cannot be a
+// value another refuses.
 func positiveFloat(val string) (float64, bool) {
+	if val == "" {
+		return 0, false
+	}
+	for i := 0; i < len(val); i++ {
+		if strings.IndexByte(numberChars, val[i]) < 0 {
+			return 0, false
+		}
+	}
 	v, err := strconv.ParseFloat(val, 64)
 	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
 		return 0, false

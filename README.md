@@ -236,6 +236,10 @@ than the alignment, whatever `--day` says.
 | `h` or `?` | show or hide the key list |
 | `q` | quit, as does Ctrl+C |
 
+Ctrl+Z suspends it, like any other job. The clock hands the terminal back for
+the length of the stop and takes it again on `fg`; see [Terminal
+requirements](#terminal-requirements).
+
 `h` or `?` opens the key list in a bordered box centred over the clocks, the
 same way a dialog sits over a window — not tucked under the grid, so it works
 whatever the grid's size or alignment. In a window too small to hold the box,
@@ -566,6 +570,14 @@ on screen before it and the last frame does not linger — the same as `less` or
 `vim`. Redirect to a file to keep a frame, or hold one with space and
 photograph it.
 
+Ctrl+Z suspends it like any other job, and gets the same treatment: the clock
+gives the screen and the terminal back before it stops, so a stopped clock
+leaves a shell you can use rather than one with no echo and no cursor, and
+takes them again when `fg` brings it back. A clock stopped this way is stopped
+by `SIGSTOP` rather than `SIGTSTP` — the reason is in
+[ARCHITECTURE.md](ARCHITECTURE.md), and the visible part of it is that the
+shell says `Stopped(SIGSTOP)` where it usually says `Stopped`.
+
 Piping into something that stops reading — `clock | head` — is an ordinary way
 to end a clock and is treated as one: both implementations stop without a word,
 give the terminal back, and exit 141, the status a shell reports for a filter
@@ -638,6 +650,15 @@ and has no timeout, so it would hang rather than say so. Space,
 redirected ever presses one — difftest compares the table the key list is
 built from, not what pressing `h` does. Each implementation runs under a pty,
 both get the same keys at the same points, and what they paint is compared.
+
+Two of the keys are not read by the clock at all. Ctrl+C and Ctrl+Z are turned
+into signals by the terminal driver, which only has somewhere to send them if
+the clock is a *job*: its own process group, in the foreground of a terminal
+some session owns. A pty opened by a test harness is none of that, so those
+two cases start the clock under a shim that arranges it the way a shell does,
+and the shim reports what becomes of the clock — since only a parent can wait
+for a stopped child. That is what makes it possible to ask the question a
+stopped clock exists to answer: what state did it leave the terminal in.
 
 ```sh
 tools/keytest.py -v

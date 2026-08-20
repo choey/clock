@@ -2022,25 +2022,74 @@ func ioctlTermios(fd, req uintptr, t *syscall.Termios) error {
 }
 
 // quietTerminal swallows keystrokes so they can't scroll the frame out from
-// under us, and returns the restore. It clears ECHO/ECHONL/ICANON but leaves
-// ISIG set, so Ctrl+C still signals. Restoring with the flushing variant drops
-// whatever was typed during the run, so stray keys can't land in the shell
-// afterwards. Falls back to a no-op when stdin isn't a terminal.
-func quietTerminal() func() {
+// under us. It clears ECHO/ECHONL/ICANON but leaves ISIG set, so Ctrl+C still
+// signals, and hands back the two moves the clock can make with the terminal
+// afterwards: restore puts back what the shell handed over, requiet takes it
+// again. Quitting needs the first, Ctrl+Z needs both, either side of the stop.
+// Restoring with the flushing variant drops whatever was typed during the run,
+// so stray keys can't land in the shell afterwards. Falls back to no-ops when
+// stdin isn't a terminal.
+func quietTerminal() (restore, requiet func()) {
+	nothing := func() {}
 	fd := os.Stdin.Fd()
 	var saved syscall.Termios
 	if ioctlTermios(fd, tcGet, &saved) != nil {
-		return func() {}
+		return nothing, nothing
 	}
 	quiet := saved
 	quiet.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON
 	if ioctlTermios(fd, tcSet, &quiet) != nil {
-		return func() {}
+		return nothing, nothing
 	}
+	// Both copy before the call: the ioctl takes a pointer, and the saved and
+	// quiet modes have to survive being applied more than once.
 	return func() {
-		restore := saved
-		ioctlTermios(fd, tcSetFlush, &restore)
+			mode := saved
+			ioctlTermios(fd, tcSetFlush, &mode)
+		}, func() {
+			mode := quiet
+			ioctlTermios(fd, tcSet, &mode)
+		}
+}
+
+// suspend is Ctrl+Z: give the terminal back, stop for real, and take it again
+// on the way out the other side. kill(2) delivers before it returns, so
+// everything after it runs on resume -- cbreak again, the alternate screen
+// again, and a repaint, since what SIGCONT comes back to is the screen the
+// shell left rather than the one the clock was drawing on.
+//
+// The stop is SIGSTOP rather than the usual move, which is to put SIGTSTP's
+// default disposition back and raise that at yourself. That move is not
+// available here: signal.Notify installs the runtime's handler, and
+// signal.Reset does not take it off again -- sigInstallGoHandler keeps it for
+// every signal but a couple of special cases -- so the raise lands in a
+// handler with no channel left to send to, which returns and swallows it. The
+// clock would hand the terminal back and carry straight on, which is a Ctrl+Z
+// that does nothing. Nothing catches, blocks or swallows SIGSTOP, so it stops.
+//
+// clock.py has no such trouble and stops itself the same way regardless: what
+// a shell prints for a job stopped by SIGSTOP differs from what it prints for
+// one stopped by SIGTSTP -- "Stopped(SIGSTOP)" against "Stopped" in bash --
+// and two ports that stopped by different signals would not stop alike. The one thing lost is that SIGTSTP is discarded when the process
+// group is orphaned, where SIGSTOP is not: a clock sent `kill -TSTP` from
+// outside such a group stops where it would once have been left running, and
+// wants a `kill -CONT` to come back. Ctrl+Z cannot reach it there in the first
+// place -- the terminal driver discards job-control signals for an orphaned
+// group too, before any of this is reached.
+func suspend(restore, requiet func(), fullScreen bool) {
+	fmt.Print(showCursor)
+	if fullScreen {
+		fmt.Print(leaveAlt)
 	}
+	restore()
+
+	syscall.Kill(syscall.Getpid(), syscall.SIGSTOP)
+
+	requiet()
+	if fullScreen {
+		fmt.Print(enterAlt)
+	}
+	fmt.Print(hideCursor)
 }
 
 // readKeys pumps stdin into a channel. Reads block, so this needs its own
@@ -2145,10 +2194,14 @@ func run() error {
 	// arrives: left alone, the runtime kills the process where a write to fd 1
 	// or 2 hits EPIPE, which skips every defer below and hands back a terminal
 	// still in cbreak. Once it is notified, the write returns the error
-	// instead and the frame loop can stop like anything else.
-	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGPIPE)
+	// instead and the frame loop can stop like anything else. SIGTSTP is there
+	// for the same kind of reason and costs more: notifying it turns off the
+	// stop the runtime would have done, so the loop owes the reader one, and
+	// owes it a terminal to come back to -- see suspend.
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGPIPE, syscall.SIGTSTP)
 
-	defer quietTerminal()()
+	restoreTerm, requietTerm := quietTerminal()
+	defer restoreTerm()
 	keys := readKeys()
 
 	// On a terminal, take the alternate screen and paint from its top corner.
@@ -2347,12 +2400,20 @@ func run() error {
 			case <-t.C:
 				waiting = false
 			case s := <-sigs:
-				// A SIGPIPE that beat the write error to the loop; the two
-				// race, and either way the reader is gone.
-				if s == syscall.SIGPIPE {
+				switch s {
+				case syscall.SIGPIPE:
+					// A SIGPIPE that beat the write error to the loop; the
+					// two race, and either way the reader is gone.
 					return errPipe
+				case syscall.SIGTSTP:
+					suspend(restoreTerm, requietTerm, fullScreen)
+					// Stop waiting out a tick that was interrupted by a stop
+					// of unknown length: the screen resumes blank, and the
+					// reader should not have to watch it stay that way.
+					waiting = false
+				default:
+					return nil
 				}
-				return nil
 			case k := <-keys:
 				switch k {
 				case 'q', 'Q':

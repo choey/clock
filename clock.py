@@ -1649,20 +1649,32 @@ def quiet_terminal():
     KeyboardInterrupt. Restoring with TCSAFLUSH discards whatever was typed
     during the run, so stray keys can't land in the shell afterwards.
 
-    Yields whether stdin is a terminal, i.e. whether keys can be read at all.
+    Yields (interactive, restore, requiet): whether stdin is a terminal, i.e.
+    whether keys can be read at all, and the two moves the clock can make with
+    it -- restore puts back what the shell handed over, requiet takes it again.
+    Quitting needs the first, Ctrl+Z needs both, either side of the stop.
     """
+
+    def nothing():
+        pass
+
     try:
         fd = sys.stdin.fileno()
         saved = termios.tcgetattr(fd)
     except (AttributeError, ValueError, termios.error):
-        yield False  # not a terminal (piped or redirected): nothing to quieten
+        # not a terminal (piped or redirected): nothing to quieten
+        yield False, nothing, nothing
         return
 
     quiet = list(saved)
     quiet[3] &= ~(termios.ECHO | termios.ECHONL | termios.ICANON)  # lflag
     try:
         termios.tcsetattr(fd, termios.TCSANOW, quiet)
-        yield True
+        yield (
+            True,
+            lambda: termios.tcsetattr(fd, termios.TCSAFLUSH, saved),
+            lambda: termios.tcsetattr(fd, termios.TCSANOW, quiet),
+        )
     finally:
         termios.tcsetattr(fd, termios.TCSAFLUSH, saved)
 
@@ -1688,6 +1700,57 @@ def _terminate(_signum, _frame):
     still off. Go's port already selects on SIGTERM for the same reason.
     """
     raise SystemExit(0)
+
+
+# Raised by the Ctrl+Z handler, read and cleared by the frame loop. The handler
+# does none of the work itself: Python runs handlers between bytecodes, and the
+# bytecode it interrupts can be one in the middle of a sys.stdout.write --
+# where writing to the same buffer again is a reentrant call the io module
+# refuses outright. So the loop does it, at a point where nothing is
+# half-written, which is also where clock.go does it: its handler is a channel
+# send and the select at the end of the loop is what reads it.
+_suspend_asked = False
+
+
+def _suspend(_signum, _frame):
+    global _suspend_asked
+    _suspend_asked = True
+
+
+def suspend(full_screen, restore, requiet):
+    """Ctrl+Z: give the terminal back, stop for real, and take it again after.
+
+    kill(2) delivers before it returns, so everything after it runs on resume
+    -- cbreak again, the alternate screen again, and a repaint, since what
+    SIGCONT comes back to is the screen the shell left rather than the one the
+    clock was drawing on.
+
+    The stop is SIGSTOP rather than the usual move, which is to put SIGTSTP's
+    default disposition back and raise that at yourself. That move works here
+    and does not in clock.go, whose runtime keeps its own SIGTSTP handler
+    installed through the reset and then swallows the signal -- see the longer
+    note there. Two ports that stopped by different signals would not stop
+    alike: what a shell prints for a job differs between the two, "Stopped"
+    against bash's "Stopped(SIGSTOP)". The one thing lost is that SIGTSTP is
+    discarded when the process group is orphaned, where SIGSTOP is not: a clock
+    sent `kill -TSTP` from outside such a group stops where it would once have
+    been left running, and wants a `kill -CONT` to come back. Ctrl+Z cannot
+    reach it there in the first place -- the terminal driver discards
+    job-control signals for an orphaned group too, before any of this is
+    reached.
+    """
+    global _suspend_asked
+    _suspend_asked = False
+
+    sys.stdout.write(SHOW_CURSOR + (LEAVE_ALT if full_screen else ""))
+    sys.stdout.flush()
+    restore()
+
+    os.kill(os.getpid(), signal.SIGSTOP)
+
+    requiet()
+    sys.stdout.write((ENTER_ALT if full_screen else "") + HIDE_CURSOR)
+    sys.stdout.flush()
 
 
 def run(argv):
@@ -1751,6 +1814,7 @@ def run(argv):
     flash_until = time.monotonic() + FLASH_SECONDS
 
     signal.signal(signal.SIGTERM, _terminate)
+    signal.signal(signal.SIGTSTP, _suspend)
 
     # On a terminal, take the alternate screen and paint from its top corner.
     # Relative rewind cannot survive a resize: the terminal rewraps the frame
@@ -1779,7 +1843,7 @@ def run(argv):
     # recomputing once a second cannot miss one. See the loop below.
     face_second, faces = None, None
     try:
-        with quiet_terminal() as interactive:
+        with quiet_terminal() as (interactive, restore, requiet):
             while True:
                 now = frozen if frozen is not None else datetime.now(timezone.utc)
                 if one_shot:
@@ -1908,6 +1972,12 @@ def run(argv):
                             help_on = not help_on
                     if quitting:
                         break
+                if _suspend_asked:
+                    suspend(full_screen, restore, requiet)
+                    # Don't wait out a tick that was interrupted by a stop of
+                    # unknown length: the screen resumes blank, and the reader
+                    # should not have to watch it stay that way.
+                    continue
                 time.sleep(TICK - (time.monotonic() % TICK))
     except KeyboardInterrupt:
         pass

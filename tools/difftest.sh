@@ -40,6 +40,21 @@ sequence() {
 	frames= step=
 }
 
+# Which tz database this machine has, by the two names it goes under: the
+# +VERSION file the upstream distribution ships (macOS keeps it), and the
+# "# version" line at the top of tzdata.zi (Debian and Ubuntu keep that).
+# Neither is guaranteed, and an unknown answer is not an error -- it only costs
+# the note below.
+tzdata_version() {
+	dir=${TZDIR:-/usr/share/zoneinfo}
+	if [ -r "$dir/+VERSION" ]; then
+		cat "$dir/+VERSION"
+	elif [ -r "$dir/tzdata.zi" ]; then
+		sed -n 's/^# version \(.*\)$/\1/p
+1q' "$dir/tzdata.zi"
+	fi
+}
+
 # One golden frame: a name to store it under, then a normal check() case.
 #
 # Everything else in this file compares the two implementations against each
@@ -57,6 +72,10 @@ golden() {
 	check "$@" || true
 	if [ -n "${BLESS:-}" ]; then
 		cp "$out/go.out" "tools/golden/$name"
+		# Alongside the bytes, the tz database they hold the zone names of.
+		# Named the way zoneinfo names its own, and skipped by the orphan
+		# check below for the same reason: it is not a golden frame.
+		tzdata_version >"tools/golden/+VERSION"
 		printf 'blessed %s\n' "$name"
 		return
 	fi
@@ -69,6 +88,22 @@ golden() {
 	else
 		printf 'FAIL golden %s: the rendering changed (BLESS=1 to accept)\n' "$name"
 		diff -u "tools/golden/$name" "$out/go.out" | head -20 || true
+		# The goldens hold zone abbreviations as bytes, so a tzdata release
+		# that renames one fails them exactly as a rendering regression does.
+		# Which of the two it is, is not in the diff, and is the first thing
+		# anyone reading it wants to know -- so say it, either way round. A
+		# note on a failure and nothing otherwise: most releases move nothing
+		# the goldens can see, and one that does announces itself here.
+		now=$(tzdata_version)
+		was=$(cat tools/golden/+VERSION 2>/dev/null || true)
+		if [ -z "$now" ] || [ -z "$was" ]; then
+			:
+		elif [ "$now" = "$was" ]; then
+			printf '     tzdata is %s here, the release these were blessed under: this is the clock, not the zone names\n' "$now"
+		else
+			printf '     tzdata is %s here and these were blessed under %s: a renamed abbreviation looks exactly like this\n' \
+				"$now" "$was"
+		fi
 		fail=$((fail + 1))
 	fi
 }

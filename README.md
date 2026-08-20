@@ -572,7 +572,10 @@ BLESS=1 tools/difftest.sh    # accept the new rendering, deliberately
 ```
 
 The diff in the commit is the only review those get, so bless on purpose and
-read it.
+read it. Blessing also writes `tools/golden/+VERSION`, the tz database the
+bytes hold the zone names of: rename an abbreviation upstream and the goldens
+fail exactly as a broken renderer would, so a failing one ends by saying
+whether this machine's tzdata is the release they were blessed under.
 
 `CLOCK_FRAMES` makes a case a *sequence* rather than a frame: it draws that
 many, stepping the pinned instant by `CLOCK_STEP` milliseconds each time — one

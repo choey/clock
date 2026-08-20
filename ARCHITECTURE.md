@@ -184,9 +184,13 @@ What nothing covers, and why:
 - **A machine with no tz database.** Two error paths need one. Go will not
   give its database up even when `ZONEINFO` points nowhere — it falls back to
   the copy inside the binary — so this cannot be arranged from outside.
-- **tzdata drift.** The goldens hold zone abbreviations as bytes. A tzdata
-  release that renames one fails them, which is the right place for it to
-  surface but reads as a test failure rather than as news.
+- **tzdata drift.** The goldens hold zone abbreviations as bytes, so a release
+  that renames one fails them. That is the right place for it to surface, and
+  the diff is the wrong place to learn it from: a renamed zone and a broken
+  renderer look alike there. `tools/golden/+VERSION` records the release the
+  bytes were blessed under, and a failing golden ends by saying whether this
+  machine has a different one — the question the diff cannot answer, answered
+  either way round.
 - **A real terminal.** The pty is the same interface, but not the same
   program: an emulator's own quirks are not in scope here.
 

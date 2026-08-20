@@ -310,7 +310,8 @@ check "$SUMMER" 200 60 --cell-ratio nan ET
 # knobs that read a decimal are all here, since they now share one reader:
 # the two flags refuse, and the environment variable falls back to the default,
 # which is what it does with any value it cannot use.
-for n in " 1" "1 " "	1" "1
+for n in "1000000" "1000001" "1e6" "1e19" "99999999999999999999" \
+	" 1" "1 " "	1" "1
 " "١" "１" "١.٥" "１.５" "0x1p2" "0x1" "1_0" "1__0" "1,5" "" "+1" "-1" ".5" "5." "1e1" "1e400" "1e-400"; do
 	check "$SUMMER" 200 60 --scale "$n" UTC
 	check "$SUMMER" 200 60 --cell-ratio "$n" UTC
@@ -522,12 +523,20 @@ check 2026-07-15T09:53:07Z 200 60 ET
 check 2026-07-15T09:53:07.123Z 200 60 ET
 check 2026-13-99T09:53:07.123456Z 200 60 ET
 # The ends of the range, which the round-trip check inside freeze() cannot see
-# on its own: Go's time has a year 0 and Python's datetime starts at 1, so the
-# first of these was a drawn frame on one side and a complaint on the other.
-check 0000-01-01T00:00:00.000000Z 200 60 UTC
-check 0001-01-01T00:00:00.000000Z 200 60 UTC
-check 9999-12-31T23:59:59.999999Z 200 60 UTC
-check 1969-12-31T23:59:59.999999Z 200 60 UTC
+# on its own. Go's time has a year 0 where Python's datetime does not, so the
+# first of these drew a frame on one side and complained on the other; and the
+# instant is converted into every zone on screen, so one sitting on
+# datetime.min overflows as soon as a face west of UTC shows it -- which is why
+# the second is refused too, and why these run without a zone list as well as
+# with one. The local zone is the one that is not UTC.
+for at in 0000-01-01T00:00:00.000000Z 0001-01-01T00:00:00.000000Z \
+	0001-01-02T00:00:00.000000Z 9999-12-30T23:59:59.999999Z \
+	9999-12-31T23:59:59.999999Z 1969-12-31T23:59:59.999999Z; do
+	check "$at" 200 60 UTC
+	check "$at" 200 60
+	check "$at" 200 60 local
+	check "$at" 200 60 ET,PT,NZT
+done
 
 # Everything above compares one frame. These compare a run of them: CLOCK_FRAMES
 # steps the pinned instant and draws that many, so the diff covers what a single

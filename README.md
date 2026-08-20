@@ -466,8 +466,16 @@ lower it if it bulges sideways.
 clock --cell-ratio 2.6
 ```
 
+Both it and `--scale` stop at a million, which no font or window is anywhere
+near: past that the face's width stops being the same number in the two
+implementations, Python's integers being unbounded where Go's are 64 bits.
+
 `CLOCK_CELL_RATIO` sets the same thing, for a terminal you'd rather configure
-once than pass a flag to every time; `--cell-ratio` wins if both are set.
+once than pass a flag to every time; `--cell-ratio` wins if both are set. A
+value it cannot use — including one over that million — leaves the default
+standing, the same as an unset one: an environment variable may be stale or
+meant for another program, which is not the same as a typo on the command
+line.
 
 ```sh
 CLOCK_CELL_RATIO=2.6 python3 clock.py

@@ -192,6 +192,17 @@ func envCellRatio() float64 {
 // pinning the format keeps both implementations rejecting the same strings.
 const freezeLayout = "2006-01-02T15:04:05.000000Z"
 
+// A day inside Python's datetime range at each end. The pinned instant is
+// converted into every zone on screen, and a zone can sit 14 hours from UTC,
+// so an instant on datetime.min itself overflows the moment clock.py shows it
+// in Los Angeles -- where this implementation, whose time has no such bound,
+// draws it without comment. A day of headroom is more than the 14 hours
+// anywhere is away.
+var (
+	freezeFirst = time.Date(1, 1, 2, 0, 0, 0, 0, time.UTC)
+	freezeLast  = time.Date(9999, 12, 30, 23, 59, 59, 999999000, time.UTC)
+)
+
 // freeze pins the clock to a fixed instant: the hands never move, and space
 // has nothing to hold back. Redirected it draws that one frame and exits,
 // which is what lets the Go and Python renders be diffed byte for byte; on a
@@ -207,15 +218,18 @@ func freeze() (time.Time, bool, error) {
 	// parsers are loose in their own directions -- Go takes a one-digit month,
 	// Python takes fewer than six fractional digits -- and the round trip is
 	// the one cheap check that pins them to the same set of strings.
-	//
-	// Except at the very bottom of the range, which the round trip cannot see:
-	// Python's datetime starts at year 1 and Go's time does not, so year 0
-	// parsed here and formatted back to "0000" quite happily while clock.py
-	// refused it. One explicit bound, so the two agree over the whole range
-	// rather than over most of it.
+	// Year 0 is a spelling rather than a range: Go's time has one and Python's
+	// datetime does not, so strptime cannot read it at all and this is the
+	// message it gives -- where the round trip alone would have accepted it,
+	// "0000" formatting back to itself quite happily.
 	if err != nil || t.Year() < 1 || t.Format(freezeLayout) != v {
 		return time.Time{}, false, fmt.Errorf(
 			"CLOCK_FREEZE wants an instant like 2026-07-15T09:53:07.123456Z, got \"%s\"", v)
+	}
+	// The ends of the range, which nothing above can see. See freezeFirst.
+	if t.Before(freezeFirst) || t.After(freezeLast) {
+		return time.Time{}, false, fmt.Errorf(
+			"CLOCK_FREEZE wants an instant from 0001-01-02 to 9999-12-30, got \"%s\"", v)
 	}
 	return t, true, nil
 }
@@ -652,7 +666,8 @@ func parsePad(flag, val string) (int, error) {
 func parseRatio(val string) (float64, error) {
 	v, ok := positiveFloat(val)
 	if !ok {
-		return 0, fmt.Errorf("--cell-ratio wants a positive number, e.g. --cell-ratio 2.6, got \"%s\"", val)
+		return 0, fmt.Errorf("--cell-ratio wants a positive number up to 1000000, "+
+			"e.g. --cell-ratio 2.6, got \"%s\"", val)
 	}
 	return v, nil
 }
@@ -661,7 +676,8 @@ func parseRatio(val string) (float64, error) {
 func parseScale(val string) (float64, error) {
 	v, ok := positiveFloat(val)
 	if !ok {
-		return 0, fmt.Errorf("--scale wants auto or a positive number, e.g. --scale 1.5, got \"%s\"", val)
+		return 0, fmt.Errorf("--scale wants auto or a positive number up to 1000000, "+
+			"e.g. --scale 1.5, got \"%s\"", val)
 	}
 	return v, nil
 }
@@ -677,6 +693,15 @@ func parseScale(val string) (float64, error) {
 // language's own.
 const numberChars = "0123456789+-._eE"
 
+// numberMax is a ceiling on the two knobs that scale a face, which is not
+// about taste: the face's width is an integer derived from them, and Go's
+// integers are 64 bits where Python's are unbounded. At --cell-ratio 1e19 one
+// clock face needed 9223372036854775807 columns here and
+// 400000000000000000000 there -- the same refusal, in two different numbers. A
+// million is past any font's aspect ratio and any terminal's width, and leaves
+// the arithmetic identical either side.
+const numberMax = 1000000
+
 // positiveFloat is what --cell-ratio, --scale and CLOCK_CELL_RATIO share: the
 // same question asked three times, so a value one of them takes cannot be a
 // value another refuses.
@@ -690,7 +715,7 @@ func positiveFloat(val string) (float64, bool) {
 		}
 	}
 	v, err := strconv.ParseFloat(val, 64)
-	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 || v > numberMax {
 		return 0, false
 	}
 	return v, true

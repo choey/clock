@@ -185,6 +185,14 @@ VGAP = 1  # fewest blank rows between rows of faces
 # included, so the parse itself can still be each language's own.
 NUMBER_CHARS = frozenset("0123456789+-._eE")
 
+# A ceiling on the two knobs that scale a face, which is not about taste: the
+# face's width is an integer derived from them, and Python's integers are
+# unbounded where Go's are 64 bits. At --cell-ratio 1e19 one clock face needed
+# 400000000000000000000 columns here and 9223372036854775807 there -- the same
+# refusal, in two different numbers. A million is past any font's aspect ratio
+# and any terminal's width, and leaves the arithmetic identical either side.
+NUMBER_MAX = 1000000
+
 
 def positive_number(val):
     """A positive, finite decimal out of a string, or None.
@@ -199,7 +207,7 @@ def positive_number(val):
         value = float(val)
     except ValueError:
         return None
-    if math.isnan(value) or math.isinf(value) or value <= 0:
+    if math.isnan(value) or math.isinf(value) or value <= 0 or value > NUMBER_MAX:
         return None
     return value
 
@@ -223,7 +231,10 @@ def parse_ratio(val):
     """Read a positive, finite decimal for --cell-ratio."""
     value = positive_number(val)
     if value is None:
-        raise ClockError(f'--cell-ratio wants a positive number, e.g. --cell-ratio 2.6, got "{val}"')
+        raise ClockError(
+            "--cell-ratio wants a positive number up to 1000000, "
+            f'e.g. --cell-ratio 2.6, got "{val}"'
+        )
     return value
 
 
@@ -231,7 +242,10 @@ def parse_scale(val):
     """Read a positive, finite decimal for --scale."""
     value = positive_number(val)
     if value is None:
-        raise ClockError(f'--scale wants auto or a positive number, e.g. --scale 1.5, got "{val}"')
+        raise ClockError(
+            "--scale wants auto or a positive number up to 1000000, "
+            f'e.g. --scale 1.5, got "{val}"'
+        )
     return value
 
 # Where the grid sits when it does not fill the window, and what --halign and
@@ -239,6 +253,14 @@ def parse_scale(val):
 # error they raise comes off these lists.
 HALIGNS = ("left", "center", "right")
 VALIGNS = ("top", "center", "bottom")
+
+# A day inside datetime's range at each end. The pinned instant is converted
+# into every zone on screen, and a zone can sit 14 hours from UTC, so an
+# instant on datetime.min itself overflows the moment it is shown in Los
+# Angeles -- where Go's time, which has no such bound, draws it without
+# comment. A day of headroom is more than the 14 hours anywhere is away.
+FREEZE_FIRST = datetime(1, 1, 2)
+FREEZE_LAST = datetime(9999, 12, 30, 23, 59, 59, 999999)
 
 # The one instant format CLOCK_FREEZE accepts. Exactly six fractional digits,
 # exactly UTC: datetime stops at microseconds, and pinning the format keeps both
@@ -276,6 +298,11 @@ def freeze():
             "CLOCK_FREEZE wants an instant like 2026-07-15T09:53:07.123456Z, "
             f'got "{value}"'
         ) from None
+    if not FREEZE_FIRST <= frozen <= FREEZE_LAST:
+        raise ClockError(
+            "CLOCK_FREEZE wants an instant from 0001-01-02 to 9999-12-30, "
+            f'got "{value}"'
+        )
     return frozen.replace(tzinfo=timezone.utc)
 
 

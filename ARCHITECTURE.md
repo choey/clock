@@ -232,6 +232,15 @@ What nothing covers, and why:
   either way round.
 - **A real terminal.** The pty is the same interface, but not the same
   program: an emulator's own quirks are not in scope here.
+- **Ctrl+Z.** Neither implementation handles `SIGTSTP`, so suspending a clock
+  leaves the terminal as the signal found it — cbreak, cursor hidden, the
+  alternate screen still up — until it is resumed. `ISIG` is left on
+  deliberately, so the key is live and reaches the default handler. The
+  argument for handling it is the one `SIGTERM` and `SIGPIPE` have already
+  won: restore, then let the signal do what it does, and put the screen back
+  on `SIGCONT`. Untested and unhandled rather than decided against; it wants a
+  harness that can stop a child and resume it, which is a keytest case nobody
+  has written.
 
 
 ## The local zone

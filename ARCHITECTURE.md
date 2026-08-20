@@ -274,6 +274,21 @@ ones: the string may contain only `0123456789+-._eE`, and what survives that is
 read the same by both — exponents, underscores and all. Each language still
 does its own parse, which is where the shared cases in difftest keep it honest.
 
+## Case folding
+
+Zone names, country codes and the abbreviations are ASCII, and the matching
+that finds them folds ASCII and nothing else — `ascii_lower`/`asciiLower`
+rather than `str.lower`/`strings.ToLower`.
+
+Not pedantry: the two languages fold differently. Go applies Unicode's simple
+case mappings and Python its full ones, and they part company on U+0130, the
+Turkish dotted capital I. Go lowercases it to a plain `i`, Python to an `i`
+with a combining dot after it. So `clock İstanbul` drew Europe/Istanbul under
+Go and was refused as an unknown zone under Python, which is the same class of
+bug as the decimals above: a spelling one implementation takes and the other
+does not. Folding ASCII only makes both refuse it, and `Istanbul` still works
+in any ASCII case anyone types it in.
+
 ## ZIP resolution
 
 See [ZIP code accuracy](README.md#zip-code-accuracy) in the README for what

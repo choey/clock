@@ -362,6 +362,25 @@ COLOR_WHENS = ("always", "auto", "never", "off")
 DOT_BITS = ((0x01, 0x02, 0x04, 0x40), (0x08, 0x10, 0x20, 0x80))
 
 
+def ascii_lower(s):
+    """Lowercase A-Z and leave everything else exactly as it is.
+
+    Zone names, country codes and the abbreviations are all ASCII, so none of
+    the matching here wants Unicode's rules -- which is as well, since the two
+    languages do not have the same ones. Python's str.lower() applies the full
+    mappings, where Go's applies the simple ones, and they part company on
+    U+0130, the Turkish dotted capital I: Python gives it an i and a combining
+    dot, Go a plain i. So "Istanbul" spelt with one drew a clock under Go and
+    was refused as an unknown zone under Python.
+    """
+    return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in s)
+
+
+def ascii_upper(s):
+    """Uppercase a-z and leave everything else exactly as it is; see ascii_lower."""
+    return "".join(chr(ord(c) - 32) if "a" <= c <= "z" else c for c in s)
+
+
 def snap(v):
     """Quantise a dot coordinate to 1e-9 before anything rounds it to a grid.
 
@@ -893,13 +912,13 @@ def suffix_zones(token):
     data, found = zone_tab()
     if not found:
         return [], False
-    want = "/" + token.lower()
+    want = "/" + ascii_lower(token)
     out = []
     for line in data.split("\n"):
         if not line or line.startswith("#"):
             continue
         fields = line.split("\t")
-        if len(fields) >= 3 and fields[2].lower().endswith(want):
+        if len(fields) >= 3 and ascii_lower(fields[2]).endswith(want):
             out.append(fields[2])
     return out, True
 
@@ -981,11 +1000,11 @@ def resolve_zone(token, at):
     """
     if token.startswith("/") or ".." in token:
         raise ClockError(f'"{token}" is not a zone name')
-    if token.lower() == "local":
+    if ascii_lower(token) == "local":
         return local_zone()
     if token.isascii() and token.isdigit():
         return zip_zone(token)
-    up = token.upper()
+    up = ascii_upper(token)
     for name, target in ZONE_ALIASES:
         if name == up:
             try:
@@ -1039,7 +1058,7 @@ def zone_label(abbr, tokens):
     """
     if len(tokens) < 2:
         return abbr
-    return "/".join([abbr] + [t for t in tokens if t.upper() != abbr.upper()])
+    return "/".join([abbr] + [t for t in tokens if ascii_upper(t) != ascii_upper(abbr)])
 
 
 def merge_zones(zones, now):
@@ -1061,7 +1080,7 @@ def merge_zones(zones, now):
             index[key] = len(out)
             out.append((key[0], [], zone))
         _, tokens, _ = out[index[key]]
-        if token and not any(token.upper() == seen.upper() for seen in tokens):
+        if token and not any(ascii_upper(token) == ascii_upper(seen) for seen in tokens):
             tokens.append(token)
     return [(zone_label(abbr, tokens), zone) for abbr, tokens, zone in out]
 

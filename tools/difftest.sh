@@ -210,6 +210,18 @@ for zones in Berlin Jakarta berlin JAKARTA Kathmandu Bogota New_York NEW_YORK \
 	check "$WINTER" 200 60 "$zones"
 done
 
+# Case folding, which the two languages do not agree about beyond ASCII.
+# "\u0130stanbul" -- the Turkish dotted capital I -- lowercases to a plain i under
+# Go's simple mappings and to an i with a combining dot under Python's full
+# ones, so it used to draw Europe/Istanbul under one implementation and be
+# refused as unknown by the other. Both fold ASCII only now, and everything
+# below has to be refused or accepted by both alike. The last three are the
+# other end of the same folding: a token that repeats a face's own name in
+# another case is not a second name for it, and the label says so.
+for zones in Istanbul ISTANBUL istanbul IsTaNbUl İstanbul İSTANBUL 	İndiana/İndianapolis Indiana/İndianapolis local LOCAL Local LoCaL 	ｅｔ ＵＴＣ Ｂerlin et Et eT ET,et UTC,utc ET,ET,et; do
+	check "$SUMMER" 200 60 "$zones"
+done
+
 # Every city in the tz database is unique today, so ambiguity only shows up
 # against a zone.tab written for the purpose: two zones sharing a tail, and
 # ten, which is past the eight the message lists before it starts counting.

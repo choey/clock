@@ -324,6 +324,41 @@ func newCanvas(w, h int) *canvas {
 	}
 }
 
+// asciiLower lowercases A-Z and leaves everything else exactly as it is.
+//
+// Zone names, country codes and the abbreviations are all ASCII, so none of
+// the matching here wants Unicode's rules -- which is as well, since the two
+// languages do not have the same ones. Go applies the simple case mappings
+// where Python applies the full ones, and they part company on U+0130, the
+// Turkish dotted capital I: Go gives it a plain i, Python an i and a combining
+// dot. So "Istanbul" spelt with one drew a clock here and was refused as an
+// unknown zone there.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
+// asciiUpper uppercases a-z and leaves everything else alone; see asciiLower.
+func asciiUpper(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'a' && c <= 'z' {
+			b[i] = c - 'a' + 'A'
+		}
+	}
+	return string(b)
+}
+
+// asciiEqualFold is strings.EqualFold with the same ASCII-only reach.
+func asciiEqualFold(a, b string) bool {
+	return asciiLower(a) == asciiLower(b)
+}
+
 // snap quantises a dot coordinate to 1e-9 before anything rounds it to a grid
 // position. Go computes Sin/Cos in software while Python calls the platform
 // libm; the two agree to well under an ulp but not bit for bit, e.g.
@@ -1020,14 +1055,14 @@ func suffixZones(token string) ([]string, bool) {
 	if !found {
 		return nil, false
 	}
-	want := "/" + strings.ToLower(token)
+	want := "/" + asciiLower(token)
 	var out []string
 	for _, line := range strings.Split(data, "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		fields := strings.Split(line, "\t")
-		if len(fields) >= 3 && strings.HasSuffix(strings.ToLower(fields[2]), want) {
+		if len(fields) >= 3 && strings.HasSuffix(asciiLower(fields[2]), want) {
 			out = append(out, fields[2])
 		}
 	}
@@ -1104,13 +1139,13 @@ func resolveZone(token string, at time.Time) (*time.Location, error) {
 	if strings.HasPrefix(token, "/") || strings.Contains(token, "..") {
 		return nil, fmt.Errorf("\"%s\" is not a zone name", token)
 	}
-	if strings.EqualFold(token, "local") {
+	if asciiEqualFold(token, "local") {
 		return localZone()
 	}
 	if allDigits(token) {
 		return ziptz.Location(token)
 	}
-	up := strings.ToUpper(token)
+	up := asciiUpper(token)
 	for _, a := range zoneAliases {
 		if a.name == up {
 			loc, err := time.LoadLocation(a.zone)
@@ -1197,7 +1232,7 @@ func zoneLabel(abbr string, tokens []string) string {
 	}
 	parts := []string{abbr}
 	for _, t := range tokens {
-		if !strings.EqualFold(t, abbr) {
+		if !asciiEqualFold(t, abbr) {
 			parts = append(parts, t)
 		}
 	}
@@ -1236,7 +1271,7 @@ func mergeZones(zones []request, now time.Time) []dial {
 		}
 		dup := false
 		for _, prev := range g.tokens {
-			if strings.EqualFold(prev, z.token) {
+			if asciiEqualFold(prev, z.token) {
 				dup = true
 				break
 			}

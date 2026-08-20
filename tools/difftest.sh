@@ -529,8 +529,15 @@ check 2026-13-99T09:53:07.123456Z 200 60 ET
 # datetime.min overflows as soon as a face west of UTC shows it -- which is why
 # the second is refused too, and why these run without a zone list as well as
 # with one. The local zone is the one that is not UTC.
+#
+# The early years are here for a third reason: %Y pads to four digits under
+# one C library and not another, so the canonical spelling clock.py compares
+# against is written out by hand rather than handed back to strftime. Every
+# year before 1000 was a different answer on Linux than on a Mac.
 for at in 0000-01-01T00:00:00.000000Z 0001-01-01T00:00:00.000000Z \
-	0001-01-02T00:00:00.000000Z 9999-12-30T23:59:59.999999Z \
+	0001-01-02T00:00:00.000000Z 0010-01-02T00:00:00.000000Z \
+	0100-01-02T00:00:00.000000Z 0999-06-15T12:00:00.000000Z \
+	1-01-02T00:00:00.000000Z 9999-12-30T23:59:59.999999Z \
 	9999-12-31T23:59:59.999999Z 1969-12-31T23:59:59.999999Z; do
 	check "$at" 200 60 UTC
 	check "$at" 200 60

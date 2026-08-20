@@ -290,7 +290,18 @@ def freeze():
         # parsers are loose in their own directions -- strptime takes fewer
         # than six fractional digits, Go takes a one-digit month -- and the
         # round trip is the one cheap check that pins them to the same strings.
-        canonical = frozen.strftime(FREEZE_FORMAT) == value
+        #
+        # Written out rather than handed back to strftime, which is the C
+        # library's and does not agree with itself across platforms: %Y pads a
+        # year to four digits on macOS and not under glibc, so "0001-01-01"
+        # round-tripped on one and came back as "1-01-01" on the other. Every
+        # year before 1000 was a different clock on Linux than on a Mac, and
+        # than Go on either.
+        canonical = value == (
+            f"{frozen.year:04d}-{frozen.month:02d}-{frozen.day:02d}"
+            f"T{frozen.hour:02d}:{frozen.minute:02d}:{frozen.second:02d}"
+            f".{frozen.microsecond:06d}Z"
+        )
     except ValueError:
         canonical = False
     if not canonical:

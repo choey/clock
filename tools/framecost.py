@@ -18,6 +18,7 @@ machine's other work and the fast ones are the clock's.
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -64,8 +65,12 @@ def timed(argv, zones, frames):
 def main():
     verbose = "-v" in sys.argv[1:]
     print("== building ==")
-    subprocess.run(["go", "build", "-o", "clock-framecost", "."], cwd=ROOT, check=True)
-    impls = (("go", ["./clock-framecost"]), ("py", [sys.executable, "clock.py"]))
+    # Into a directory of its own rather than the tree, so nothing is left
+    # behind by a Ctrl+C and two runs cannot collide over one name.
+    built = tempfile.TemporaryDirectory(prefix="clock-framecost.")
+    binary = str(Path(built.name) / "clock")
+    subprocess.run(["go", "build", "-o", binary, "."], cwd=ROOT, check=True)
+    impls = (("go", [binary]), ("py", [sys.executable, "clock.py"]))
     try:
         print(f"\n{COLS}x{LINES}, {FRAMES - 1} frames, best of {RUNS}\n")
         print(f"{'':4} {'faces':>5} {'startup':>9} {'per frame':>10} {'of a tick':>10}")
@@ -81,7 +86,7 @@ def main():
                     f"{per * 1000:9.3f}ms {per * 1000 / TICK_MS:9.1%}"
                 )
     finally:
-        (ROOT / "clock-framecost").unlink(missing_ok=True)
+        built.cleanup()
 
     # Neither clock sleeps for a tick after the work, which would make the
     # period the tick plus the frame: clock.py sleeps to the next multiple of

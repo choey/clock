@@ -24,6 +24,7 @@ import os
 import random
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -85,6 +86,12 @@ FLAGS = ("-n", "--per-row", "--scale", "--cell-ratio", "--hpad", "--vpad",
 # comparable at all.
 TZISH = ("UTC", "Asia/Tokyo", ":Asia/Tokyo", "", "Bogus/Zone", "PST8PDT,M3.2.0,M11.1.0",
          "<+07>-7", "GMT+5", "/usr/share/zoneinfo/Asia/Tokyo", "EST5EDT")
+# The sequence hooks, which have parsers of their own. Only small counts are
+# valid here on purpose: CLOCK_FRAMES takes up to nine digits, and a case that
+# asks for a hundred million frames is a case that never comes back.
+FRAMEISH = ("1", "2", "3", "0", "-1", "01", " 3", "3 ", "1e1", "١", "3.0", "+3", "")
+STEPISH = ("0", "19", "1", "250", "-1", "١٩", "19 ", "1e1", "")
+
 FREEZEISH = (FROZEN, "2026-01-15T09:53:07.123456Z", "2026-11-01T05:59:59.900000Z",
              "0000-01-01T00:00:00.000000Z", "0001-01-01T00:00:00.000000Z",
              "9999-12-31T23:59:59.999999Z", "1969-12-31T23:59:59.999999Z",
@@ -132,6 +139,10 @@ def case(rng):
         env["CLOCK_CELL_RATIO"] = rng.choice(NUMBERISH)
     if rng.random() < 0.1:
         env["NO_COLOR"] = rng.choice(("", "1"))
+    if rng.random() < 0.15:
+        env["CLOCK_FRAMES"] = rng.choice(FRAMEISH)
+    if rng.random() < 0.15:
+        env["CLOCK_STEP"] = rng.choice(STEPISH)
     return env, argv
 
 
@@ -161,13 +172,20 @@ def main():
     count = int(args[args.index("--cases") + 1]) if "--cases" in args else CASES
     seed = int(args[args.index("--seed") + 1]) if "--seed" in args else SEED
 
-    subprocess.run(["go", "build", "-o", "clock-argfuzz", "."], cwd=ROOT, check=True)
+    # Into a directory of its own, not the tree: two of these run at once when
+    # someone is working a seed, and a binary named after the tool is a binary
+    # the other run deletes out from under this one. It also cannot be left
+    # behind by a Ctrl+C, which is the other half of why keytest needs a line
+    # in .gitignore and this does not.
+    built = tempfile.TemporaryDirectory(prefix="clock-argfuzz.")
+    binary = str(Path(built.name) / "clock")
+    subprocess.run(["go", "build", "-o", binary, "."], cwd=ROOT, check=True)
     rng = random.Random(seed)
     passed = failed = 0
     try:
         for _ in range(count):
             env, argv = case(rng)
-            go = run(["./clock-argfuzz"] + argv, env)
+            go = run([binary] + argv, env)
             py = run([sys.executable, "clock.py"] + argv, env)
             if go == py:
                 passed += 1
@@ -184,7 +202,7 @@ def main():
                         print(f"     first byte that differs: {i}")
                         break
     finally:
-        (ROOT / "clock-argfuzz").unlink(missing_ok=True)
+        built.cleanup()
 
     print(f"\n{passed} agreed, {failed} differed (seed {seed}, {count} cases)")
     return 1 if failed else 0

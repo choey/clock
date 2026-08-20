@@ -53,6 +53,12 @@ HOME = "\x1b[H"
 ENTER_ALT = "\x1b[?1049h"
 LEAVE_ALT = "\x1b[?1049l"
 
+# The release this source belongs to. clock.go and pyproject.toml carry the
+# same string, and difftest holds all three together: a clock that cannot say
+# what it is turns every bug report into a round trip, and one that says the
+# wrong thing is worse than one that says nothing at all.
+VERSION = "0.1.0"
+
 USAGE = """clock - analog terminal clocks
 
 usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
@@ -79,6 +85,7 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
   --scale N          resize every face by this factor; auto (default) fills
                       the window, at minimum padding
   -h, --help         this message
+  --version          print the version and exit
 
 A zone is an IANA name (Europe/Berlin), the city off the end of one where
 that is unambiguous (Berlin, Jakarta), a regional abbreviation (ET CT MT PT
@@ -513,6 +520,10 @@ class HelpRequested(Exception):
     """-h or --help: print the usage text and stop, successfully."""
 
 
+class VersionRequested(Exception):
+    """--version: print the version and stop, successfully."""
+
+
 def parse_count(s, what, limit):
     """Read a positive whole number, strictly.
 
@@ -629,6 +640,13 @@ def parse_args(argv):
                 if sep:
                     raise ClockError("--no-color takes no value")
                 color_when = "never"
+            elif name == "version":
+                # Read where it is found, like --help: everything before it on
+                # the command line still has to parse, everything after it is
+                # never looked at.
+                if sep:
+                    raise ClockError("--version takes no value")
+                raise VersionRequested
             elif name == "day":
                 day_when = parse_choice("day", val, WHENS) if sep else "always"
             elif name == "no-day":
@@ -1799,6 +1817,8 @@ def main():
         run(sys.argv[1:])
     except HelpRequested:
         sys.stdout.write(USAGE)
+    except VersionRequested:
+        sys.stdout.write(f"clock {VERSION}\n")
     except ClockError as exc:
         sys.stderr.write(f"clock: {exc}\n")
         raise SystemExit(1)

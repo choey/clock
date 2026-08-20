@@ -259,6 +259,16 @@ check "$SUMMER" 200 60 --scale auto ET
 check "$SUMMER" 200 60 --help
 check "$SUMMER" 200 60 -h
 check "$SUMMER" 200 60 ET --help
+check "$SUMMER" 200 60 --version
+check "$SUMMER" 200 60 ET --version
+check "$SUMMER" 200 60 --version=1
+check "$SUMMER" 200 60 --version 1
+check "$SUMMER" 200 60 -- --version
+# --version stops where it is found, so a bad flag before it still complains
+# and a bad flag after it is never reached -- the same rule --help follows,
+# and the pair of cases that pins which side of it wins.
+check "$SUMMER" 200 60 --bogus --version
+check "$SUMMER" 200 60 --version --bogus
 
 # --color=always colours a pipe, which is the only way to diff the escapes;
 # auto leaves one plain, so every other case here renders unchanged.
@@ -607,20 +617,32 @@ else
 	fail=$((fail + 1))
 fi
 
-# ziptz says its version in three places, and a release that disagrees with
-# itself is a bug report waiting to happen: Go's const, Python's dunder, and
-# the one pip stamps into the wheel.
-go_ver=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' ziptz/ziptz.go)
-py_ver=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' ziptz/ziptz.py)
-toml_ver=$(sed -n 's/^version = "\(.*\)"$/\1/p' ziptz/pyproject.toml)
-if [ -n "$go_ver" ] && [ "$go_ver" = "$py_ver" ] && [ "$go_ver" = "$toml_ver" ]; then
-	pass=$((pass + 1))
-	[ -z "$verbose" ] || printf 'ok   ziptz version agrees everywhere (%s)\n' "$go_ver"
-else
-	printf 'FAIL ziptz version differs: go=%s py=%s pyproject=%s\n' \
-		"$go_ver" "$py_ver" "$toml_ver"
-	fail=$((fail + 1))
-fi
+# Each of the two programs says its version in three places, and a release
+# that disagrees with itself is a bug report waiting to happen: Go's const,
+# Python's, and the one pip stamps into the wheel. The --version cases above
+# already prove the two clocks print the same string as each other; this is
+# what proves it is the string the package was built under.
+version_agrees() {
+	what=$1 go_ver=$2 py_ver=$3 toml_ver=$4
+	if [ -n "$go_ver" ] && [ "$go_ver" = "$py_ver" ] && [ "$go_ver" = "$toml_ver" ]; then
+		pass=$((pass + 1))
+		[ -z "$verbose" ] || printf 'ok   %s version agrees everywhere (%s)\n' "$what" "$go_ver"
+	else
+		printf 'FAIL %s version differs: go=%s py=%s pyproject=%s\n' \
+			"$what" "$go_ver" "$py_ver" "$toml_ver"
+		fail=$((fail + 1))
+	fi
+}
+
+version_agrees ziptz \
+	"$(sed -n 's/^const Version = "\(.*\)"$/\1/p' ziptz/ziptz.go)" \
+	"$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' ziptz/ziptz.py)" \
+	"$(sed -n 's/^version = "\(.*\)"$/\1/p' ziptz/pyproject.toml)"
+
+version_agrees clock \
+	"$(sed -n 's/^const version = "\(.*\)"$/\1/p' clock.go)" \
+	"$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' clock.py)" \
+	"$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
 
 sed -n "s/^	'\(.\)': \"\([A-Za-z_/]*\)\",\$/\1=\2/p" ziptz/ziptz.go >"$out/go.zip"
 sed -n 's/^    "\(.\)": "\([A-Za-z_/]*\)",$/\1=\2/p' ziptz/ziptz.py >"$out/py.zip"

@@ -58,6 +58,12 @@ const (
 	symmetryWindow = 8
 )
 
+// version is the release this source belongs to. clock.py and pyproject.toml
+// carry the same string, and difftest holds all three together: a clock that
+// cannot say what it is turns every bug report into a round trip, and one that
+// says the wrong thing is worse than one that says nothing at all.
+const version = "0.1.0"
+
 const usage = `clock - analog terminal clocks
 
 usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
@@ -84,6 +90,7 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
   --scale N          resize every face by this factor; auto (default) fills
                       the window, at minimum padding
   -h, --help         this message
+  --version          print the version and exit
 
 A zone is an IANA name (Europe/Berlin), the city off the end of one where
 that is unambiguous (Berlin, Jakarta), a regional abbreviation (ET CT MT PT
@@ -524,6 +531,9 @@ func face(t time.Time, color bool) []string {
 // errHelp asks the caller to print the usage text and stop, successfully.
 var errHelp = errors.New("help requested")
 
+// errVersion asks the caller to print the version and stop, successfully.
+var errVersion = errors.New("version requested")
+
 // parseCount reads a positive whole number, strictly. Not strconv.Atoi, which
 // takes a leading "+", and emphatically not Python's int(), which also takes
 // surrounding space, underscores and non-ASCII digits: the two parsers have to
@@ -689,6 +699,14 @@ func parseArgs(argv []string) (int, string, string, string, geometry, bool, floa
 					return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("--no-color takes no value")
 				}
 				colorWhen = "never"
+			case "version":
+				// Read where it is found, like --help: everything before it on
+				// the command line still has to parse, everything after it is
+				// never looked at.
+				if haveVal {
+					return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("--version takes no value")
+				}
+				return 0, "", "", "", geo, false, 0, 0, false, false, errVersion
 			case "day":
 				dayWhen = "always"
 				if haveVal {
@@ -1925,6 +1943,10 @@ func run() error {
 	wantPerRow, zoneList, colorWhen, dayWhen, geo, quiet, cellRatioFlag, scaleFlag, scaleAuto, perRowAuto, err := parseArgs(os.Args[1:])
 	if errors.Is(err, errHelp) {
 		fmt.Print(usage)
+		return nil
+	}
+	if errors.Is(err, errVersion) {
+		fmt.Printf("clock %s\n", version)
 		return nil
 	}
 	if err != nil {

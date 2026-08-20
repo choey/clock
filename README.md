@@ -74,6 +74,12 @@ start. A clone needs nothing installed either — `ziptz/` is a package, and
 `clock.py` finds its own directory first — so `python3 clock.py 94110` works
 straight out of a checkout.
 
+However it got there, `clock --version` says which release you have, and both
+implementations print the same line. `ziptz` is released on its own cycle and
+answers separately — `ziptz.Version` in Go, `ziptz.__version__` in Python — so
+a ZIP that resolves to the wrong zone is a question about that version rather
+than this one.
+
 ## Usage
 
 ```

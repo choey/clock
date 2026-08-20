@@ -233,6 +233,27 @@ What nothing covers, and why:
   program: an emulator's own quirks are not in scope here.
 
 
+## The local zone
+
+`TZ` is the one input where the two standard libraries answer a different
+question. Go looks up whatever `TZ` names in the tz database and falls back to
+UTC when there is no such file; Python hands the question to the C library,
+which reads the POSIX rule form too — `PST8PDT,M3.2.0,M11.1.0`, `<+07>-7`,
+`GMT+5`. So a rule string made one clock read Pacific and the other UTC, seven
+hours apart, with nothing on either screen to suggest a disagreement.
+
+Closing it in the direction of Python means writing a `tzset` — the Go standard
+library has one, for the footer of a TZif file, and does not export it — and
+then keeping it bug-for-bug with whichever libc is underneath. So both refuse
+instead, in `localZone`/`local_zone`, which is the same trade the Windows
+message makes: a thing this clock cannot do in both languages is a thing it
+says it cannot do. A `TZ` that has to be looked up and is not found is refused
+along with it, which also fixes the quieter half — a typo used to draw UTC and
+say nothing.
+
+Only where the local zone is wanted, though: no zone list, or the `local`
+token. `clock UTC` never asks `TZ` anything and is not refused for it.
+
 ## ZIP resolution
 
 See [ZIP code accuracy](README.md#zip-code-accuracy) in the README for what

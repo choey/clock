@@ -1048,6 +1048,34 @@ func unknownZone(token string) error {
 		token, aliasNames())
 }
 
+// localZone is time.Local, once TZ is something both ports read the same way.
+//
+// Go asks the tz database for whatever TZ names and falls back to UTC when it
+// has no such file; Python leaves the question to the C library, which also
+// reads the POSIX rule form -- "PST8PDT,M3.2.0,M11.1.0", "<+07>-7", "GMT+5".
+// So a POSIX rule makes one clock read Pacific and the other UTC, seven hours
+// apart, both of them sure. There is no fixing that from here without writing
+// a tzset the standard library does not export, so say so instead: this is the
+// Windows message's argument, one environment variable down.
+//
+// Only a TZ that has to be looked up is checked. Unset, empty (which POSIX
+// reads as UTC) and an absolute path all mean the same thing to both.
+func localZone() (*time.Location, error) {
+	tz, ok := os.LookupEnv("TZ")
+	if !ok {
+		return time.Local, nil
+	}
+	tz = strings.TrimPrefix(tz, ":")
+	if tz == "" || strings.HasPrefix(tz, "/") {
+		return time.Local, nil
+	}
+	if _, err := time.LoadLocation(tz); err != nil {
+		return nil, fmt.Errorf("TZ=\"%s\" is not a zone name, and a POSIX TZ rule is not "+
+			"something both clocks read alike; name a zone as an argument instead", tz)
+	}
+	return time.Local, nil
+}
+
 // resolveZone turns one token into a location. Order matters: the alias table
 // is consulted before the tz database only for names the database lacks, the
 // fixed-offset table only after it so that real zones win, and
@@ -1059,7 +1087,7 @@ func resolveZone(token string, at time.Time) (*time.Location, error) {
 		return nil, fmt.Errorf("\"%s\" is not a zone name", token)
 	}
 	if strings.EqualFold(token, "local") {
-		return time.Local, nil
+		return localZone()
 	}
 	if allDigits(token) {
 		return ziptz.Location(token)
@@ -1119,7 +1147,11 @@ type dial struct {
 // resolveZones turns the comma-separated list into requests, left to right.
 func resolveZones(list string, at time.Time) ([]request, error) {
 	if list == "" {
-		return []request{{"", time.Local}}, nil
+		loc, err := localZone()
+		if err != nil {
+			return nil, err
+		}
+		return []request{{"", loc}}, nil
 	}
 	tokens := strings.Split(list, ",")
 	out := make([]request, 0, len(tokens))

@@ -560,6 +560,70 @@ for unfrozen in "CLOCK_FRAMES=3" "CLOCK_STEP=19" "CLOCK_FRAMES=1 CLOCK_STEP=19";
 	fi
 done
 
+# TZ decides the local zone, which is what a clock with no zone list draws and
+# what the "local" token names. check() cannot carry it: it would have to set
+# one for every case, and an unset TZ is itself one of the things being
+# compared here. So this section runs the pair directly.
+#
+# The divergence it exists for: Go looks TZ up in the tz database and falls
+# back to UTC when there is no such file, while Python leaves it to the C
+# library, which also reads the POSIX rule form. TZ=PST8PDT,M3.2.0,M11.1.0 drew
+# Pacific under one clock and UTC under the other, seven hours apart, silently.
+echo "== the TZ environment =="
+tzcase() {
+	tzval=$1
+	shift
+	if env CLOCK_FREEZE="$SUMMER" COLUMNS=80 LINES=24 TZ="$tzval" \
+		"$out/clock" "$@" >"$out/go.out" 2>"$out/go.err" </dev/null
+	then go_status=0
+	else go_status=$?
+	fi
+	if env CLOCK_FREEZE="$SUMMER" COLUMNS=80 LINES=24 TZ="$tzval" \
+		python3 clock.py "$@" >"$out/py.out" 2>"$out/py.err" </dev/null
+	then py_status=0
+	else py_status=$?
+	fi
+	cat "$out/py.err" >>"$out/all.err"
+	if cmp -s "$out/go.out" "$out/py.out" && cmp -s "$out/go.err" "$out/py.err" &&
+		[ "$go_status" = "$py_status" ]; then
+		pass=$((pass + 1))
+		[ -z "$verbose" ] || printf 'ok   [TZ=%s] %s\n' "$tzval" "$*"
+	else
+		printf 'FAIL [TZ=%s] %s\n' "$tzval" "$*"
+		diff -u "$out/py.out" "$out/go.out" | head -10 || true
+		diff -u "$out/py.err" "$out/go.err" | head -10 || true
+		[ "$go_status" = "$py_status" ] || printf '     status go=%s py=%s\n' "$go_status" "$py_status"
+		fail=$((fail + 1))
+	fi
+}
+
+# Read the same by both: a zone name, the same with the colon POSIX allows in
+# front of it, empty (which POSIX reads as UTC), and one of the names that
+# looks like a POSIX rule and is really a file in the database.
+tzcase Asia/Tokyo
+tzcase :Asia/Tokyo
+tzcase ""
+tzcase EST5EDT
+tzcase Asia/Tokyo local
+# An absolute path is handed to the platform by both, so it is only a case
+# where the platform has the file.
+[ -f /usr/share/zoneinfo/Asia/Tokyo ] && tzcase /usr/share/zoneinfo/Asia/Tokyo
+
+# Read alike only because both now refuse: a POSIX rule with a daylight saving
+# transition, one without, one that looks like a zone name, and a name the
+# database does not have.
+tzcase "PST8PDT,M3.2.0,M11.1.0"
+tzcase "<+07>-7"
+tzcase "GMT+5"
+tzcase Bogus/Zone
+
+# Refused only where the local zone is actually wanted: a list that names its
+# zones outright never asks TZ anything.
+tzcase Bogus/Zone UTC
+tzcase Bogus/Zone ET,PT
+tzcase Bogus/Zone local
+tzcase Bogus/Zone ET,local
+
 # One of each kind of picture the clock can draw, kept as bytes. Few enough to
 # read in a diff, spread wide enough that most rendering changes touch one.
 echo "== golden frames =="

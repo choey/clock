@@ -927,6 +927,37 @@ def unknown_zone(token):
     )
 
 
+def local_zone():
+    """None, meaning the platform's local zone -- once TZ is one both ports read.
+
+    Go asks the tz database for whatever TZ names and falls back to UTC when it
+    has no such file; Python leaves the question to the C library, which also
+    reads the POSIX rule form -- "PST8PDT,M3.2.0,M11.1.0", "<+07>-7", "GMT+5".
+    So a POSIX rule makes one clock read Pacific and the other UTC, seven hours
+    apart, both of them sure. There is no fixing that from here without writing
+    a tzset the Go standard library does not export, so say so instead: this is
+    the Windows message's argument, one environment variable down.
+
+    Only a TZ that has to be *looked up* is checked. Unset, empty (which POSIX
+    reads as UTC) and an absolute path all mean the same thing to both.
+    """
+    tz = os.environ.get("TZ")
+    if tz is None:
+        return None
+    if tz.startswith(":"):
+        tz = tz[1:]
+    if tz == "" or tz.startswith("/"):
+        return None
+    try:
+        ZoneInfo(tz)
+    except Exception:
+        raise ClockError(
+            f'TZ="{tz}" is not a zone name, and a POSIX TZ rule is not something '
+            f"both clocks read alike; name a zone as an argument instead"
+        ) from None
+    return None
+
+
 def resolve_zone(token, at):
     """Turn one token into a tzinfo, or None meaning the system's local zone.
 
@@ -940,7 +971,7 @@ def resolve_zone(token, at):
     if token.startswith("/") or ".." in token:
         raise ClockError(f'"{token}" is not a zone name')
     if token.lower() == "local":
-        return None
+        return local_zone()
     if token.isascii() and token.isdigit():
         return zip_zone(token)
     up = token.upper()
@@ -977,7 +1008,7 @@ def resolve_zones(zone_list, at):
     spellings that asked for it, not just the zone it landed on.
     """
     if not zone_list:
-        return [("", None)]
+        return [("", local_zone())]
     out = []
     for token in zone_list.split(","):
         token = token.strip(" \t")

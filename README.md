@@ -322,7 +322,29 @@ Resolved in this order, first match winning:
 | `PST` `PDT` `EDT` `CST` `CDT` `MDT` `AKST` `AKDT` `HDT` | that exact offset | a fixed clock that never shifts |
 | `JP` `GB` `DE` | that country's zone | 2-letter ISO code, via `zone.tab` |
 | `94110` `941` | the zone that ZIP is in | US only |
-| `local` | your system zone | |
+| `local` | your system zone | `TZ` decides it; see below |
+
+### Your system zone
+
+With no zone list, and for the `local` token, the clock draws whatever `TZ`
+says — or `/etc/localtime` where `TZ` is unset, as everything else does.
+
+`TZ` has a second form, though, which this clock refuses: the POSIX rule,
+`PST8PDT,M3.2.0,M11.1.0` or `<+07>-7` or `GMT+5`, spelling out the offsets and
+the transition dates rather than naming a zone. The C library reads those and
+Go's standard library does not, so the two implementations here would disagree
+by whole hours about what time it is, each of them certain. Rather than have
+one of them quietly wrong, both stop:
+
+```
+clock: TZ="PST8PDT,M3.2.0,M11.1.0" is not a zone name, and a POSIX TZ rule
+is not something both clocks read alike; name a zone as an argument instead
+```
+
+Which is the fix: `clock PT` draws Pacific whatever `TZ` says. A `TZ` naming a
+zone the database does not have — a typo, usually — is refused the same way,
+where before it silently drew UTC. Nothing is checked when it is not needed: a
+zone list that names its zones outright never asks `TZ` anything.
 
 ### The city alone
 

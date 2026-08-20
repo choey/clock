@@ -536,6 +536,11 @@ on screen before it and the last frame does not linger — the same as `less` or
 `vim`. Redirect to a file to keep a frame, or hold one with space and
 photograph it.
 
+Piping into something that stops reading — `clock | head` — is an ordinary way
+to end a clock and is treated as one: both implementations stop without a word,
+give the terminal back, and exit 141, the status a shell reports for a filter
+killed by `SIGPIPE`.
+
 A `kill -9` skips the terminal restore and leaves echo off and the alternate
 screen active; `stty sane` and `printf '\033[?1049l'` fix it.
 

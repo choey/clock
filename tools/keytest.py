@@ -48,6 +48,10 @@ SHOW_CURSOR = b"\x1b[?25h"
 # quick. Nothing depends on how many land -- only that at least one does.
 SETTLE = 0.25
 
+# What both ports exit with when the reader goes away; PIPE_STATUS in clock.py
+# and pipeStatus in clock.go say the same thing, and this holds them to it.
+PIPE_STATUS = 141
+
 
 def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None):
     """One clock under a pty, fed `keys`, returning everything it painted.
@@ -378,6 +382,52 @@ def not_a_terminal(name):
     report(True, name)
 
 
+def reader_leaves(name):
+    """`clock | head`: the reader goes away and the clock is still writing.
+
+    Both ports have to end this the same way, and the way is: no traceback, no
+    complaint, exit 141 -- and the terminal handed back. stdin here is a
+    terminal even though stdout is a pipe, which is the ordinary shape of a
+    pipeline typed at a prompt, and it means the clock has put that terminal
+    into cbreak and owes it back. Nothing in difftest can reach this: it needs
+    a reader that leaves, a terminal that is not stdout, and the willingness
+    to stop waiting for a clock that never notices.
+    """
+    for impl, argv in IMPLS:
+        master, slave = pty.openpty()
+        read_fd, write_fd = os.pipe()
+        env = dict(os.environ, COLUMNS=str(COLS), LINES=str(LINES), TERM="xterm-256color")
+        env.pop("CLOCK_FREEZE", None)  # live: a pinned clock would be gone already
+        proc = subprocess.Popen(
+            argv + ["-q", "UTC"], stdin=slave, stdout=write_fd,
+            stderr=subprocess.PIPE, env=env, cwd=ROOT,
+        )
+        os.close(write_fd)
+        os.read(read_fd, 1 << 16)  # one frame, then stop listening
+        os.close(read_fd)
+        try:
+            status = proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            status = "hung"
+        err = proc.stderr.read()
+        proc.stderr.close()
+        mode = termios.tcgetattr(slave)
+        os.close(master)
+        os.close(slave)
+
+        if status != PIPE_STATUS:
+            report(False, name, f"{impl}: exit status {status}, wanted {PIPE_STATUS}")
+            return
+        if err:
+            report(False, name, f"{impl} said {err[:120]!r} about an ordinary pipeline")
+            return
+        if not (mode[3] & termios.ECHO) or not (mode[3] & termios.ICANON):
+            report(False, name, f"{impl} left the terminal in cbreak")
+            return
+    report(True, name)
+
+
 def main():
     print("== building ==")
     subprocess.run(["go", "build", "-o", "clock-keytest", "."], cwd=ROOT, check=True)
@@ -407,6 +457,7 @@ def main():
             report(FLASH_MARK not in painted, f"{impl} shows no hint with -q")
         print("== stdout that is not a terminal ==")
         not_a_terminal("/dev/null is a character device, not a terminal")
+        reader_leaves("the reader goes away mid-frame")
 
         # The clock re-measures every frame rather than trapping SIGWINCH, so
         # this is the only thing that can drag a window: difftest pins one size

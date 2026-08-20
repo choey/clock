@@ -534,6 +534,16 @@ var errHelp = errors.New("help requested")
 // errVersion asks the caller to print the version and stop, successfully.
 var errVersion = errors.New("version requested")
 
+// errPipe says the reader went away mid-frame -- `clock | head`. It is not a
+// failure to report, only a reason to stop; main turns it back into the signal
+// death a filter is expected to end with, once the defers have given the
+// terminal back. See main.
+var errPipe = errors.New("broken pipe")
+
+// pipeStatus is what both ports exit with when the reader goes away: 128 plus
+// SIGPIPE, which is what a shell reports for a filter that died of it.
+const pipeStatus = 141
+
 // parseCount reads a positive whole number, strictly. Not strconv.Atoi, which
 // takes a leading "+", and emphatically not Python's int(), which also takes
 // surrounding space, underscores and non-ASCII digits: the two parsers have to
@@ -2015,7 +2025,12 @@ func run() error {
 	}
 
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	// SIGPIPE is in the list for what asking changes rather than for what
+	// arrives: left alone, the runtime kills the process where a write to fd 1
+	// or 2 hits EPIPE, which skips every defer below and hands back a terminal
+	// still in cbreak. Once it is notified, the write returns the error
+	// instead and the frame loop can stop like anything else.
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGPIPE)
 
 	defer quietTerminal()()
 	keys := readKeys()
@@ -2191,7 +2206,15 @@ func run() error {
 			}
 		}
 		b.WriteString(clearBelow)
-		fmt.Print(b.String())
+		// The one write whose error is worth reading: everything else painted
+		// here is an escape sequence that a dead pipe makes moot anyway, and
+		// the next frame lands on this line regardless.
+		if _, err := fmt.Print(b.String()); err != nil {
+			if errors.Is(err, syscall.EPIPE) {
+				return errPipe
+			}
+			return err
+		}
 		height = len(rows)
 
 		if oneShot {
@@ -2207,7 +2230,12 @@ func run() error {
 			select {
 			case <-t.C:
 				waiting = false
-			case <-sigs:
+			case s := <-sigs:
+				// A SIGPIPE that beat the write error to the loop; the two
+				// race, and either way the reader is gone.
+				if s == syscall.SIGPIPE {
+					return errPipe
+				}
 				return nil
 			case k := <-keys:
 				switch k {
@@ -2225,6 +2253,20 @@ func run() error {
 
 func main() {
 	if err := run(); err != nil {
+		// `clock | head`: the reader went away, which is not news and not an
+		// error message. Exit with the status a shell reports for a filter
+		// killed by SIGPIPE, now that run's defers have put the cursor and the
+		// terminal back -- which is the whole reason the runtime was stopped
+		// from ending the process at the moment of the write.
+		//
+		// The status is stated rather than inherited: a SIGPIPE the process
+		// sends itself is not one raised by a write to fd 1, and the runtime
+		// ignores it, so there is no dying of the signal to be had here. 141
+		// is what the shell would have shown either way, and it is what
+		// clock.py exits with for the same case.
+		if errors.Is(err, errPipe) {
+			os.Exit(pipeStatus)
+		}
 		fmt.Fprintln(os.Stderr, "clock: "+err.Error())
 		os.Exit(1)
 	}

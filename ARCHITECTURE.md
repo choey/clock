@@ -99,6 +99,18 @@ a regular file, which both got right, so the disagreement sat there unseen;
 `tools/keytest.py` is where it is pinned now, since catching it means being
 willing to stop waiting.
 
+**When the reader leaves.** `clock | head` ends the clock mid-frame, and both
+ports have to end it the same way: quietly, with the terminal given back, exit
+141. Neither got there by default. Go's runtime kills the process outright on
+EPIPE to fd 1, which skips every deferred restore and leaves the terminal in
+cbreak — asking for SIGPIPE with `signal.Notify` is what turns that into an
+error the frame loop can return. Python's default is the opposite failure: it
+unwinds properly and then prints a twenty-line traceback about an ordinary way
+for a pipeline to end, and exits 120 when the interpreter's own last flush
+fails too. The status is stated in both rather than inherited, since a SIGPIPE
+a Go process sends itself is ignored by its runtime and there is no dying of
+the signal to be had.
+
 Piped output has no resize to survive and keeps the rewind, which is also what
 lets `tools/difftest.sh` compare the two implementations byte for byte — and,
 with `CLOCK_FRAMES`, compare a run of frames rather than one, so the rewind
@@ -198,7 +210,7 @@ nothing to fail.
 | `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share | anything wrong in both, which is how they are always changed |
 | `tools/golden/` | what the clock actually draws, at sixteen sizes | the size nobody thought to keep |
 | `tools/fitfuzz.py` | invariants at arbitrary sizes: nothing overflows the window, every line ends at the default colour, no escape outside the eight it may write | whether the picture is *right*, only that it is well formed |
-| `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations frame for frame; and that a character device is not therefore a terminal | a real terminal emulator; and signal timing, where it compares loosely on purpose |
+| `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations frame for frame; that a character device is not therefore a terminal, and what a reader walking away leaves behind | a real terminal emulator; and signal timing, where it compares loosely on purpose |
 | `tools/errcover.py` | every error message the clock can print is printed by some case | two that need a machine with no tz database, exempted by name |
 | `tools/docnums.py` | the figures in the prose match the tables, and every flag and variable is documented | prose that is wrong in a way no number captures |
 | `ziptz`: suites + `make sweep` | both libraries answer alike for all 101,000 ZIP inputs, and the tables are well formed | whether the underlying data is *true*, which is `genzips.py`'s problem |

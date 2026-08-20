@@ -59,6 +59,11 @@ LEAVE_ALT = "\x1b[?1049l"
 # wrong thing is worse than one that says nothing at all.
 VERSION = "0.1.0"
 
+# What both ports exit with when the reader goes away -- `clock | head`. 128
+# plus SIGPIPE, which is what a shell reports for a filter that died of it;
+# see main(), and pipeStatus in clock.go.
+PIPE_STATUS = 141
+
 USAGE = """clock - analog terminal clocks
 
 usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
@@ -1808,8 +1813,13 @@ def run(argv):
     except KeyboardInterrupt:
         pass
     finally:
-        sys.stdout.write(SHOW_CURSOR + (LEAVE_ALT if full_screen else ""))
-        sys.stdout.flush()
+        # The reader may already be gone, in which case these have nowhere to
+        # go and it does not matter: what has to happen on the way out is
+        # quiet_terminal's restore, which is an ioctl on stdin and has
+        # happened by now. See main() for the rest of that path.
+        with contextlib.suppress(BrokenPipeError):
+            sys.stdout.write(SHOW_CURSOR + (LEAVE_ALT if full_screen else ""))
+            sys.stdout.flush()
 
 
 def main():
@@ -1822,6 +1832,17 @@ def main():
     except ClockError as exc:
         sys.stderr.write(f"clock: {exc}\n")
         raise SystemExit(1)
+    except BrokenPipeError:
+        # `clock | head`: the reader went away. Not news, and not a traceback
+        # -- which is what Python prints for it by default, twenty-odd lines
+        # about a normal way for a filter to end, after the terminal has
+        # already been given back.
+        #
+        # stdout is pointed at /dev/null first because the interpreter flushes
+        # it once more on the way out, where the same error would surface
+        # again as "Exception ignored" and turn the status into 120.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        raise SystemExit(PIPE_STATUS)
 
 
 if __name__ == "__main__":

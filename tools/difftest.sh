@@ -69,6 +69,7 @@ tzdata_version() {
 golden() {
 	name=$1
 	shift
+	echo "$name" >>"$out/golden.seen"
 	check "$@" || true
 	if [ -n "${BLESS:-}" ]; then
 		cp "$out/go.out" "tools/golden/$name"
@@ -584,6 +585,26 @@ step=19
 golden sequence-3        "$SUMMER" 80 24 UTC
 frames=
 step=
+
+# A golden whose case was deleted is not a passing test, it is a file nothing
+# reads: cmp is never called on it, so it can hold any bytes at all and say so
+# forever. Every name written above is compared against what is actually in the
+# directory, which also catches the opposite -- a case added and blessed
+# somewhere other than a commit.
+#
+# "+" names are exempt: they are not frames. +VERSION is the tz database the
+# bytes were blessed under, which is the convention zoneinfo itself uses.
+ls tools/golden | grep -v '^+' | sort >"$out/golden.have"
+sort "$out/golden.seen" >"$out/golden.want"
+if cmp -s "$out/golden.have" "$out/golden.want"; then
+	pass=$((pass + 1))
+	[ -z "$verbose" ] || printf 'ok   every golden has a case behind it (%s)\n' \
+		"$(wc -l <"$out/golden.have" | tr -d ' ')"
+else
+	echo 'FAIL tools/golden holds files no case compares, or the reverse:'
+	diff -u "$out/golden.want" "$out/golden.have" || true
+	fail=$((fail + 1))
+fi
 
 # The one thing the Python clock does that the Go one cannot: run without
 # ziptz. Go links the library in at build time; Python imports it if it is

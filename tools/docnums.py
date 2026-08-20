@@ -36,7 +36,13 @@ def tables():
         (ROOT / "ziptz" / "tools" / "genzips.py").read_text(encoding="utf-8"),
         re.S,
     )
+    # The one figure that comes from a harness rather than from the data: how
+    # many frames tools/golden keeps. Four sentences across two documents quote
+    # it, and adding a golden is exactly the moment nobody rereads them.
+    difftest = (ROOT / "tools" / "difftest.sh").read_text(encoding="utf-8")
+
     return {
+        "goldens": len(re.findall(r"(?m)^golden ", difftest)),
         "runs": len(runs),
         "runs_named": sum(1 for letter in runs if letter != "-"),
         "exceptions": exceptions,
@@ -51,6 +57,10 @@ def tables():
 # figure that number has to equal. The pattern is written to match the sentence
 # it lives in, so a rewording fails loudly here rather than drifting silently.
 CLAIMS = (
+    ("README.md", r"So ([a-z]+)\nframes are kept as bytes", ("goldens",)),
+    ("README.md", r"of the (\d+) goldens", ("goldens",)),
+    ("ARCHITECTURE.md", r"is the other half, ([a-z]+) renderings", ("goldens",)),
+    ("ARCHITECTURE.md", r"what the clock actually draws, at ([a-z]+) sizes", ("goldens",)),
     ("README.md", r"(\d+) ZIP codes, across (\d+) prefixes", ("exceptions", "exception_prefixes")),
     ("README.md", r"of 33,791 ZIP codes, ([\d,]+) \(0\.69%\)", ("exceptions",)),
     ("ARCHITECTURE.md", r"is the (\d+) ZIPs the prefix table gets wrong", ("exceptions",)),
@@ -67,7 +77,7 @@ CLAIMS = (
      ("folded", "letters")),
 )
 
-WORDS = {"eleven": 11, "ten": 10, "twelve": 12, "thirty": 30, "forty": 40}
+WORDS = {"eleven": 11, "ten": 10, "twelve": 12, "sixteen": 16, "thirty": 30, "forty": 40}
 
 
 def documented(verbose):

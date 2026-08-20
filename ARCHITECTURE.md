@@ -170,7 +170,7 @@ them all; the README says how to run each on its own.
 | harness | proves | blind to |
 |---|---|---|
 | `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share | anything wrong in both, which is how they are always changed |
-| `tools/golden/` | what the clock actually draws, at sixteen sizes | the seventeenth size |
+| `tools/golden/` | what the clock actually draws, at sixteen sizes | the size nobody thought to keep |
 | `tools/fitfuzz.py` | invariants at arbitrary sizes: nothing overflows the window, every line ends at the default colour, no escape outside the eight it may write | whether the picture is *right*, only that it is well formed |
 | `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations frame for frame | a real terminal emulator; and signal timing, where it compares loosely on purpose |
 | `tools/errcover.py` | every error message the clock can print is printed by some case | two that need a machine with no tz database, exempted by name |

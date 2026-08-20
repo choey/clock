@@ -676,6 +676,15 @@ than the clocks can fit, which on a terminal complains and keeps measuring
 where redirected output would have exited. A clock that measured once at
 startup fails four of them.
 
+`tools/framecost.py` is the odd one out in that directory: it measures what a
+frame costs against the 19ms the clock has to draw it in, and has nothing to
+pass or fail, since the answer belongs to the machine it runs on. `make test`
+leaves it alone. Run it when a change makes you wonder.
+
+```sh
+tools/framecost.py
+```
+
 `ziptz` has tests of its own, and holds its two libraries to one shared list
 of cases in `ziptz/testdata/cases.json` — the same idea as the difftest, a
 rung down. `make test` runs those and the difftest together.

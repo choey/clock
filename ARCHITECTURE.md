@@ -50,6 +50,20 @@ would only ever show 0 and 5.
 **Smooth sweep.** The second hand takes fractional seconds, so it glides
 rather than stepping once a second.
 
+**What a frame costs.** Fifty repaints a second, one of the two ports being
+Python, invites the question. Measured with `tools/framecost.py` on an
+Apple-silicon laptop, a 200x60 window: Go spends a couple of per cent of a
+tick on a frame, one face or twelve; clock.py spends a fifth of one on a
+single face and something under half of one on twelve. Both have room, and
+Python has less of it than a glance at the picture would suggest -- a machine
+ten times slower is one where the Python clock stops sweeping smoothly and the
+Go one has not noticed anything. Neither drifts when that happens: clock.py
+sleeps to the next multiple of the tick and clock.go takes a ticker whose
+channel holds one, so a frame that runs long costs the frame after it rather
+than delaying every frame that follows. That tool measures and does not check
+-- the numbers belong to the machine, not to the clock -- which is why it is
+not one of the harnesses below and not in `make test`.
+
 **One instant per frame.** Each frame samples the clock once and converts that
 single instant into every zone on screen, so no two faces can disagree by a
 millisecond at a rollover.
@@ -175,7 +189,9 @@ did not, with zero exceptions across five tested values.
 ## What the tests can and cannot see
 
 Seven harnesses, because no one of them can see everything. `make test` runs
-them all; the README says how to run each on its own.
+them all; the README says how to run each on its own. `tools/framecost.py` is
+in that directory and is not one of them: it reports a measurement and has
+nothing to fail.
 
 | harness | proves | blind to |
 |---|---|---|

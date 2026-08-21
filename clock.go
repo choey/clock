@@ -2084,6 +2084,17 @@ func suspend(restore, requiet func(), fullScreen bool) {
 	restore()
 
 	syscall.Kill(syscall.Getpid(), syscall.SIGSTOP)
+	// Raising a stop is not the same as having stopped. kill(2) promises the
+	// signal is delivered before it returns, and in a process of more than one
+	// thread -- which this is, always -- the thread that takes it need not be
+	// this one: the rest of the group stops at the next point each returns to
+	// user mode, and this one can run on until then. On Linux that is far
+	// enough to take the terminal back before the stop it just asked for, so
+	// Ctrl+Z handed the screen over and took it again in the same breath and
+	// the shell got a stopped clock's terminal after all. Sleeping a tick is
+	// the barrier, and needs to be nothing cleverer: it cannot finish early,
+	// and a clock that really stopped is not running for any of it.
+	time.Sleep(tick)
 
 	requiet()
 	if fullScreen {

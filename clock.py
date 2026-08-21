@@ -1747,6 +1747,14 @@ def suspend(full_screen, restore, requiet):
     restore()
 
     os.kill(os.getpid(), signal.SIGSTOP)
+    # Raising a stop is not the same as having stopped, and nothing here can
+    # ask whether it has: the answer is only ever observed by running again.
+    # So the wait is a tick, which cannot finish early and which a clock that
+    # really stopped is not running for. clock.go needs it -- a Go process has
+    # threads, and the one that takes the signal need not be the one that
+    # raised it, which on Linux left it taking the terminal back before the
+    # stop landed -- and this one keeps it so the two resume alike.
+    time.sleep(TICK)
 
     requiet()
     sys.stdout.write((ENTER_ALT if full_screen else "") + HIDE_CURSOR)

@@ -259,17 +259,314 @@ VALIGNS = ("top", "center", "bottom")
 # instant on datetime.min itself overflows the moment it is shown in Los
 # Angeles -- where Go's time, which has no such bound, draws it without
 # comment. A day of headroom is more than the 14 hours anywhere is away.
-FREEZE_FIRST = datetime(1, 1, 2)
-FREEZE_LAST = datetime(9999, 12, 30, 23, 59, 59, 999999)
-
-# The one instant format CLOCK_FREEZE accepts. Exactly six fractional digits,
-# exactly UTC: datetime stops at microseconds, and pinning the format keeps both
-# implementations rejecting the same strings.
-FREEZE_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+FREEZE_FIRST = datetime(1, 1, 2, tzinfo=timezone.utc)
+FREEZE_LAST = datetime(9999, 12, 30, 23, 59, 59, 999999, tzinfo=timezone.utc)
 
 
 class ClockError(Exception):
     """A startup failure to report before the terminal has been touched."""
+
+
+def _freeze_digits(s):
+    """s read as an unsigned decimal integer, or None if it is not one.
+
+    Not str.isdigit(), which is true of "١" and "１" as well as
+    "1": the two ports have to accept exactly the same strings, so every
+    byte is checked against the ASCII range by hand, the same way
+    parse_count and parse_pad already do.
+    """
+    if not s or not all("0" <= c <= "9" for c in s):
+        return None
+    return int(s)
+
+
+def _parse_freeze_instant(value):
+    """The strict ISO instant CLOCK_FREEZE accepts, or None if value is not
+    one: a four-digit year, two-digit month and day, two-digit hour, minute
+    and second, an optional one-to-six-digit fraction, and a literal Z.
+
+    Hand-scanned rather than handed to strptime -- which takes fewer than six
+    fractional digits, where Go's time.Parse takes a one-digit month -- so
+    that the shape accepted is controlled entirely in this file, and
+    clock.go's version of this function can be made to agree with it
+    deliberately rather than by coincidence.
+
+    Not range-checked field by field either: the parsed numbers are handed to
+    datetime, whose constructor raises on a day like 30 in February, the same
+    way Go's time.Date -- which does not raise, only normalizes such a day
+    into March -- is made to catch it by reading the fields back and finding
+    them changed.
+    """
+    if len(value) < 20 or value[-1] != "Z":
+        return None
+    core = value[:-1]
+    frac_digits = ""
+    if len(core) == 19:
+        pass
+    elif 21 <= len(core) <= 26 and core[19] == ".":
+        frac_digits = core[20:]
+        core = core[:19]
+    else:
+        return None
+    if core[4] != "-" or core[7] != "-" or core[10] != "T" or core[13] != ":" or core[16] != ":":
+        return None
+    year = _freeze_digits(core[0:4])
+    month = _freeze_digits(core[5:7])
+    day = _freeze_digits(core[8:10])
+    hour = _freeze_digits(core[11:13])
+    minute = _freeze_digits(core[14:16])
+    second = _freeze_digits(core[17:19])
+    if None in (year, month, day, hour, minute, second):
+        return None
+    frac = _freeze_digits(frac_digits) if frac_digits else 0
+    if frac is None:
+        return None
+    microsecond = frac * 10 ** (6 - len(frac_digits))
+    try:
+        return datetime(year, month, day, hour, minute, second, microsecond, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _parse_freeze_clock(s):
+    """The HH[:MM[:SS]] half of _parse_freeze_clock_utc, or None if s is not
+    one.
+    """
+    fields = s.split(":")
+    if len(fields) > 3 or not (1 <= len(fields[0]) <= 2):
+        return None
+    hour = _freeze_digits(fields[0])
+    if hour is None or hour > 23:
+        return None
+    minute = second = 0
+    if len(fields) >= 2:
+        if len(fields[1]) != 2:
+            return None
+        minute = _freeze_digits(fields[1])
+        if minute is None or minute > 59:
+            return None
+    if len(fields) == 3:
+        if len(fields[2]) != 2:
+            return None
+        second = _freeze_digits(fields[2])
+        if second is None or second > 59:
+            return None
+    return hour, minute, second
+
+
+def _parse_freeze_date(s):
+    """The date ahead of a clock time -- "2026-07-22", "2026/07/22", "7/22"
+    or "8/22/26" -- as (year, month, day, has_year), or None if s is not one.
+
+    The two separators inside one date must be the same character; mixing
+    them, as in "2026-07/22", falls out of the two-field case rather than
+    being caught on purpose, since the year then reads as a two-digit month
+    and is refused for being neither.
+
+    Three fields read year-month-day when the first is four digits -- the
+    only length a year is ever spelled with here -- and month-day-year
+    otherwise, with the year itself two digits (2000 added) or four. A first
+    field of three digits is neither and is refused either way.
+    """
+    sep = next((c for c in s if c in "-/"), None)
+    if sep is None:
+        return None
+    fields = s.split(sep)
+    if len(fields) == 2:
+        if not (1 <= len(fields[0]) <= 2) or not (1 <= len(fields[1]) <= 2):
+            return None
+        month = _freeze_digits(fields[0])
+        day = _freeze_digits(fields[1])
+        if month is None or day is None:
+            return None
+        return None, month, day, False
+    if len(fields) != 3:
+        return None
+    if len(fields[0]) == 4:
+        if not (1 <= len(fields[1]) <= 2) or not (1 <= len(fields[2]) <= 2):
+            return None
+        year = _freeze_digits(fields[0])
+        month = _freeze_digits(fields[1])
+        day = _freeze_digits(fields[2])
+        if None in (year, month, day):
+            return None
+        return year, month, day, True
+    if len(fields[0]) in (1, 2):
+        if not (1 <= len(fields[1]) <= 2) or len(fields[2]) not in (2, 4):
+            return None
+        month = _freeze_digits(fields[0])
+        day = _freeze_digits(fields[1])
+        year = _freeze_digits(fields[2])
+        if None in (month, day, year):
+            return None
+        if len(fields[2]) == 2:
+            year += 2000
+        return year, month, day, True
+    return None
+
+
+def _freeze_valid_calendar_date(year, month, day):
+    """Whether year-month-day is a real date, independent of any zone -- day
+    30 of February is not, whatever clock time or zone rides along with it.
+    """
+    try:
+        datetime(year, month, day)
+        return True
+    except ValueError:
+        return False
+
+
+def _freeze_reproduces(t, zone, year, month, day, hour, minute, second):
+    """Whether t, read back in zone, is exactly the wall clock
+    _freeze_local_to_utc was asked to convert.
+    """
+    lt = in_zone(t, zone)
+    return (lt.year, lt.month, lt.day, lt.hour, lt.minute, lt.second) == (
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+    )
+
+
+def _freeze_local_to_utc(zone, year, month, day, hour, minute, second):
+    """A wall-clock reading -- already known to be a real calendar date --
+    in zone, converted to the UTC instant it names, deciding a
+    daylight-saving edge case by hand rather than leaning on datetime's own
+    default: zoneinfo's fold and Go's time.Date do not agree with each other
+    on a reading a spring-forward skips entirely, so this is the one place
+    that disagreement could reach the frame drawn, and both ports implement
+    this same explicit rule instead of either default.
+
+    The offset a full day before and a full day after settle it. Equal,
+    there is no transition anywhere near this reading and the obvious
+    instant is the answer -- true on all but at most two calls a year, per
+    zone. Unequal, one transition sits somewhere in that two-day window;
+    both candidate instants, one built from each offset, are checked by
+    converting back into zone and comparing against what was asked for. Both
+    matching is a fall-back reading that happened twice, resolved to the
+    earlier of the two -- the offset still in effect right up to the
+    transition. Neither matching is a spring-forward reading that never
+    happened at all, resolved as though the spring-forward had already gone
+    -- the later offset.
+    """
+    naive = datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+    off_prev = utc_offset(naive - timedelta(days=1), zone)
+    off_next = utc_offset(naive + timedelta(days=1), zone)
+    if off_prev == off_next:
+        return naive - timedelta(seconds=off_prev)
+    cand_prev = naive - timedelta(seconds=off_prev)
+    cand_next = naive - timedelta(seconds=off_next)
+    valid_prev = _freeze_reproduces(cand_prev, zone, year, month, day, hour, minute, second)
+    valid_next = _freeze_reproduces(cand_next, zone, year, month, day, hour, minute, second)
+    if valid_prev and valid_next:
+        return cand_prev if cand_prev < cand_next else cand_next
+    if valid_prev:
+        return cand_prev
+    return cand_next
+
+
+def _freeze_date(zone, year, month, day, hour, minute, second):
+    """One specific instant in zone, or None if the day does not exist in
+    that month -- day 30 of February, say -- checked before asking what UTC
+    instant it names in that zone.
+    """
+    if not _freeze_valid_calendar_date(year, month, day):
+        return None
+    return _freeze_local_to_utc(zone, year, month, day, hour, minute, second)
+
+
+def _freeze_closest_day(now, zone, hour, minute, second):
+    """An undated clock time in zone, resolved to whichever of yesterday,
+    today or tomorrow -- by zone's own calendar, not UTC's -- lands closest
+    to now. A tie favors today: today is checked first and only a strictly
+    closer candidate replaces it.
+    """
+    local_now = in_zone(now, zone)
+    y, m, d = local_now.year, local_now.month, local_now.day
+    best = _freeze_local_to_utc(zone, y, m, d, hour, minute, second)
+    best_diff = abs(best - now)
+    base_date = datetime(y, m, d, tzinfo=timezone.utc)  # a pure calendar calculator
+    for days in (-1, 1):
+        cd = base_date + timedelta(days=days)
+        candidate = _freeze_local_to_utc(zone, cd.year, cd.month, cd.day, hour, minute, second)
+        diff = abs(candidate - now)
+        if diff < best_diff:
+            best, best_diff = candidate, diff
+    return best
+
+
+# How far from now's year _freeze_closest_year looks for a year the given
+# month and day exist in. Only February 29 can be missing from a year at
+# all, and the longest it is ever missing for is eight years -- 1900 was not
+# a leap year, between 1896 and 1904, which both were -- so searching this
+# far always finds a February 29 if the true closest one lies outside the
+# plain +-1 year that every other date is already found within.
+_FREEZE_YEAR_DELTAS = (0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7, -8, 8)
+
+
+def _freeze_closest_year(now, zone, month, day, hour, minute, second):
+    """A clock time in zone on a month and day with no year, resolved to
+    whichever year, among _FREEZE_YEAR_DELTAS away from now's year in
+    zone's own calendar, lands closest to now -- skipping a year the day
+    does not exist in, which for any month and day but February 29 is none
+    of them. None only if no year in range has the day, which for every
+    month and day but February 29 means the date does not exist regardless
+    of year.
+    """
+    y = in_zone(now, zone).year
+    best = best_diff = None
+    for delta in _FREEZE_YEAR_DELTAS:
+        cy = y + delta
+        if not _freeze_valid_calendar_date(cy, month, day):
+            continue
+        candidate = _freeze_local_to_utc(zone, cy, month, day, hour, minute, second)
+        diff = abs(candidate - now)
+        if best is None or diff < best_diff:
+            best, best_diff = candidate, diff
+    return best
+
+
+def _parse_freeze_clock_zone(value, now):
+    """A clock time in some zone, with an optional date ahead of it --
+    "15:30 UTC", "15:30 PT", "2026-07-22 15:30 UTC", "2026/07/22 15:30 UTC"
+    or "7/22 15:30 PT" -- or None if value is not shaped like this format at
+    all. The zone is anything resolve_zone accepts: an alias, an IANA name,
+    a fixed offset abbreviation, a country code, a city -- and resolve_zone
+    raises its own ClockError, which is left to propagate rather than
+    caught, once a date and a clock have already parsed and the trailing
+    word is clearly meant as a zone.
+
+    Fills in whatever the date left out: no date at all leaves the day
+    itself open, and a date with no year leaves the year open. What is left
+    open resolves to whichever candidate, by the wall clock right now, lands
+    closest to this instant -- the reading needs no date, or no year, typed
+    at all for the moment that is happening soon, whichever side of midnight
+    or new year's it falls on, in that zone's own calendar.
+    """
+    tokens = value.split(" ")
+    if len(tokens) == 2:
+        date_part, clock_part, zone_part = "", tokens[0], tokens[1]
+    elif len(tokens) == 3:
+        date_part, clock_part, zone_part = tokens
+    else:
+        return None
+    clock = _parse_freeze_clock(clock_part)
+    if clock is None:
+        return None
+    hour, minute, second = clock
+    zone = resolve_zone(zone_part, now)
+    if not date_part:
+        return _freeze_closest_day(now, zone, hour, minute, second)
+    date = _parse_freeze_date(date_part)
+    if date is None:
+        return None
+    year, month, day, has_year = date
+    if has_year:
+        return _freeze_date(zone, year, month, day, hour, minute, second)
+    return _freeze_closest_year(now, zone, month, day, hour, minute, second)
 
 
 def freeze():
@@ -284,37 +581,35 @@ def freeze():
     value = os.environ.get("CLOCK_FREEZE", "")
     if not value:
         return None
-    try:
-        frozen = datetime.strptime(value, FREEZE_FORMAT)
-        # Insist on the canonical spelling, not merely a parseable one. Both
-        # parsers are loose in their own directions -- strptime takes fewer
-        # than six fractional digits, Go takes a one-digit month -- and the
-        # round trip is the one cheap check that pins them to the same strings.
-        #
-        # Written out rather than handed back to strftime, which is the C
-        # library's and does not agree with itself across platforms: %Y pads a
-        # year to four digits on macOS and not under glibc, so "0001-01-01"
-        # round-tripped on one and came back as "1-01-01" on the other. Every
-        # year before 1000 was a different clock on Linux than on a Mac, and
-        # than Go on either.
-        canonical = value == (
-            f"{frozen.year:04d}-{frozen.month:02d}-{frozen.day:02d}"
-            f"T{frozen.hour:02d}:{frozen.minute:02d}:{frozen.second:02d}"
-            f".{frozen.microsecond:06d}Z"
-        )
-    except ValueError:
-        canonical = False
-    if not canonical:
+    frozen = _parse_freeze_instant(value)
+    if frozen is None:
+        # A trailing word that reads as an attempted zone, and fails to
+        # resolve as one, is worth resolve_zone's own reason rather than the
+        # generic message below: _parse_freeze_clock_zone only raises once a
+        # date and a clock have already parsed, so the word really was meant
+        # as a zone.
+        try:
+            frozen = _parse_freeze_clock_zone(value, datetime.now(timezone.utc))
+        except ClockError as zerr:
+            raise ClockError(f"CLOCK_FREEZE: {zerr}") from None
+    # Year 0 is a spelling rather than a range: Go's time has one and
+    # datetime does not, so datetime cannot construct it at all -- caught
+    # already, inside _parse_freeze_instant's try/except -- and this is the
+    # message it gets.
+    if frozen is None:
         raise ClockError(
-            "CLOCK_FREEZE wants an instant like 2026-07-15T09:53:07.123456Z, "
-            f'got "{value}"'
+            "CLOCK_FREEZE wants an instant like 2026-07-15T09:53:07.123456Z "
+            "(the fraction and its digit count are optional, down to none), "
+            "a clock time like 15:30 UTC or 15:30 PT (nearest day filled in), or a "
+            "dated one like 2026-07-22 15:30 UTC or 7/22 15:30 PT (nearest year "
+            f'filled in when it\'s left out), got "{value}"'
         ) from None
     if not FREEZE_FIRST <= frozen <= FREEZE_LAST:
         raise ClockError(
             "CLOCK_FREEZE wants an instant from 0001-01-02 to 9999-12-30, "
             f'got "{value}"'
         )
-    return frozen.replace(tzinfo=timezone.utc)
+    return frozen
 
 
 def env_whole(name, lowest, default):

@@ -187,11 +187,6 @@ func envCellRatio() float64 {
 	return v
 }
 
-// freezeLayout is the one instant format CLOCK_FREEZE accepts. Exactly six
-// fractional digits, exactly UTC: Python's datetime stops at microseconds, and
-// pinning the format keeps both implementations rejecting the same strings.
-const freezeLayout = "2006-01-02T15:04:05.000000Z"
-
 // A day inside Python's datetime range at each end. The pinned instant is
 // converted into every zone on screen, and a zone can sit 14 hours from UTC,
 // so an instant on datetime.min itself overflows the moment clock.py shows it
@@ -213,18 +208,29 @@ func freeze() (time.Time, bool, error) {
 	if v == "" {
 		return time.Time{}, false, nil
 	}
-	t, err := time.Parse(freezeLayout, v)
-	// Insist on the canonical spelling, not merely a parseable one. Both
-	// parsers are loose in their own directions -- Go takes a one-digit month,
-	// Python takes fewer than six fractional digits -- and the round trip is
-	// the one cheap check that pins them to the same set of strings.
+	t, ok := parseFreezeInstant(v)
+	var zerr error
+	if !ok {
+		t, ok, zerr = parseFreezeClockZone(v, time.Now())
+	}
+	// A trailing word that reads as an attempted zone, and fails to resolve as
+	// one, is worth resolveZone's own reason rather than the generic message
+	// below: parseFreezeClockZone only returns an error once a date and a
+	// clock have already parsed, so the word really was meant as a zone.
+	if zerr != nil {
+		return time.Time{}, false, fmt.Errorf("CLOCK_FREEZE: %s", zerr)
+	}
 	// Year 0 is a spelling rather than a range: Go's time has one and Python's
-	// datetime does not, so strptime cannot read it at all and this is the
-	// message it gives -- where the round trip alone would have accepted it,
-	// "0000" formatting back to itself quite happily.
-	if err != nil || t.Year() < 1 || t.Format(freezeLayout) != v {
+	// datetime does not, so datetime cannot construct it at all, and this is
+	// the message that gets -- where parseFreezeInstant alone would have
+	// accepted it.
+	if !ok || t.Year() < 1 {
 		return time.Time{}, false, fmt.Errorf(
-			"CLOCK_FREEZE wants an instant like 2026-07-15T09:53:07.123456Z, got \"%s\"", v)
+			"CLOCK_FREEZE wants an instant like 2026-07-15T09:53:07.123456Z "+
+				"(the fraction and its digit count are optional, down to none), "+
+				"a clock time like 15:30 UTC or 15:30 PT (nearest day filled in), or a "+
+				"dated one like 2026-07-22 15:30 UTC or 7/22 15:30 PT (nearest year "+
+				"filled in when it's left out), got \"%s\"", v)
 	}
 	// The ends of the range, which nothing above can see. See freezeFirst.
 	if t.Before(freezeFirst) || t.After(freezeLast) {
@@ -232,6 +238,369 @@ func freeze() (time.Time, bool, error) {
 			"CLOCK_FREEZE wants an instant from 0001-01-02 to 9999-12-30, got \"%s\"", v)
 	}
 	return t, true, nil
+}
+
+// freezeDigits reads s as an unsigned decimal integer, requiring every byte
+// to be an ASCII digit and s to be non-empty. Hand-scanned like parseCount
+// and parsePad, for the same reason: strconv.Atoi takes a leading sign where
+// this must not, and the two ports have to accept exactly the same strings.
+func freezeDigits(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	n := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, true
+}
+
+// parseFreezeInstant reads the strict ISO instant CLOCK_FREEZE accepts: a
+// four-digit year, two-digit month and day, two-digit hour, minute and
+// second, an optional one-to-six-digit fraction, and a literal Z. Hand-scanned
+// rather than handed to time.Parse -- which takes a one-digit month, where
+// strptime takes fewer than six fractional digits -- so that the shape
+// accepted is controlled entirely in this file, and clock.py's version of
+// this function can be made to agree with it deliberately rather than by
+// coincidence.
+//
+// Rather than range-checking month, day, hour, minute and second by hand,
+// the parsed fields are handed to time.Date and read back: an invalid date
+// like day 30 of February does not error there, it normalizes to March 2,
+// so the read-back values differ from what was typed and the round trip
+// catches it exactly the way datetime's constructor, which raises instead of
+// normalizing, catches it on the Python side.
+func parseFreezeInstant(v string) (time.Time, bool) {
+	if len(v) < 20 || v[len(v)-1] != 'Z' {
+		return time.Time{}, false
+	}
+	core := v[:len(v)-1]
+	fracDigits := ""
+	switch {
+	case len(core) == 19:
+		// no fraction
+	case len(core) >= 21 && len(core) <= 26 && core[19] == '.':
+		fracDigits = core[20:]
+		core = core[:19]
+	default:
+		return time.Time{}, false
+	}
+	if core[4] != '-' || core[7] != '-' || core[10] != 'T' || core[13] != ':' || core[16] != ':' {
+		return time.Time{}, false
+	}
+	year, ok1 := freezeDigits(core[0:4])
+	month, ok2 := freezeDigits(core[5:7])
+	day, ok3 := freezeDigits(core[8:10])
+	hour, ok4 := freezeDigits(core[11:13])
+	minute, ok5 := freezeDigits(core[14:16])
+	second, ok6 := freezeDigits(core[17:19])
+	if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 {
+		return time.Time{}, false
+	}
+	frac := 0
+	if fracDigits != "" {
+		var ok bool
+		frac, ok = freezeDigits(fracDigits)
+		if !ok {
+			return time.Time{}, false
+		}
+	}
+	nanos := frac
+	for i := len(fracDigits); i < 9; i++ {
+		nanos *= 10
+	}
+	t := time.Date(year, time.Month(month), day, hour, minute, second, nanos, time.UTC)
+	if t.Year() != year || int(t.Month()) != month || t.Day() != day ||
+		t.Hour() != hour || t.Minute() != minute || t.Second() != second {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// parseFreezeClockZone reads a clock time in some zone, with an optional
+// date ahead of it -- "15:30 UTC", "15:30 PT", "2026-07-22 15:30 UTC",
+// "2026/07/22 15:30 UTC" or "7/22 15:30 PT" -- filling in whatever the date
+// left out: no date at all leaves the day itself open, and a date with no
+// year leaves the year open. What is left open resolves to whichever
+// candidate, by the wall clock right now, lands closest to this instant --
+// the reading needs no date, or no year, typed at all for the moment that is
+// happening soon, whichever side of midnight or new year's it falls on, in
+// that zone's own calendar. The zone is anything resolveZone accepts: an
+// alias, an IANA name, a fixed offset abbreviation, a country code, a city.
+//
+// ok is false and err nil when the value is not shaped like this format at
+// all -- one space (a clock and a zone) or two (a date as well) -- so freeze
+// can fall back to its own generic message. err is non-nil only once the
+// shape is unmistakably this one and the trailing word fails to resolve as a
+// zone, since resolveZone's own reason is worth more than a generic one at
+// that point.
+func parseFreezeClockZone(v string, now time.Time) (time.Time, bool, error) {
+	tokens := strings.Split(v, " ")
+	var datePart, clockPart, zonePart string
+	switch len(tokens) {
+	case 2:
+		clockPart, zonePart = tokens[0], tokens[1]
+	case 3:
+		datePart, clockPart, zonePart = tokens[0], tokens[1], tokens[2]
+	default:
+		return time.Time{}, false, nil
+	}
+	hour, minute, second, ok := parseFreezeClock(clockPart)
+	if !ok {
+		return time.Time{}, false, nil
+	}
+	loc, err := resolveZone(zonePart, now)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if datePart == "" {
+		return freezeClosestDay(now, loc, hour, minute, second), true, nil
+	}
+	year, month, day, hasYear, ok := parseFreezeDate(datePart)
+	if !ok {
+		return time.Time{}, false, nil
+	}
+	if hasYear {
+		t, ok := freezeDate(loc, year, month, day, hour, minute, second)
+		return t, ok, nil
+	}
+	t, ok := freezeClosestYear(now, loc, month, day, hour, minute, second)
+	return t, ok, nil
+}
+
+// parseFreezeClock reads just the HH[:MM[:SS]] half of parseFreezeClockUTC.
+func parseFreezeClock(s string) (hour, minute, second int, ok bool) {
+	fields := strings.Split(s, ":")
+	if len(fields) > 3 || len(fields[0]) == 0 || len(fields[0]) > 2 {
+		return 0, 0, 0, false
+	}
+	hour, ok = freezeDigits(fields[0])
+	if !ok || hour > 23 {
+		return 0, 0, 0, false
+	}
+	if len(fields) >= 2 {
+		if len(fields[1]) != 2 {
+			return 0, 0, 0, false
+		}
+		if minute, ok = freezeDigits(fields[1]); !ok || minute > 59 {
+			return 0, 0, 0, false
+		}
+	}
+	if len(fields) == 3 {
+		if len(fields[2]) != 2 {
+			return 0, 0, 0, false
+		}
+		if second, ok = freezeDigits(fields[2]); !ok || second > 59 {
+			return 0, 0, 0, false
+		}
+	}
+	return hour, minute, second, true
+}
+
+// parseFreezeDate reads the date ahead of a clock time -- "2026-07-22",
+// "2026/07/22", "7/22" or "8/22/26" -- returning its fields and whether a
+// year was given. The two separators inside one date must be the same
+// character; mixing them, as in "2026-07/22", falls out of the two-field
+// case rather than being caught on purpose, since the year then reads as a
+// two-digit month and is refused for being neither.
+//
+// Three fields read year-month-day when the first is four digits -- the only
+// length a year is ever spelled with here -- and month-day-year otherwise,
+// with the year itself two digits (2000 added) or four. A first field of
+// three digits is neither and is refused either way.
+func parseFreezeDate(s string) (year, month, day int, hasYear, ok bool) {
+	sep := byte(0)
+	for i := 0; i < len(s); i++ {
+		if s[i] == '-' || s[i] == '/' {
+			sep = s[i]
+			break
+		}
+	}
+	if sep == 0 {
+		return 0, 0, 0, false, false
+	}
+	fields := strings.Split(s, string(sep))
+	if len(fields) == 2 {
+		if len(fields[0]) == 0 || len(fields[0]) > 2 || len(fields[1]) == 0 || len(fields[1]) > 2 {
+			return 0, 0, 0, false, false
+		}
+		month, ok1 := freezeDigits(fields[0])
+		day, ok2 := freezeDigits(fields[1])
+		if !ok1 || !ok2 {
+			return 0, 0, 0, false, false
+		}
+		return 0, month, day, false, true
+	}
+	if len(fields) != 3 {
+		return 0, 0, 0, false, false
+	}
+	if len(fields[0]) == 4 {
+		if len(fields[1]) == 0 || len(fields[1]) > 2 || len(fields[2]) == 0 || len(fields[2]) > 2 {
+			return 0, 0, 0, false, false
+		}
+		year, ok1 := freezeDigits(fields[0])
+		month, ok2 := freezeDigits(fields[1])
+		day, ok3 := freezeDigits(fields[2])
+		if !ok1 || !ok2 || !ok3 {
+			return 0, 0, 0, false, false
+		}
+		return year, month, day, true, true
+	}
+	if len(fields[0]) == 1 || len(fields[0]) == 2 {
+		if len(fields[1]) == 0 || len(fields[1]) > 2 {
+			return 0, 0, 0, false, false
+		}
+		if len(fields[2]) != 2 && len(fields[2]) != 4 {
+			return 0, 0, 0, false, false
+		}
+		month, ok1 := freezeDigits(fields[0])
+		day, ok2 := freezeDigits(fields[1])
+		year, ok3 := freezeDigits(fields[2])
+		if !ok1 || !ok2 || !ok3 {
+			return 0, 0, 0, false, false
+		}
+		if len(fields[2]) == 2 {
+			year += 2000
+		}
+		return year, month, day, true, true
+	}
+	return 0, 0, 0, false, false
+}
+
+// freezeValidCalendarDate reports whether year-month-day is a real date,
+// independent of any zone -- day 30 of February is not, whatever clock time
+// or zone rides along with it. time.Date normalizes such a day forward
+// rather than erroring, so the fields are read back and compared to what was
+// typed; parseFreezeInstant catches the same thing the same way.
+func freezeValidCalendarDate(year, month, day int) bool {
+	t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
+	return t.Year() == year && int(t.Month()) == month && t.Day() == day
+}
+
+// freezeDate builds one specific instant in loc, rejecting a day that does
+// not exist in that month before asking what UTC instant it names in that
+// zone.
+func freezeDate(loc *time.Location, year, month, day, hour, minute, second int) (time.Time, bool) {
+	if !freezeValidCalendarDate(year, month, day) {
+		return time.Time{}, false
+	}
+	return freezeLocalToUTC(loc, year, month, day, hour, minute, second), true
+}
+
+// freezeClosestDay resolves an undated clock time in loc to whichever of
+// yesterday, today or tomorrow -- by loc's own calendar, not UTC's -- lands
+// closest to now. A tie favors today: today is checked first and only a
+// strictly closer candidate replaces it.
+func freezeClosestDay(now time.Time, loc *time.Location, hour, minute, second int) time.Time {
+	y, m, d := now.In(loc).Date()
+	best := freezeLocalToUTC(loc, y, int(m), d, hour, minute, second)
+	bestDiff := freezeAbs(best.Sub(now))
+	for _, days := range [2]int{-1, 1} {
+		// Calendar arithmetic only, in a fixed UTC-flagged time.Time used
+		// purely as a date calculator; the zone that matters is applied after,
+		// by freezeLocalToUTC.
+		cd := time.Date(y, m, d, 0, 0, 0, 0, time.UTC).AddDate(0, 0, days)
+		cand := freezeLocalToUTC(loc, cd.Year(), int(cd.Month()), cd.Day(), hour, minute, second)
+		if diff := freezeAbs(cand.Sub(now)); diff < bestDiff {
+			best, bestDiff = cand, diff
+		}
+	}
+	return best
+}
+
+// freezeYearDeltas is how far from now's year freezeClosestYear looks for a
+// year the given month and day exist in. Only February 29 can be missing
+// from a year at all, and the longest it is ever missing for is eight years
+// -- 1900 was not a leap year, between 1896 and 1904, which both were -- so
+// searching this far always finds a February 29 if the true closest one lies
+// outside the plain +-1 year that every other date is already found within.
+var freezeYearDeltas = [17]int{0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7, -8, 8}
+
+// freezeClosestYear resolves a clock time in loc on a month and day with no
+// year to whichever year, among freezeYearDeltas away from now's year in
+// loc's own calendar, lands closest to now -- skipping a year the day does
+// not exist in, which for any month and day but February 29 is none of them.
+// ok is false only if no year in range has the day, which for every month
+// and day but February 29 means the date does not exist regardless of year.
+func freezeClosestYear(now time.Time, loc *time.Location, month, day, hour, minute, second int) (time.Time, bool) {
+	y := now.In(loc).Year()
+	var best time.Time
+	var bestDiff time.Duration
+	found := false
+	for _, delta := range freezeYearDeltas {
+		cy := y + delta
+		if !freezeValidCalendarDate(cy, month, day) {
+			continue
+		}
+		cand := freezeLocalToUTC(loc, cy, month, day, hour, minute, second)
+		if diff := freezeAbs(cand.Sub(now)); !found || diff < bestDiff {
+			best, bestDiff, found = cand, diff, true
+		}
+	}
+	return best, found
+}
+
+// freezeLocalToUTC converts a wall-clock reading -- already known to be a
+// real calendar date -- in loc to the UTC instant it names, deciding a
+// daylight-saving edge case by hand rather than leaning on time.Date's own
+// choice: time.Date and Python's zoneinfo do not agree with each other on a
+// reading a spring-forward skips entirely, so this is the one place that
+// disagreement could reach the frame drawn, and both ports implement this
+// same explicit rule instead.
+//
+// The offset a full day before and a full day after settle it. Equal, there
+// is no transition anywhere near this reading and the obvious instant is the
+// answer -- true on all but at most two calls a year, per zone. Unequal, one
+// transition sits somewhere in that two-day window; both candidate instants,
+// one built from each offset, are checked by converting back into loc and
+// comparing against what was asked for. Both matching is a fall-back reading
+// that happened twice, resolved to the earlier of the two -- the offset
+// still in effect right up to the transition. Neither matching is a
+// spring-forward reading that never happened at all, resolved as though the
+// spring-forward had already gone -- the later offset.
+func freezeLocalToUTC(loc *time.Location, year, month, day, hour, minute, second int) time.Time {
+	naive := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
+	_, offPrev := naive.Add(-24 * time.Hour).In(loc).Zone()
+	_, offNext := naive.Add(24 * time.Hour).In(loc).Zone()
+	if offPrev == offNext {
+		return naive.Add(-time.Duration(offPrev) * time.Second)
+	}
+	candPrev := naive.Add(-time.Duration(offPrev) * time.Second)
+	candNext := naive.Add(-time.Duration(offNext) * time.Second)
+	validPrev := freezeReproduces(candPrev, loc, year, month, day, hour, minute, second)
+	validNext := freezeReproduces(candNext, loc, year, month, day, hour, minute, second)
+	switch {
+	case validPrev && validNext:
+		if candPrev.Before(candNext) {
+			return candPrev
+		}
+		return candNext
+	case validPrev:
+		return candPrev
+	default:
+		return candNext
+	}
+}
+
+// freezeReproduces reports whether t, read back in loc, is exactly the wall
+// clock freezeLocalToUTC was asked to convert.
+func freezeReproduces(t time.Time, loc *time.Location, year, month, day, hour, minute, second int) bool {
+	lt := t.In(loc)
+	return lt.Year() == year && int(lt.Month()) == month && lt.Day() == day &&
+		lt.Hour() == hour && lt.Minute() == minute && lt.Second() == second
+}
+
+// freezeAbs is time.Duration's absolute value, which the standard library
+// does not offer.
+func freezeAbs(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
 }
 
 // envWhole reads one whole number out of the environment, or the default if it

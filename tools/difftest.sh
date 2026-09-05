@@ -519,9 +519,92 @@ check "$SUMMER" 80 24 --scale 2 -n auto ET,PT,UTC,JP,GB,NZ
 # and with stdin at /dev/null there is no q to stop it either.
 echo "== freeze validation =="
 check nonsense 200 60 ET
+# No fraction, and any digit count from one to six, are all accepted -- not
+# just the canonical six. This is where that forgiveness is proven, rather
+# than just asserted: both ports have to draw the identical frame from every
+# one of these spellings of the same instant.
 check 2026-07-15T09:53:07Z 200 60 ET
+check 2026-07-15T09:53:07.1Z 200 60 ET
+check 2026-07-15T09:53:07.12Z 200 60 ET
 check 2026-07-15T09:53:07.123Z 200 60 ET
+check 2026-07-15T09:53:07.123456Z 200 60 ET
+# Seven fractional digits is one past what datetime can hold, so it is refused
+# rather than truncated -- silently dropping precision would make two
+# differently-precise inputs draw the same frame without saying so.
+check 2026-07-15T09:53:07.1234567Z 200 60 ET
 check 2026-13-99T09:53:07.123456Z 200 60 ET
+# A bare UTC clock time, with minutes and seconds each optional, resolves to
+# whichever of yesterday, today or tomorrow is closest to the moment this
+# runs -- so these can only be checked for the two ports agreeing with each
+# other, not against a fixed frame the way an instant above can be.
+check "10 UTC" 200 60 ET
+check "9 UTC" 200 60 ET
+check "23:59 UTC" 200 60 ET
+check "00:00:00 UTC" 200 60 ET
+check "15:30:45 UTC" 200 60 ET
+# Near misses: no space, a one-digit minute, a stray second without a
+# minute, all refused rather than guessed at. Lowercase is not a near miss at
+# all -- resolveZone reads "utc" the same as "UTC", the same as a plain
+# --zones argument would -- so it is checked alongside the other zone
+# spellings further down instead of here.
+check "10UTC" 200 60 ET
+check "10:5 UTC" 200 60 ET
+check "24:00 UTC" 200 60 ET
+check "10:00:00:00 UTC" 200 60 ET
+# A dated UTC clock time. One with a year is a fixed instant, checked against
+# a known frame the way the ISO instants above are; one without a year
+# resolves the year the same way an undated clock time resolves the day, so
+# it can only be checked for the two ports agreeing with each other.
+check "2026-07-22T10:00:00Z" 200 60 ET  # what the two below must draw
+check "2026-07-22 10 UTC" 200 60 ET
+check "2026/07/22 10 UTC" 200 60 ET
+check "2026-7-22 10 UTC" 200 60 ET  # month need not be zero-padded either
+check "7/22 10 UTC" 200 60 ET
+check "7/22 10:30:15 UTC" 200 60 ET
+# February 29, with no year, has to search past the plain nearest year for
+# one that has it -- this is that search, proven only by parity since which
+# leap year is nearest depends on when the check runs.
+check "2/29 00:00 UTC" 200 60 ET
+# Malformed or self-contradictory dates: a day that does not exist in that
+# month, a mismatched separator, a month past 12, a day past what a slash
+# date without a year can ever have regardless of which year is tried, and a
+# first field too long to be a month and too short to be a year.
+check "2026-02-30 10 UTC" 200 60 ET
+check "2026-07/22 10 UTC" 200 60 ET
+check "2026-13-01 10 UTC" 200 60 ET
+check "4/31 10 UTC" 200 60 ET
+check "26-07-22 10 UTC" 200 60 ET
+# A month-day-year date, the year two digits (2000 added) or four -- the
+# order "7/22" and "2026-07-22" alone leave no room for, since a four-digit
+# first field already means year-month-day.
+check "2026-08-22T09:53:35Z" 200 60 ET  # what the two below must draw
+check "8/22/26 09:53:35 UTC" 200 60 ET
+check "8/22/2026 09:53:35 UTC" 200 60 ET
+check "07-22-26 09:53:35 UTC" 200 60 ET  # dashes work here too
+# The zone ahead of the clock time is not just UTC: anything resolveZone
+# accepts -- an alias, a fixed-offset abbreviation, a country code, a ZIP, a
+# lowercase spelling of an alias -- is read the same way it is as a plain
+# --zones argument, and PT's own daylight saving is what a date has to be
+# converted through to land on the UTC instant above.
+check "8/22 09:53:35 PT" 200 60 ET,PT,UTC
+check "8/22 09:53:35 pt" 200 60 ET,PT,UTC
+check "10 PDT" 200 60 ET,PT,UTC
+check "10 94110" 200 60 ET,PT,UTC
+check "10 local" 200 60 ET,PT,UTC
+# A trailing word that fails to resolve as a zone, once a date and a clock
+# have already parsed, is worth resolveZone's own reason rather than the
+# generic message -- this is what proves that reason reaches the top,
+# worded identically by both ports, rather than being swallowed into the
+# generic one.
+check "10 nonsense" 200 60 ET
+check "8/22 10 nonsense" 200 60 ET
+# A daylight-saving edge case, spelled with an explicit date so the answer is
+# fixed rather than dependent on when the check runs: 2026-03-08 02:30 ET
+# never happens (the clocks spring forward through it) and 2026-11-01 01:30
+# ET happens twice (they fall back through it). freezeLocalToUTC's own rule,
+# not time.Date's or zoneinfo's default, decides both -- see its comment.
+check "2026-03-08 02:30:00 ET" 200 60 ET,UTC
+check "2026-11-01 01:30:00 ET" 200 60 ET,UTC
 # The ends of the range, which the round-trip check inside freeze() cannot see
 # on its own. Go's time has a year 0 where Python's datetime does not, so the
 # first of these drew a frame on one side and complained on the other; and the
@@ -779,7 +862,10 @@ go_exc=$(sed -n 's/^const exceptions = "\(.*\)".*/\1/p' ziptz/ziptz.go)
 py_exc=$(sed -n 's/^EXCEPTIONS = "\(.*\)".*/\1/p' ziptz/ziptz.py)
 if [ "$go_exc" = "$py_exc" ]; then
 	pass=$((pass + 1))
-	[ -z "$verbose" ] || printf 'ok   zip exceptions match (%s records)\n' "$((${#go_exc} / 6))"
+	# Characters, not records: the exception table is variable-stride -- a
+	# group is a prefix, a letter, a count, then that many two-digit suffixes
+	# -- so there is no divisor that turns its length into a record count.
+	[ -z "$verbose" ] || printf 'ok   zip exceptions match (%s characters)\n' "${#go_exc}"
 else
 	echo 'FAIL zip exceptions differ between ziptz.go and ziptz.py'
 	fail=$((fail + 1))

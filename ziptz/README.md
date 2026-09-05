@@ -21,8 +21,47 @@ ziptz.generic("94110")        # 'PT', whatever the date
 
 The two implementations answer identically for every ZIP code, down to the
 wording of the errors — the tables are generated into both in one pass by
-[`tools/genzips.py`](tools/genzips.py), and
-[`tools/difftest.sh`](../tools/difftest.sh) compares them.
+[`tools/genzips.py`](tools/genzips.py), and `make test` puts all 101,000
+tokens through both and compares every answer. Not a claim; a build step.
+
+## What it is for, and what it is not for
+
+It is small enough to stop being a dependency and start being a file. The
+library is a single 10 KB source file per language, 1.3 KB of which is the
+tables, and it occupies under a megabyte once imported. Neither side has a
+dependency, and `Zone` and `Generic` read no time zone database at all, so both
+answer on a machine that has none. That is what makes vendoring one file a real
+option rather than a compromise.
+
+The 23 KB wheel is mostly not the library: the tests and their case file ship
+with it on purpose, so an installed copy can prove itself where it landed
+rather than only in a checkout.
+
+It covers the places a US-only table usually forgets:
+
+```
+00601  America/Puerto_Rico     00802  America/Puerto_Rico   (US Virgin Islands)
+96799  Pacific/Pago_Pago       96910  Pacific/Guam
+96950  Pacific/Guam            (Northern Mariana Islands)
+```
+
+And it answers a 3-digit prefix, not just a whole ZIP, which is what you have
+when an address is partial or a form was only half filled in.
+
+Three things it is deliberately or unavoidably bad at:
+
+- **Bulk lookups.** Every five-digit query binary-searches the run table and
+  then scans the exception list. That is nothing for one lookup and the wrong
+  shape for millions of them; a flat dictionary would beat it comfortably, and
+  this trades that away for the 1.3 KB.
+- **Zone identity.** About 34 IANA zones are folded onto the 11 that agree with
+  them *today*, so a ZIP in Knox County, Indiana answers `America/New_York`
+  rather than `America/Indiana/Knox`. The clock is right; the name is coarser
+  than the database's. [When to
+  regenerate](#when-to-regenerate) explains what keeps that true.
+- **Validating ZIP codes.** A five-digit code with an assigned prefix always
+  gets an answer, whether or not the Postal Service has ever issued it. An
+  error means "no such prefix", never "no such ZIP".
 
 ## Accuracy
 
@@ -48,25 +87,34 @@ release. They are wrong for historical dates: several places have changed zone
 
 ## Install
 
-It lives in the [clock](https://github.com/choey/clock) repository, as a module
-of its own — a nested Go module and a Python package, both installable without
-the clock.
-
 ```sh
-go get github.com/choey/clock/ziptz     # needs a ziptz/vN.N.N tag
-pip install ./ziptz                     # from a checkout
+go get github.com/choey/ziptz
+pip install ziptz-us          # imports as ziptz; see below
 ```
 
+The Python distribution is `ziptz-us` and the module is `ziptz` — the same
+split as `python-dateutil`/`dateutil`. `ziptz` on PyPI is a 2013-era name
+registration with no files ever attached, so `pip install ziptz` fails for
+everyone; the `-us` is also simply true, since this resolves US ZIP codes and
+nothing else. Go has no central registry, so the import path there is the
+repository's own.
+
 Or copy it. Each side is one standard-library-only file: drop `ziptz.go` into
-a package of your own, or `ziptz.py` next to whatever imports it. That is what
-`clock.py` itself supports — `cp clock.py ziptz/ziptz.py /usr/local/bin/` is a
-complete install.
+a package of your own, or `ziptz.py` next to whatever imports it — no build
+step, nothing to fetch, and the tables come along because they *are* source.
+That is a supported way to use this rather than a workaround: at 1.3 KB of
+tables, the library is smaller than most manifests that would name it.
 
 Python therefore imports two ways, and both answer the same: `ziptz.py` alone
 is a module, and the directory around it is a package whose `__init__.py`
 hands through to that module — which is what lets a clone `import ziptz` with
 nothing installed. A test compares the two, since only the package form is
 what a wheel contains.
+
+The Python side is annotated and ships `py.typed`, so mypy and editors read the
+signatures rather than treating the package as untyped. The annotations are
+`from __future__ import annotations` strings, which is what lets them be spelled
+`datetime | None` while the package still imports on the 3.9 it supports.
 
 ## API
 
@@ -222,7 +270,7 @@ where it landed rather than only in a checkout:
 
 ```sh
 python3 -m unittest ziptz.test_ziptz
-go test github.com/choey/clock/ziptz
+go test github.com/choey/ziptz
 ```
 
 The data is the point: `testdata/cases.json` holds the cases, the zones, the
@@ -252,3 +300,25 @@ fixing one fails the file and makes someone update it.
 Only two things are language-only, and the file says which: Go has no default
 arguments, so `abbrev`'s default of now is Python's to test, and only Python
 can be imported two ways, as a module and as a package.
+
+## Licence
+
+The code is MIT; see [LICENSE](LICENSE).
+
+The tables are a separate question, and [NOTICE](NOTICE) is the answer to it.
+They were produced from public-domain Census centroids resolved through
+timezone-boundary-builder, which is ODbL — so `NOTICE` carries that
+attribution and the reasoning for treating 1.3 KB of zone names as a produced
+work rather than an extract of the boundary database. It ships in the wheel
+and the sdist, and travels with the Go module. Keep it with any copy you make,
+including the copy-one-file install above.
+
+## Credits
+
+The hard part was already done by other people. [Evan
+Siroky](https://github.com/evansiroky/timezone-boundary-builder) builds the
+time zone boundaries out of OpenStreetMap, [Jannik
+Michel](https://github.com/jannikmi/timezonefinder) makes them queryable in
+Python, and the US Census Bureau publishes the ZCTA centroids. This library is
+the small, boring artefact left over once their work has been asked 33,791
+questions.

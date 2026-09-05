@@ -1148,7 +1148,8 @@ def zip_zone(token):
     if ziptz is None:
         raise ClockError(
             f'"{token}" is a ZIP code, and resolving one needs the ziptz'
-            " module, which ships beside this file in the clock repository"
+            ' module: "pip install ziptz-us", or copy ziptz.py next to this'
+            " file. Every other kind of zone works without it"
         )
     try:
         return ziptz.location(token)

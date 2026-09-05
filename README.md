@@ -33,18 +33,30 @@ build-tagged `term_*.go` files, and naming a single file skips them.
 Neither implementation has a third-party dependency. The Go side is standard
 library only; the Python side needs nothing beyond `zoneinfo`, which has
 shipped in the standard library since 3.9. The one thing either reaches outside
-itself for is [`ziptz`](ziptz/), the ZIP-to-zone library in this repository —
-also standard library only, and also here in both languages.
+itself for is [`ziptz`](ziptz/), the ZIP-to-zone library — also standard
+library only, and also written in both languages.
+
+The shortest path, if you have a Go toolchain:
+
+```sh
+go install github.com/choey/clock@latest
+```
+
+That puts a `clock` on your `PATH` in `$GOPATH/bin` (or `$GOBIN`), fetches
+`ziptz` itself, and needs no checkout. Everything below is for working from
+one.
 
 ```sh
 go build -o clock . && mv clock /usr/local/bin/
 ```
 
 builds the binary and puts it wherever you like; `go install .` does the same
-but drops it in `$GOPATH/bin` (or `$GOBIN`) under the name `clock`, which is
-on `PATH` already if you use Go tools regularly. Both find `ziptz` through the
-`replace` directive in `go.mod`, so a fresh clone builds without fetching
-anything.
+but drops it in `$GOPATH/bin`. Both find `ziptz` through the `replace`
+directive in `go.mod`, so a fresh clone builds without fetching anything.
+
+Go has no notion of an optional dependency, so every Go build resolves ZIP
+codes. The Python side is where that is a choice, and it is made the same way
+— see below.
 
 `clock.py` is executable on its own — it carries a `#!/usr/bin/env python3`
 shebang — so the Python side needs no build step, only a copy of it and of
@@ -67,17 +79,32 @@ from your other Python packages. `pip install -e ./ziptz -e .` does the same
 but re-reads both files from this checkout on every run, for working on them in
 place.
 
-`ziptz` is an extra rather than a requirement, so `pip install .` on its own
-gets a working clock without it, and `pip install '.[zip]'` asks for it by
-name — which is the form to use once it is something pip can fetch rather than
-a directory to point at. That extra names `ziptz-us`, which is the library's
-distribution name on PyPI; it still imports as `ziptz`, and the bare name there
-is an old empty registration pip cannot install.
+`ziptz` is a requirement of the Python package, not an extra, so a `pip
+install` of the clock resolves ZIP codes exactly as a `go install` of it does.
+It is named `ziptz-us` there — that is its distribution name on PyPI, where the
+bare `ziptz` is an old empty registration pip cannot install — and it still
+imports as `ziptz`. It is 23 KB with no dependencies of its own, so requiring
+it costs less than explaining when you would want it left out.
 
-`ziptz` carries ZIP codes and nothing else, so the Python clock treats it as
-optional: without it every zone name, abbreviation and country code still
-works, and a ZIP code says what to install rather than the clock refusing to
-start. A clone needs nothing installed either — `ziptz/` is a package, and
+**Not `pip install clock`.** That name on PyPI belongs to an unrelated datetime
+library from 2014, and installing it will quietly get you that instead. This
+publishes under a distribution name of its own; the command it installs is
+still `clock`, the same way `ziptz-us` still imports as `ziptz`. `pipx` is the
+better verb for a program rather than a library, since it gets its own
+environment and puts the command on your `PATH` regardless:
+
+```sh
+pipx install terminal-clock     # then: clock ET,PT,UTC
+```
+
+`ziptz-us` comes with it, so ZIP codes work out of the box exactly as they do
+from a `go install`.
+
+Copying is still a first-class path, and it is the reason `clock.py` guards its
+import of `ziptz` rather than requiring it outright: without the library every
+zone name, abbreviation and country code still works, and a ZIP code says what
+to install instead of the clock refusing to start. A clone needs nothing
+installed either — `ziptz/` is a package, and
 `clock.py` finds its own directory first — so `python3 clock.py 94110` works
 straight out of a checkout.
 

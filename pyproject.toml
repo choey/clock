@@ -8,6 +8,10 @@ version = "0.1.0"
 description = "Analog terminal clocks, one face per time zone"
 requires-python = ">=3.9"
 readme = "README.md"
+# The table form rather than PEP 639's bare SPDX string, which would need
+# setuptools 77 where this asks for 61. Same choice as ziptz's.
+license = { text = "MIT" }
+authors = [{ name = "cho", email = "choey2k5@gmail.com" }]
 # Nothing is required. ziptz is what ZIP tokens resolve through, and the clock
 # starts, runs and answers every other kind of zone without it -- a ZIP then
 # says what to install rather than the clock refusing to start, which clock.py
@@ -26,3 +30,7 @@ clock = "clock:main"
 
 [tool.setuptools]
 py-modules = ["clock"]
+# NOTICE ships with LICENSE because a clock installed from here carries ziptz's
+# tables, and the ODbL attribution for them travels with the thing that carries
+# them rather than with the repository they were generated in.
+license-files = ["LICENSE", "NOTICE"]

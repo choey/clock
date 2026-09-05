@@ -22,6 +22,13 @@
 // The Python module next door answers identically, ZIP for ZIP; both tables are
 // generated into the two implementations in one pass by tools/genzips.py, and
 // must never be edited by hand.
+//
+// Copyright (c) 2026 cho. MIT licensed; see LICENSE. The tables below contain
+// information from timezone-boundary-builder, made available under the ODbL,
+// and from OpenStreetMap, (c) OpenStreetMap contributors; see NOTICE. Dropping
+// this one file into a package of your own is a supported way to use it -- keep
+// this paragraph when you do, since it is then the only attribution travelling
+// with the tables.
 package ziptz
 
 //go:generate python3 tools/genzips.py

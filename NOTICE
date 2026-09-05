@@ -1,0 +1,57 @@
+clock
+Copyright (c) 2026 cho
+
+The source code in this repository is licensed under the MIT License; see
+LICENSE.
+
+This file exists because a built clock is not only this repository's code. It
+records what else ends up inside one, and the attribution that comes with it.
+
+--------------------------------------------------------------------------------
+ziptz
+--------------------------------------------------------------------------------
+
+ZIP code resolution is ziptz, MIT licensed, developed alongside this clock:
+
+    https://github.com/choey/ziptz
+
+A clock carries it rather than merely calling it. `go build` links the Go
+package in, so the compiled binary contains ziptz's lookup tables; the Python
+install this repository documents is `cp clock.py ziptz/ziptz.py`, which copies
+them too. Either way, distributing a clock distributes those tables, and the
+attribution below travels with them.
+
+--------------------------------------------------------------------------------
+The ZIP tables inside ziptz
+--------------------------------------------------------------------------------
+
+Produced from US Census Bureau ZCTA Gazetteer centroids -- a work of the United
+States Government, not subject to copyright protection in the United States (17
+U.S.C. Sec. 105) -- resolved through timezone-boundary-builder, whose
+boundaries derive from OpenStreetMap and are made available under the Open
+Database License (ODbL) v1.0.
+
+    https://github.com/evansiroky/timezone-boundary-builder
+    https://opendatacommons.org/licenses/odbl/1-0/
+
+Attribution, as ODbL Sec. 4.3 asks for:
+
+    Contains information from timezone-boundary-builder, which is made
+    available under the Open Database License (ODbL), and from OpenStreetMap,
+    (c) OpenStreetMap contributors.
+
+ziptz's own NOTICE carries this in full, along with the reasoning for treating
+1.3 KB of zone names -- no geometry, and nothing the source could be
+reconstructed from -- as a produced work rather than an extract of the boundary
+database. That file is the authority on the question; this one repeats it so
+that a clock distributed on its own is not distributed without it.
+
+--------------------------------------------------------------------------------
+The time zone database
+--------------------------------------------------------------------------------
+
+Zone names, offsets and abbreviations are read at runtime from whatever tz
+database the machine has (the IANA Time Zone Database, public domain). Nothing
+from it is copied into this repository. Go falls back to a copy embedded in its
+own standard library when the system has none; that copy is covered by the Go
+licence, not this one.

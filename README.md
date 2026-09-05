@@ -799,3 +799,16 @@ The data derives from US Census ZCTA Gazetteer centroids (a US Government
 work, public domain) resolved through
 [timezonefinder](https://github.com/jannikmi/timezonefinder), whose boundaries
 come from timezone-boundary-builder (ODbL).
+
+## Licence
+
+MIT; see [LICENSE](LICENSE).
+
+[NOTICE](NOTICE) is the other half, and matters because a clock is not only
+this repository's code. `go build` links `ziptz` into the binary and the
+documented Python install copies `ziptz.py` alongside `clock.py`, so
+distributing a clock distributes its ZIP tables — which carry an ODbL
+attribution from the boundary data they were produced against. `NOTICE` states
+it, and belongs with any copy you pass on. The zone names, offsets and
+abbreviations a clock reads at runtime are the system's tz database and are not
+copied into anything here.

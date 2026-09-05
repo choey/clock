@@ -104,6 +104,39 @@ def documented(verbose):
     return passed, failed
 
 
+def versions(verbose):
+    """The one number that is written three times and shown to the user.
+
+    clock.py, clock.go and pyproject.toml each declare it, and `clock
+    --version` prints it from two of them -- so a bump that misses one makes
+    the two implementations disagree about which release they are, which is
+    the single claim difftest cannot catch: it compares the two clocks to each
+    other, and a wrong version printed identically by both is still wrong.
+    """
+    found = {
+        "clock.py": r'^VERSION = "([^"]+)"',
+        "clock.go": r'^const version = "([^"]+)"',
+        "pyproject.toml": r'^version = "([^"]+)"',
+    }
+    seen = {}
+    for path, pattern in found.items():
+        text = (ROOT / path).read_text(encoding="utf-8")
+        match = re.search(pattern, text, re.M)
+        if not match:
+            print(f"FAIL {path}: no version declaration matching /{pattern}/")
+            return 0, 1
+        seen[path] = match.group(1)
+
+    if len(set(seen.values())) != 1:
+        print("FAIL the version is declared three times and they disagree:")
+        for path, value in seen.items():
+            print(f"     {path:16} {value}")
+        return 0, 1
+    if verbose:
+        print(f"ok   version {next(iter(seen.values()))} in all three declarations")
+    return 1, 0
+
+
 def main():
     verbose = "-v" in sys.argv[1:]
     figures = tables()
@@ -148,8 +181,9 @@ def main():
             print(f"FAIL {path}: does not say {right:,} of {total:,}")
             failed += 1
 
-    more_passed, more_failed = documented(verbose)
-    passed, failed = passed + more_passed, failed + more_failed
+    for check in (documented, versions):
+        more_passed, more_failed = check(verbose)
+        passed, failed = passed + more_passed, failed + more_failed
 
     print(f"\n{passed} passed, {failed} failed")
     return 1 if failed else 0

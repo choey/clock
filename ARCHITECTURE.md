@@ -376,7 +376,7 @@ real IANA zone. That folding — many actual zones collapsing onto one
 representative letter because they currently agree — is `genzips.py`'s
 `CANONICAL` table, and is exactly what can go stale if a zone's rules diverge
 from its letter's; see
-[When to regenerate](README.md#when-to-regenerate) for that.
+[When to regenerate](ziptz/README.md#when-to-regenerate) for that.
 
 Both tables derive from US Census ZCTA Gazetteer centroids (public domain),
 resolved through [timezonefinder](https://github.com/jannikmi/timezonefinder),

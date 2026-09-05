@@ -67,6 +67,11 @@ from your other Python packages. `pip install -e ./ziptz -e .` does the same
 but re-reads both files from this checkout on every run, for working on them in
 place.
 
+`ziptz` is an extra rather than a requirement, so `pip install .` on its own
+gets a working clock without it, and `pip install '.[zip]'` asks for it by
+name — which is the form to use once `ziptz` is something pip can fetch rather
+than a directory to point at.
+
 `ziptz` carries ZIP codes and nothing else, so the Python clock treats it as
 optional: without it every zone name, abbreviation and country code still
 works, and a ZIP code says what to install rather than the clock refusing to
@@ -279,6 +284,22 @@ usual. Every readout carries its weekday, for the same reason a photograph
 wants a date on it. Redirect that same command to a file and it draws the one
 frame and exits, instead of staying up.
 
+The fraction is optional, and so is its length — `2026-07-15T05:02:41Z` and
+`2026-07-15T05:02:41.9Z` both pin the same second. For a time without a date
+in mind, a bare UTC clock time works too — `CLOCK_FREEZE="15:30 UTC"` (minutes
+and seconds are each optional) pins whichever of yesterday, today or tomorrow,
+by the wall clock right now, lands closest to that reading. A date ahead of
+it fills in what it leaves out: `CLOCK_FREEZE="2026-07-22 15:30 UTC"`,
+`CLOCK_FREEZE="2026/07/22 15:30 UTC"` or `CLOCK_FREEZE="7/22/2026 15:30 UTC"`
+pin that exact day, `CLOCK_FREEZE="7/22/26 15:30 UTC"` the same day with the
+year written short, while `CLOCK_FREEZE="7/22 15:30 UTC"` — no year — pins
+whichever July 22, again by the wall clock right now, lands closest.
+
+The zone does not have to be UTC either — it can be anything a `--zones`
+argument accepts, an IANA name, alias or fixed-offset abbreviation included:
+`CLOCK_FREEZE="8/22 09:53 PT"` pins whichever August 22 in Pacific time is
+closest to now, daylight saving and all.
+
 `CLOCK_FREEZE` pins the time, not the size: with the default `--scale auto`,
 the same command still comes out a different size in a different window. Add
 a fixed `--scale` too — `--scale 1` for these README frames — for a screenshot
@@ -485,9 +506,10 @@ line.
 CLOCK_CELL_RATIO=2.6 python3 clock.py
 ```
 
-`ROWS`/`rowsN` sets the face height in terminal rows; the width follows from
-the cell ratio, as `floor(ROWS * CELL_RATIO + 0.5)` — 23 columns at the
-defaults. A whole frame is then
+Inside, `ROWS`/`rowsN` is the face height in terminal rows — what `--scale`
+resolves to, rather than a knob of its own — and the width follows from the
+cell ratio, as `floor(ROWS * CELL_RATIO + 0.5)`: 23 columns at the defaults. A
+whole frame is then
 
 ```
 width  = perRow * COLS + (perRow - 1) * GAP
@@ -611,7 +633,7 @@ What none of that can see is a change that alters the picture in *both*
 implementations — which is how every change is made, in one pass. So sixteen
 frames are kept as bytes in `tools/golden/`, one of each kind of picture the
 clock can draw, and compared after the two are compared with each other.
-Shortening the second hand in both passes all 900 differential cases and fails
+Shortening the second hand in both passes every differential case and fails
 15 of the 16 goldens.
 
 ```sh
@@ -757,7 +779,10 @@ tools/argfuzz.py -v --cases 2000 --seed 3
 
 `ziptz` has tests of its own, and holds its two libraries to one shared list
 of cases in `ziptz/testdata/cases.json` — the same idea as the difftest, a
-rung down. `make test` runs those and the difftest together.
+rung down. Where the clock can only sample its input space, that library can
+exhaust it, so it also sweeps every ZIP there is through both implementations:
+101,000 answers, which either match or the build stops. `make test` runs those
+and the difftest together.
 
 ```sh
 make test

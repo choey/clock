@@ -21,7 +21,7 @@ ziptz.generic("94110")        # 'PT', whatever the date
 
 The two implementations answer identically for every ZIP code, down to the
 wording of the errors — the tables are generated into both in one pass by
-[`tools/genzips.py`](../tools/genzips.py), and
+[`tools/genzips.py`](tools/genzips.py), and
 [`tools/difftest.sh`](../tools/difftest.sh) compares them.
 
 ## Accuracy
@@ -74,14 +74,43 @@ what a wheel contains.
 | --- | --- | --- |
 | `Zone(token) (string, error)` | `zone(token) -> str` | the IANA name for a 3- or 5-digit ZIP |
 | `Location(token) (*time.Location, error)` | `location(token) -> ZoneInfo` | the same, loaded from the system tz database |
-| `PrefixZone(p3) string` | `prefix_zone(p3) -> str` | the majority zone for a prefix, `""` if unassigned |
-| `Abbrev(token, at) (string, error)` | `abbrev(token, at=None) -> str` | the abbreviation at that instant, e.g. `PDT` |
+| `Abbrev(token, at) (string, error)` | `abbrev(token, at=None) -> str` | the abbreviation at a given instant — `PST` in winter, `PDT` in summer |
 | `Generic(token) (string, error)` | `generic(token) -> str` | the name without daylight saving, e.g. `PT` |
-| `ExactZone(zip5) string` | `exact_zone(zip5) -> str` | the exception for one ZIP, `""` if its prefix is right |
+| `PrefixZone(p3) string` | `prefix_zone(p3) -> str` | the majority zone for a prefix, `""` if unassigned |
+| `ExactZone(zip5) string` | `exact_zone(zip5) -> str` | the zone for one of the 233 ZIPs its prefix gets wrong, `""` for the rest |
 
-All four report an error for anything that is not three or five ASCII digits,
-and for prefixes the Postal Service has never assigned. Python raises
+Those first four report an error for anything that is not three or five ASCII
+digits, and for prefixes the Postal Service has never assigned. Python raises
 `ZipError`, a `ValueError`. Both error texts are written to be printed as-is.
+
+The last two are the two table lookups `Zone` is built from, exposed for a
+caller that wants to know which of them answered. Neither validates its input
+and neither reports an error: each returns `""` for anything it has no record
+of. For `ExactZone` that is almost every ZIP — only the 233 exceptions have a
+record at all — so `""` there means *no exception; the prefix is the answer*,
+not *unknown*. `Zone` is exactly the two composed in that order.
+
+### What `Location` costs
+
+`Location` and `location` return the same thing under two names: `*time.Location`
+is Go's loaded zone and `ZoneInfo` is Python's, and neither language spells it
+the other's way. What differs is the price of asking twice, and that is the
+standard libraries' doing rather than this library's.
+
+```
+20,000 calls for one zone       (one machine; the ratio is the point, not the ms)
+  Go   time.LoadLocation      459 ms    reads the tz database every call
+  Py   ZoneInfo                 2 ms    interned by name; the first call does the work
+  Py   ZoneInfo.no_cache    1,053 ms    what that cache is saving
+```
+
+Python interns by name, so `location("94110") is location("90210")` — two ZIPs,
+one zone, one object. Go does not, and every `Location` is a file read. Hold the
+result if you are calling it per row of anything, and note that `Abbrev` goes
+through `Location` and inherits the same cost.
+
+`Zone` and `Generic` are the cheap ones in both languages: a binary search and a
+short scan over a string constant, with no I/O at all and nothing to cache.
 
 ### The three names for one zone
 
@@ -177,8 +206,16 @@ zones/ZONES in both ziptz libraries.
 ## Tests
 
 ```sh
-make test        # both, or: make test-go / make test-py
+make test        # both suites, then the sweep below
 ```
+
+`make test-go` and `make test-py` run one suite each. `make sweep` is the
+third thing `make test` does, and the one the cases cannot be: every ZIP there
+is, through both libraries, compared. All 1,000 prefixes and all 100,000
+five-digit codes — 101,000 answers, zone names and error text alike — must
+come out identical, which is what makes "the two answer the same, ZIP for ZIP"
+a measured claim rather than a hopeful one. The cases above cover what someone
+thought of; this covers what nobody did.
 
 An installed copy carries its tests and their data, so it can prove itself
 where it landed rather than only in a checkout:

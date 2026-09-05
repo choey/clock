@@ -8,9 +8,18 @@ version = "0.1.0"
 description = "Analog terminal clocks, one face per time zone"
 requires-python = ">=3.9"
 readme = "README.md"
-# ZIP tokens only; the clock starts and runs without it, and says so if a ZIP
-# code is asked for. Install it from ziptz/ in this repository: pip install ./ziptz
-dependencies = ["ziptz"]
+# Nothing is required. ziptz is what ZIP tokens resolve through, and the clock
+# starts, runs and answers every other kind of zone without it -- a ZIP then
+# says what to install rather than the clock refusing to start, which clock.py
+# implements with a guarded import and difftest covers with two cases run from
+# a directory the library is not in.
+#
+# So it is an extra, not a dependency: declaring it required would have made
+# `pip install clock` fail or reach for a stranger's package on PyPI over a
+# feature most invocations never touch, and would have contradicted what the
+# code does.
+[project.optional-dependencies]
+zip = ["ziptz"]
 
 [project.scripts]
 clock = "clock:main"

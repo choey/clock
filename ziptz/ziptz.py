@@ -16,9 +16,10 @@ Give all five digits and the answer is exact. Three digits -- the prefix alone
 boundary their prefix has to round the wrong way.
 
 No dependency beyond the standard library, and no I/O of its own: both tables
-are string constants in this module, so a lookup is a binary search and a short
-scan. `location()` is the only function that touches the system's time zone
-database, through `zoneinfo`.
+are string constants in this module, and the first lookup unpacks them into
+dicts, so the tables stay small on disk and answering is a hash. `location()`
+is the only function that touches the system's time zone database, through
+`zoneinfo`.
 
 Data: US Census ZCTA Gazetteer centroids (a US Government work, public domain)
 resolved through timezone-boundary-builder (ODbL).
@@ -133,41 +134,92 @@ EXCEPTIONS = "324E0156368E06546367697077373E380203070809101112151617212223252629
 def prefix_zone(p3: str) -> str:
     """The zone name for a 3-digit ZIP prefix, or "" if unassigned.
 
-    Binary search over fixed-width records; the string comparison is exact
-    because zero-padded 3-digit decimals sort lexicographically the way they
-    sort numerically, so no integer parsing is involved on either side.
+    The argument is checked before it is used, because the table this reads
+    was until recently searched rather than indexed, and that search found the
+    last record sorting at or below its argument -- so anything that is not a
+    prefix still found *something*. "99" sorted below "990" and answered Los
+    Angeles, "9999" above "995" and answered Anchorage, and "94 " below "941"
+    and answered Los Angeles for a space. Go checked the length and this did
+    not, so the two ports disagreed on a public function; neither checked the
+    digits, so both were wrong about "94 " together. The sweep sees neither:
+    every token it asks about is well formed by construction.
+
+    isdigit() alone would be wrong here -- it is true of "١" and "１"
+    as well as "1", and the two ports have to accept the same strings -- so it
+    is paired with isascii(), the way env_whole does it in the clock.
     """
-    lo, hi, hit = 0, len(RUNS) // 4 - 1, -1
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        if RUNS[mid * 4 : mid * 4 + 3] <= p3:
-            hit = mid
-            lo = mid + 1
-        else:
-            hi = mid - 1
-    if hit < 0:
+    if len(p3) != 3 or not (p3.isascii() and p3.isdigit()):
         return ""
-    return ZONES.get(RUNS[hit * 4 + 3], "")
+    return _prefix_index().get(p3, "")
+
+
+# The run table, unpacked into a dictionary on first use; see _exact_index for
+# the argument, which is the same one. 896 assigned prefixes, and the binary
+# search this replaces cost more than the length check guarding it.
+_prefix_cache = None
+
+
+def _prefix_index() -> dict[str, str]:
+    """RUNS as {prefix: zone name}, built once.
+
+    Unassigned prefixes are left out rather than stored empty, so a miss and an
+    unassigned prefix both answer "" through .get() without distinguishing
+    them -- which is what the binary search did too.
+    """
+    global _prefix_cache
+    if _prefix_cache is None:
+        index: dict[str, str] = {}
+        records = len(RUNS) // 4
+        for r in range(records):
+            start = int(RUNS[r * 4 : r * 4 + 3])
+            # a run reaches to the next record's prefix, and the last one to 999
+            end = int(RUNS[(r + 1) * 4 : (r + 1) * 4 + 3]) if r + 1 < records else 1000
+            name = ZONES.get(RUNS[r * 4 + 3], "")
+            if name:
+                for p in range(start, end):
+                    index[f"{p:03d}"] = name
+        _prefix_cache = index
+    return _prefix_cache
+
+
+# The exception table, unpacked into a dictionary on first use. None until
+# something asks, so a program that never resolves a ZIP never builds it.
+#
+# The table is the compact thing that ships; this is the fast thing to ask.
+# Walking it per lookup meant slicing a group header and parsing a count for
+# every group before the answer -- about thirty of each in the worst case, and
+# 71% of what zone() cost. Unpacked, it is 233 entries, well under a tenth of a
+# millisecond to build and about 20 KB to hold, and a lookup is one hash.
+#
+# Laziness is the whole argument for a dict here rather than a dict in the
+# source: the shipped tables stay 1.3 KB, which is what makes vendoring one
+# file reasonable, and only a caller who actually looks a ZIP up pays for the
+# index. Two threads racing to build it both build the same thing and one wins;
+# there is nothing to lock.
+_exact_cache = None
+
+
+def _exact_index() -> dict[str, str]:
+    """EXCEPTIONS as {zip5: zone name}, built once."""
+    global _exact_cache
+    if _exact_cache is None:
+        index: dict[str, str] = {}
+        i = 0
+        while i < len(EXCEPTIONS):
+            group = EXCEPTIONS[i : i + 3]
+            zone_name = ZONES.get(EXCEPTIONS[i + 3], "")
+            count = int(EXCEPTIONS[i + 4 : i + 6])
+            body = i + 6
+            for k in range(count):
+                index[group + EXCEPTIONS[body + k * 2 : body + k * 2 + 2]] = zone_name
+            i = body + count * 2
+        _exact_cache = index
+    return _exact_cache
 
 
 def exact_zone(zip5: str) -> str:
     """The zone name for one exact 5-digit ZIP, or "" if its prefix gets it right."""
-    prefix, suffix = zip5[:3], zip5[3:]
-    i = 0
-    while i < len(EXCEPTIONS):
-        group = EXCEPTIONS[i : i + 3]
-        letter = EXCEPTIONS[i + 3]
-        count = int(EXCEPTIONS[i + 4 : i + 6])
-        body = i + 6
-        if group == prefix:
-            for k in range(count):
-                if EXCEPTIONS[body + k * 2 : body + k * 2 + 2] == suffix:
-                    return ZONES.get(letter, "")
-            # fall through: a prefix may own more than one group
-        elif group > prefix:
-            break  # records are sorted, so no later group can match
-        i = body + count * 2
-    return ""
+    return _exact_index().get(zip5, "")
 
 
 def zone(token: str) -> str:

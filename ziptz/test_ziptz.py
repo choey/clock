@@ -212,6 +212,24 @@ class Checks(unittest.TestCase):
                 with self.subTest(zone=case["zone"]):
                     self.assertEqual(case["generic"], case["winter"])
 
+    def prefix_zone_wants_three_digits(self):
+        """A prefix is three digits or it is nothing.
+
+        The binary search underneath finds the last record sorting at or below
+        its argument, which for a shorter or longer string still finds one --
+        "99" sorts below "990", "9999" above "995" -- so without a length check
+        each answers a zone for a question nobody asked. This side had no such
+        check for a while and the two ports disagreed here, in the one place
+        the sweep cannot look: every token it asks about is well formed by
+        construction.
+        """
+        for p3 in ("", "9", "99", "9999", "94110", " 94", "94 "):
+            with self.subTest(prefix=p3):
+                self.assertEqual(
+                    ziptz.prefix_zone(p3), "", "only three digits is a prefix")
+        self.assertNotEqual(
+            ziptz.prefix_zone("941"), "", "the length check went too far")
+
     # Python only, and named as such in the shared file: Go has no default
     # arguments, and only Python can be imported two ways.
     def abbrev_defaults_to_now(self):
@@ -273,6 +291,7 @@ class Checks(unittest.TestCase):
         "every-zone-has-a-case": every_zone_has_a_case,
         "generic-covers-every-zone": generic_covers_every_zone,
         "non-shifting-zones-are-their-own-generic": non_shifting_zones_are_their_own_generic,
+        "prefix-zone-wants-three-digits": prefix_zone_wants_three_digits,
         "abbrev-defaults-to-now": abbrev_defaults_to_now,
         "package-and-module-agree": package_and_module_agree,
     }

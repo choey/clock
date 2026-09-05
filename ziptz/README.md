@@ -2,8 +2,8 @@
 
 US ZIP code to IANA time zone, in Go and in Python, from about 1.3 KB of
 tables. No dependencies, no data files, no network: both tables are string
-constants compiled into the source, so a lookup is a binary search and a short
-scan.
+constants compiled into the source, and the first lookup unpacks them into a
+map — so the tables stay small on disk and answering one is a hash.
 
 ```go
 name, err := ziptz.Zone("94110")          // "America/Los_Angeles"
@@ -48,12 +48,8 @@ It covers the places a US-only table usually forgets:
 And it answers a 3-digit prefix, not just a whole ZIP, which is what you have
 when an address is partial or a form was only half filled in.
 
-Three things it is deliberately or unavoidably bad at:
+Two things it is deliberately or unavoidably bad at:
 
-- **Bulk lookups.** Every five-digit query binary-searches the run table and
-  then scans the exception list. That is nothing for one lookup and the wrong
-  shape for millions of them; a flat dictionary would beat it comfortably, and
-  this trades that away for the 1.3 KB.
 - **Zone identity.** About 34 IANA zones are folded onto the 11 that agree with
   them *today*, so a ZIP in Knox County, Indiana answers `America/New_York`
   rather than `America/Indiana/Knox`. The clock is right; the name is coarser
@@ -76,8 +72,14 @@ ziptz.zone("798")     # America/Chicago — the prefix rounds to the majority
 ```
 
 One gap: PO-box and single-building ZIPs have no delivery area in the source
-data, so even given in full they fall back to their prefix's answer. `00501`
-(Holtsville, NY) has no prefix to fall back to either, and is an error.
+data, so even given in full they fall back to their prefix's answer. Where a
+whole prefix is nothing but those, there is no answer to fall back to and the
+lookup is an error instead — `00501` (Holtsville, NY, an IRS building) is the
+named case, and cross-referencing a per-ZIP dataset finds about 275 of them
+across 19 prefixes: IRS centres like `73301` and `45999`, federal agency ZIPs
+in `569xx`, state government in `942xx`, and PO-box banks in `311xx` and
+`332xx`. They are exactly the ZIPs with no delivery area, so the gap is one
+thing rather than two.
 
 The tables carry today's zone *names*, not today's offsets — daylight saving
 comes from whatever tzdata the machine has, so a rule change needs no new
@@ -98,6 +100,11 @@ registration with no files ever attached, so `pip install ziptz` fails for
 everyone; the `-us` is also simply true, since this resolves US ZIP codes and
 nothing else. Go has no central registry, so the import path there is the
 repository's own.
+
+One consequence worth knowing: `importlib.metadata.version("ziptz")` raises,
+because that asks the *distribution* name. `ziptz.__version__` is the answer to
+use, and is the better one anyway — it works for a copied single file, where
+there is no installed distribution to ask about at all.
 
 Or copy it. Each side is one standard-library-only file: drop `ziptz.go` into
 a package of your own, or `ziptz.py` next to whatever imports it — no build
@@ -157,8 +164,9 @@ one zone, one object. Go does not, and every `Location` is a file read. Hold the
 result if you are calling it per row of anything, and note that `Abbrev` goes
 through `Location` and inherits the same cost.
 
-`Zone` and `Generic` are the cheap ones in both languages: a binary search and a
-short scan over a string constant, with no I/O at all and nothing to cache.
+`Zone` and `Generic` are the cheap ones in both languages: two map lookups, no
+I/O at all, and no per-call allocation once the first call has unpacked the
+tables.
 
 ### The three names for one zone
 

@@ -55,7 +55,8 @@
     "exceptions-beat-their-prefix",
     "every-zone-has-a-case",
     "generic-covers-every-zone",
-    "non-shifting-zones-are-their-own-generic"
+    "non-shifting-zones-are-their-own-generic",
+    "prefix-zone-wants-three-digits"
   ],
 
   "language_only": {

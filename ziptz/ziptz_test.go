@@ -383,6 +383,24 @@ var implemented = map[string]func(*testing.T, testData){
 			}
 		}
 	},
+
+	// A prefix is three digits or it is nothing. The binary search underneath
+	// finds the last record sorting at or below its argument, which for a
+	// shorter or longer string still finds one -- "99" sorts below "990",
+	// "9999" above "995" -- so without a length check each answers a zone for a
+	// question nobody asked. Python had no such check for a while and the two
+	// ports disagreed here, in the one place the sweep cannot look: every token
+	// it asks about is well formed by construction.
+	"prefix-zone-wants-three-digits": func(t *testing.T, d testData) {
+		for _, p3 := range []string{"", "9", "99", "9999", "94110", " 94", "94 "} {
+			if got := PrefixZone(p3); got != "" {
+				t.Errorf("PrefixZone(%q) = %q, want \"\": only three digits is a prefix", p3, got)
+			}
+		}
+		if got := PrefixZone("941"); got == "" {
+			t.Error(`PrefixZone("941") = "", want a zone: the length check went too far`)
+		}
+	},
 }
 
 func TestEveryDeclaredCheckRuns(t *testing.T) {

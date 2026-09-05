@@ -23,7 +23,9 @@ authors = [{ name = "cho", email = "choey2k5@gmail.com" }]
 # feature most invocations never touch, and would have contradicted what the
 # code does.
 [project.optional-dependencies]
-zip = ["ziptz"]
+# ziptz-us on PyPI, ziptz to import: the bare name is an empty 2013 squat that
+# pip cannot install. Naming it wrong here would resolve to nothing at all.
+zip = ["ziptz-us"]
 
 [project.scripts]
 clock = "clock:main"

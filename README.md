@@ -69,8 +69,10 @@ place.
 
 `ziptz` is an extra rather than a requirement, so `pip install .` on its own
 gets a working clock without it, and `pip install '.[zip]'` asks for it by
-name — which is the form to use once `ziptz` is something pip can fetch rather
-than a directory to point at.
+name — which is the form to use once it is something pip can fetch rather than
+a directory to point at. That extra names `ziptz-us`, which is the library's
+distribution name on PyPI; it still imports as `ziptz`, and the bare name there
+is an old empty registration pip cannot install.
 
 `ziptz` carries ZIP codes and nothing else, so the Python clock treats it as
 optional: without it every zone name, abbreviation and country code still

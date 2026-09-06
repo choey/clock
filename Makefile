@@ -1,4 +1,4 @@
-.PHONY: run-go run-py test test-lib regen
+.PHONY: run-go run-py test
 
 run-go:
 	go run .
@@ -6,18 +6,13 @@ run-go:
 run-py:
 	python3 clock.py
 
-# Proves the two clocks render identical output and answer the keyboard alike,
-# then that the two ziptz libraries answer identically.
-test: test-lib
+# Proves the two clocks render identical output and answer the keyboard alike.
+# Needs ziptz importable for the Python side -- `pip install ziptz-us` -- since
+# Go links it through go.mod and would otherwise resolve ZIPs the Python clock
+# could not. difftest says so rather than reporting it as hundreds of diffs.
+test:
 	tools/difftest.sh
 	tools/keytest.py
 	tools/fitfuzz.py
 	tools/argfuzz.py
 	tools/docnums.py
-
-test-lib:
-	$(MAKE) -C ziptz test
-
-# The ZIP tables belong to ziptz and are regenerated there.
-regen:
-	$(MAKE) -C ziptz regen

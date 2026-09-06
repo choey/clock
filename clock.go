@@ -21,7 +21,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	"github.com/choey/clock/ziptz"
+	"github.com/choey/ziptz"
 )
 
 const (

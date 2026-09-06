@@ -2,7 +2,6 @@ clock
 clock-keytest
 *.out
 __pycache__/
-ziptz/tools/cache/
 build/
 dist/
 *.egg-info/

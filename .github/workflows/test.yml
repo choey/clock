@@ -46,7 +46,7 @@ jobs:
         # gofmt prints the files it would change and says nothing otherwise, so
         # any output at all is the failure.
         run: |
-          unformatted=$(gofmt -l . ziptz)
+          unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
             echo "gofmt would rewrite:"
             echo "$unformatted"
@@ -54,14 +54,19 @@ jobs:
           fi
 
       - name: vet
-        run: |
-          go vet .
-          cd ziptz && go vet ./...
+        run: go vet ./...
+
+      # The Python clock resolves ZIP codes through ziptz, which is a module of
+      # its own; the Go clock links it through go.mod. Without it here the two
+      # would differ on every ZIP, which difftest refuses to start rather than
+      # report as hundreds of diffs.
+      - name: install ziptz
+        run: pip install ziptz-us
 
       - name: compile the Python side
-        run: python3 -m compileall -q clock.py ziptz tools
+        run: python3 -m compileall -q clock.py tools
 
-      # difftest, keytest, fitfuzz, argfuzz, docnums and both ziptz suites. The goldens in tools/golden
+      # difftest, keytest, fitfuzz, argfuzz and docnums. The goldens in tools/golden
       # are bytes rendered on someone's machine, so this is also where a
       # tzdata change that moves a zone abbreviation would first show up --
       # as a golden failing, which is the right place for it to appear.

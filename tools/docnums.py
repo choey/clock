@@ -18,9 +18,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "ziptz"))
-
-import ziptz  # noqa: E402  (after the path, on purpose)
+import ziptz  # the released module, not a copy in this tree
 
 
 def tables():
@@ -31,11 +29,6 @@ def tables():
         count = int(ziptz.EXCEPTIONS[i + 4 : i + 6])
         groups, exceptions, i = groups + 1, exceptions + count, i + 6 + count * 2
 
-    canonical = re.search(
-        r"CANONICAL = \{(.*?)\n\}",
-        (ROOT / "ziptz" / "tools" / "genzips.py").read_text(encoding="utf-8"),
-        re.S,
-    )
     # The one figure that comes from a harness rather than from the data: how
     # many frames tools/golden keeps. Four sentences across two documents quote
     # it, and adding a golden is exactly the moment nobody rereads them.
@@ -49,7 +42,6 @@ def tables():
         "exception_prefixes": groups,
         "letters": len(ziptz.ZONES),
         "generics": len(ziptz.GENERIC),
-        "folded": len(re.findall(r'"[A-Za-z_]+/[A-Za-z_/]+"', canonical.group(1))),
     }
 
 
@@ -64,18 +56,15 @@ CLAIMS = (
     ("README.md", r"(\d+) ZIP codes, across (\d+) prefixes", ("exceptions", "exception_prefixes")),
     ("README.md", r"of 33,791 ZIP codes, ([\d,]+) \(0\.69%\)", ("exceptions",)),
     ("ARCHITECTURE.md", r"is the (\d+) ZIPs the prefix table gets wrong", ("exceptions",)),
-    ("ziptz/README.md", r"wrong for the (\d+) that sit on the losing side", ("exceptions",)),
-    ("ziptz/README.md", r"(\d+) range records, (\d+) of which name a zone, and (\d+) exceptions",
-     ("runs", "runs_named", "exceptions")),
-    ("ziptz/README.md", r"`Generic` is a table here, ([a-z]+) entries", ("letters",)),
-    ("ziptz/ziptz.py", r"wrong for the (\d+) that sit on the losing side", ("exceptions",)),
-    ("ziptz/ziptz.go", r"// the 33,791 ZIP codes and wrong for the (\d+) that sit", ("exceptions",)),
-    ("ziptz/tools/genzips.py", r"The output is (\d+) range records and (\d+)\n-- ?exceptions|"
-                               r"The output is (\d+) range records and (\d+)\nexceptions",
-     ("runs", "exceptions")),
-    ("ziptz/README.md", r"`CANONICAL` collapses ~(\d+) zones onto (\d+) letters",
-     ("folded", "letters")),
+    ("README.md", r"(\d+) ZIPs across (\d+) prefixes, (\d+) range records",
+     ("exceptions", "exception_prefixes", "runs")),
+    ("README.md", r"the (\d+) letters those fold onto", ("letters",)),
 )
+
+# ziptz's own documents are checked by ziptz, which is where they live now.
+# What stays here is every figure a *clock* document quotes, recomputed from
+# the library the clock actually depends on -- so a ziptz release that moved a
+# ZIP would fail this repository's prose too, which is the point.
 
 WORDS = {"eleven": 11, "ten": 10, "twelve": 12, "sixteen": 16, "thirty": 30, "forty": 40}
 
@@ -166,20 +155,6 @@ def main():
                 passed += 1
                 if verbose:
                     print(f"ok   {path}: {key} = {got}")
-
-    # The one figure no table holds: how many ZIPs there are at all. It comes
-    # from the Census file, so this checks the documents agree with each other
-    # and with their own arithmetic instead.
-    total, right = 33791, 33791 - figures["exceptions"]
-    for path in ("ziptz/README.md", "ziptz/ziptz.py", "ziptz/ziptz.go"):
-        text = (ROOT / path).read_text(encoding="utf-8")
-        if f"{right:,}" in text and f"{total:,}" in text:
-            passed += 1
-            if verbose:
-                print(f"ok   {path}: {right:,} of {total:,} add up")
-        else:
-            print(f"FAIL {path}: does not say {right:,} of {total:,}")
-            failed += 1
 
     for check in (documented, versions):
         more_passed, more_failed = check(verbose)

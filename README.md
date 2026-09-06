@@ -33,8 +33,8 @@ build-tagged `term_*.go` files, and naming a single file skips them.
 Neither implementation has a third-party dependency. The Go side is standard
 library only; the Python side needs nothing beyond `zoneinfo`, which has
 shipped in the standard library since 3.9. The one thing either reaches outside
-itself for is [`ziptz`](ziptz/), the ZIP-to-zone library — also standard
-library only, and also written in both languages.
+itself for is [`ziptz`](https://github.com/choey/ziptz), the ZIP-to-zone
+library — also standard library only, and also written in both languages.
 
 The shortest path, if you have a Go toolchain:
 
@@ -63,8 +63,9 @@ shebang — so the Python side needs no build step, only a copy of it and of
 `ziptz.py` beside it:
 
 ```sh
-cp clock.py ziptz/ziptz.py /usr/local/bin/
-mv /usr/local/bin/clock.py /usr/local/bin/clock
+cp clock.py /usr/local/bin/clock            # and, for ZIP codes:
+curl -sO https://raw.githubusercontent.com/choey/ziptz/v0.1.0/ziptz.py
+mv ziptz.py /usr/local/bin/
 ```
 
 or, to manage them like any other Python tool instead:
@@ -103,10 +104,15 @@ from a `go install`.
 Copying is still a first-class path, and it is the reason `clock.py` guards its
 import of `ziptz` rather than requiring it outright: without the library every
 zone name, abbreviation and country code still works, and a ZIP code says what
-to install instead of the clock refusing to start. A clone needs nothing
-installed either — `ziptz/` is a package, and
-`clock.py` finds its own directory first — so `python3 clock.py 94110` works
-straight out of a checkout.
+to install instead of the clock refusing to start.
+
+That is also the one thing a checkout no longer does for free. `ziptz` used to
+sit in this repository, so `python3 clock.py 94110` worked out of a clone with
+nothing installed; it is its own module now, so the Python clock wants it
+installed — `pip install ziptz-us`, or a copy of `ziptz.py` beside `clock.py`.
+Every other kind of zone works without it, and `make test` says so plainly
+rather than reporting a Go clock that resolves ZIPs and a Python one that
+cannot as hundreds of differences.
 
 However it got there, `clock --version` says which release you have, and both
 implementations print the same line. `ziptz` is released on its own cycle and
@@ -503,11 +509,12 @@ One gap remains: PO-box and single-building ZIPs have no delivery-area data to
 place them precisely, so even given in full they fall back to their prefix's
 answer. See [ARCHITECTURE.md](ARCHITECTURE.md#zip-resolution) for how the two
 lookup tables are built and encoded, and [When to
-regenerate](ziptz/README.md#when-to-regenerate) for when they need to be.
+regenerate](https://github.com/choey/ziptz#when-to-regenerate) for when they
+need to be.
 
 The tables and the two lookups over them are not part of the clock: they are
-[`ziptz`](ziptz/), a library in this repository, in Go and in Python, usable
-and installable on its own.
+[`ziptz`](https://github.com/choey/ziptz), a library of its own, in Go and in
+Python, usable and installable without the clock.
 
 ## Tuning
 
@@ -759,8 +766,8 @@ that `fit_per_row` exists to protect. A face's column is now the wider of the
 face and its readout.
 
 `tools/docnums.py` holds the prose to the tables. The documents quote figures
-that come out of the data — 233 ZIPs across 30 prefixes, 157 range records, 34
-zones folded onto 11 letters — and regenerating the tables would leave those
+that come out of the data — 233 ZIPs across 30 prefixes, 157 range records,
+and the 11 letters those fold onto — and regenerating the tables would leave those
 sentences quietly false, since they still read fine and nothing else reads
 prose. It recomputes each from the shipped tables and checks the file says it.
 Dropping one exception group makes four documents fail at once.
@@ -807,7 +814,7 @@ tools/argfuzz.py -v --cases 2000 --seed 3
 ```
 
 `ziptz` has tests of its own, and holds its two libraries to one shared list
-of cases in `ziptz/testdata/cases.json` — the same idea as the difftest, a
+of cases in its own `testdata/cases.json` — the same idea as the difftest, a
 rung down. Where the clock can only sample its input space, that library can
 exhaust it, so it also sweeps every ZIP there is through both implementations:
 101,000 answers, which either match or the build stops. `make test` runs those
@@ -818,9 +825,9 @@ make test
 ```
 
 The ZIP tables are `ziptz`'s, not the clock's, and so is regenerating them:
-see [Regenerating](ziptz/README.md#regenerating) and [When to
-regenerate](ziptz/README.md#when-to-regenerate) there. `make regen` from here
-runs it in place. The short version is almost never, and *not* for
+see [Regenerating](https://github.com/choey/ziptz#regenerating) and [When to
+regenerate](https://github.com/choey/ziptz#when-to-regenerate) there, and run
+it there. The short version is almost never, and *not* for
 daylight-saving changes — the tables store zone names, not offsets, so a rule
 change arrives with an OS update and needs nothing here.
 

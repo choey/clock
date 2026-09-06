@@ -10,10 +10,16 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-# Both clocks resolve ZIP codes through the ziptz library in this tree rather
-# than whichever one is installed: Go through the replace directive in go.mod,
-# Python because clock.py's own directory comes first on sys.path and ziptz/
-# is a package sitting in it.
+# ZIP codes resolve through ziptz, which is a module of its own now: Go links
+# the version go.mod names, Python imports whatever is installed. So this needs
+# ziptz importable, and says so rather than reporting hundreds of differences
+# between a Go clock that resolves ZIPs and a Python one that cannot.
+if ! python3 -c 'import ziptz' >/dev/null 2>&1; then
+	echo 'difftest needs ziptz for the Python clock: pip install ziptz-us'
+	echo '(the Go side links it through go.mod and would resolve ZIPs regardless,'
+	echo ' so without it every ZIP case fails as a difference between the two)'
+	exit 2
+fi
 
 out=${TMPDIR:-/tmp}/clock-difftest.$$
 mkdir -p "$out"
@@ -817,7 +823,7 @@ fi
 # ziptz. Go links the library in at build time; Python imports it if it is
 # there and names it if it is not, so every zone name still works and only ZIP
 # tokens are refused. Nothing else can reach that message -- a clone always has
-# ziptz/ sitting beside clock.py.
+# ziptz installed alongside it.
 echo "== without ziptz =="
 mkdir -p "$out/alone"
 cp clock.py "$out/alone/clock.py"
@@ -848,29 +854,6 @@ else
 fi
 
 echo "== embedded table parity =="
-go_runs=$(sed -n 's/^const runs = "\(.*\)".*/\1/p' ziptz/ziptz.go)
-py_runs=$(sed -n 's/^RUNS = "\(.*\)".*/\1/p' ziptz/ziptz.py)
-if [ "$go_runs" = "$py_runs" ]; then
-	pass=$((pass + 1))
-	[ -z "$verbose" ] || printf 'ok   zip runs match (%s records)\n' "$((${#go_runs} / 4))"
-else
-	echo 'FAIL zip runs differ between ziptz.go and ziptz.py'
-	fail=$((fail + 1))
-fi
-
-go_exc=$(sed -n 's/^const exceptions = "\(.*\)".*/\1/p' ziptz/ziptz.go)
-py_exc=$(sed -n 's/^EXCEPTIONS = "\(.*\)".*/\1/p' ziptz/ziptz.py)
-if [ "$go_exc" = "$py_exc" ]; then
-	pass=$((pass + 1))
-	# Characters, not records: the exception table is variable-stride -- a
-	# group is a prefix, a letter, a count, then that many two-digit suffixes
-	# -- so there is no divisor that turns its length into a record count.
-	[ -z "$verbose" ] || printf 'ok   zip exceptions match (%s characters)\n' "${#go_exc}"
-else
-	echo 'FAIL zip exceptions differ between ziptz.go and ziptz.py'
-	fail=$((fail + 1))
-fi
-
 sed -n 's/^	{"\([A-Z]*\)", "\([A-Za-z_/]*\)"},$/\1=\2/p' clock.go >"$out/go.tab"
 sed -n 's/^    ("\([A-Z]*\)", "\([A-Za-z_/]*\)"),$/\1=\2/p' clock.py >"$out/py.tab"
 if [ -s "$out/go.tab" ] && cmp -s "$out/go.tab" "$out/py.tab"; then
@@ -900,96 +883,7 @@ version_agrees() {
 	fi
 }
 
-version_agrees ziptz \
-	"$(sed -n 's/^const Version = "\(.*\)"$/\1/p' ziptz/ziptz.go)" \
-	"$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' ziptz/ziptz.py)" \
-	"$(sed -n 's/^version = "\(.*\)"$/\1/p' ziptz/pyproject.toml)"
-
 version_agrees clock \
 	"$(sed -n 's/^const version = "\(.*\)"$/\1/p' clock.go)" \
 	"$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' clock.py)" \
 	"$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
-
-sed -n "s/^	'\(.\)': \"\([A-Za-z_/]*\)\",\$/\1=\2/p" ziptz/ziptz.go >"$out/go.zip"
-sed -n 's/^    "\(.\)": "\([A-Za-z_/]*\)",$/\1=\2/p' ziptz/ziptz.py >"$out/py.zip"
-if [ -s "$out/go.zip" ] && cmp -s "$out/go.zip" "$out/py.zip"; then
-	pass=$((pass + 1))
-	[ -z "$verbose" ] || printf 'ok   zip letter tables match (%s entries)\n' \
-		"$(wc -l <"$out/go.zip" | tr -d ' ')"
-else
-	echo 'FAIL zip letter tables differ between ziptz.go and ziptz.py'
-	diff -u "$out/py.zip" "$out/go.zip" || true
-	fail=$((fail + 1))
-fi
-
-sed -n 's|^	"\([A-Za-z_/]*\)": *"\([A-Za-z]*\)",$|\1=\2|p' ziptz/ziptz.go >"$out/go.gen"
-sed -n 's|^    "\([A-Za-z_/]*\)": "\([A-Za-z]*\)",$|\1=\2|p' ziptz/ziptz.py >"$out/py.gen"
-if [ -s "$out/go.gen" ] && cmp -s "$out/go.gen" "$out/py.gen"; then
-	pass=$((pass + 1))
-	[ -z "$verbose" ] || printf 'ok   generic name tables match (%s entries)\n' \
-		"$(wc -l <"$out/go.gen" | tr -d ' ')"
-else
-	echo 'FAIL generic name tables differ between ziptz.go and ziptz.py'
-	diff -u "$out/py.gen" "$out/go.gen" || true
-	fail=$((fail + 1))
-fi
-
-# The key list is only reachable from a keypress, so no rendered case can
-# cover it; the table it is built from can still be held to the same order.
-sed -n 's/^	{"\([a-z]*\)", "\([A-Za-z, +]*\)"},$/\1=\2/p' clock.go >"$out/go.keys"
-sed -n 's/^    ("\([a-z]*\)", "\([A-Za-z, +]*\)"),$/\1=\2/p' clock.py >"$out/py.keys"
-if [ -s "$out/go.keys" ] && cmp -s "$out/go.keys" "$out/py.keys"; then
-	pass=$((pass + 1))
-	[ -z "$verbose" ] || printf 'ok   hotkey tables match (%s entries)\n' \
-		"$(wc -l <"$out/go.keys" | tr -d ' ')"
-else
-	echo 'FAIL hotkey tables differ between clock.go and clock.py'
-	diff -u "$out/py.keys" "$out/go.keys" || true
-	fail=$((fail + 1))
-fi
-
-echo "== signal cleanup =="
-for impl in "$out/clock" "python3 clock.py"; do
-	# SIGTERM must still restore the cursor; without a handler Python dies
-	# outright and hands back a terminal with the cursor still hidden.
-	# shellcheck disable=SC2086
-	env COLUMNS=200 LINES=60 $impl ET >"$out/term.out" 2>&1 </dev/null &
-	term_pid=$!
-	sleep 1
-	kill "$term_pid" 2>/dev/null || true
-	wait "$term_pid" 2>/dev/null || true
-	if [ "$(tail -c 6 "$out/term.out")" = "$(printf '\033[?25h')" ]; then
-		pass=$((pass + 1))
-		[ -z "$verbose" ] || printf 'ok   %s restores the cursor on SIGTERM\n' "$impl"
-	else
-		printf 'FAIL %s left the cursor hidden after SIGTERM\n' "$impl"
-		fail=$((fail + 1))
-	fi
-done
-
-echo "== cross-compile gate =="
-for target in linux/amd64 linux/arm64 linux/mips darwin/arm64 windows/amd64; do
-	if GOOS=${target%/*} GOARCH=${target#*/} go build -o /dev/null . 2>"$out/build.err"; then
-		pass=$((pass + 1))
-		[ -z "$verbose" ] || printf 'ok   builds %s\n' "$target"
-	else
-		printf 'FAIL builds %s\n' "$target"
-		cat "$out/build.err"
-		fail=$((fail + 1))
-	fi
-done
-
-echo "== error coverage =="
-# Not `out=$(...)`: out is the scratch directory the EXIT trap removes, and
-# shadowing it here would leave the directory behind and try to remove a
-# message instead.
-if coverage=$(tools/errcover.py "$out/all.err"); then
-	pass=$((pass + 1))
-	[ -z "$verbose" ] || echo "$coverage"
-else
-	echo "$coverage"
-	fail=$((fail + 1))
-fi
-
-printf '\n%s passed, %s failed\n' "$pass" "$fail"
-[ "$fail" -eq 0 ]

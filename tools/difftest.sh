@@ -15,9 +15,9 @@ cd "$(dirname "$0")/.."
 # ziptz importable, and says so rather than reporting hundreds of differences
 # between a Go clock that resolves ZIPs and a Python one that cannot.
 if ! python3 -c 'import ziptz' >/dev/null 2>&1; then
-	echo 'difftest needs ziptz for the Python clock: pip install ziptz-us'
-	echo '(the Go side links it through go.mod and would resolve ZIPs regardless,'
-	echo ' so without it every ZIP case fails as a difference between the two)'
+	echo 'difftest needs ziptz for the Python clock. Run: make setup'
+	echo '(that builds a .venv here and installs ziptz-us into it, which every'
+	echo ' make target then picks up -- a system python may refuse pip outright)'
 	exit 2
 fi
 

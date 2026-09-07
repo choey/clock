@@ -1,0 +1,71 @@
+# Builds the binary for every platform the README claims, and attaches them to
+# the tag's release. Nothing here is clever, by the same rule as test.yml: the
+# build is the same `go build .` a reader would run, with the same toolchain
+# the tests use.
+#
+# This exists because `go install` needs a Go toolchain, and asking for one is
+# a strange price for a clock. A downloaded binary needs nothing: the clock is
+# pure Go with no cgo, so every target below is a straight cross-compile from
+# one runner.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  # So the artifacts can be checked before a tag is cut, since a tag is the one
+  # thing this project cannot take back -- proxy.golang.org caches it forever.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      # term_bsd.go and term_linux.go are selected by build tag, so the only
+      # thing that varies per target is GOOS/GOARCH. CGO_ENABLED=0 is what
+      # makes a linux binary run on a distro older than the runner's libc.
+      - name: build
+        run: |
+          mkdir -p dist
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 freebsd/amd64; do
+            os=${target%/*} arch=${target#*/}
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
+              go build -trimpath -ldflags "-s -w" -o "dist/clock_${os}_${arch}" .
+          done
+          ls -l dist
+
+      # One file, so a reader can check every download with a single fetch.
+      - name: checksums
+        run: cd dist && sha256sum clock_* > SHA256SUMS && cat SHA256SUMS
+
+      # The binary says its own version; if that disagrees with the tag, the
+      # release would ship a clock that lies about which one it is. Only the
+      # native build can be run here, which is enough -- the version is a
+      # const, not something the toolchain varies.
+      - name: the binary agrees with the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          go build -o /tmp/clock .
+          said=$(/tmp/clock --version)
+          want="clock ${GITHUB_REF_NAME#v}"
+          echo "binary says: $said"
+          echo "tag wants:   $want"
+          [ "$said" = "$want" ]
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/
+
+      - name: attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag

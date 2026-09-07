@@ -30,108 +30,108 @@ build-tagged `term_*.go` files, and naming a single file skips them.
 
 ## Installation
 
+The two ports install separately and are named apart on purpose. `go install`
+produces a binary called `clock` — that name is the last element of the Go
+module path and not ours to choose — so the Python side takes `pyclock`, and
+the two can sit on one `PATH` without shadowing each other. That is also the
+only way to check this project's central claim without a checkout:
+
+```sh
+clock ET,PT,UTC | diff - <(pyclock ET,PT,UTC) && echo "byte for byte"
+```
+
 Neither implementation has a third-party dependency. The Go side is standard
 library only; the Python side needs nothing beyond `zoneinfo`, which has
 shipped in the standard library since 3.9. The one thing either reaches outside
 itself for is [`ziptz`](https://github.com/choey/ziptz), the ZIP-to-zone
 library — also standard library only, and also written in both languages.
 
-The shortest path, if you have a Go toolchain:
+### Go
 
 ```sh
 go install github.com/choey/clock@latest
 ```
 
-That puts a `clock` on your `PATH` in `$GOPATH/bin` (or `$GOBIN`), fetches
-`ziptz` itself, and needs no checkout. Everything below is for working from
-one.
+puts a `clock` on your `PATH` in `$GOPATH/bin` (or `$GOBIN`), fetches `ziptz`
+itself, and needs no checkout. From a clone instead:
 
 ```sh
-go build -o clock . && mv clock /usr/local/bin/
+go build -o clock . && mv clock /usr/local/bin/    # wherever you like
+go install .                                       # or $GOPATH/bin
 ```
 
-builds the binary and puts it wherever you like; `go install .` does the same
-but drops it in `$GOPATH/bin`. Both find `ziptz` through the `replace`
-directive in `go.mod`, so a fresh clone builds without fetching anything.
+Both read `ziptz` from `go.mod` and fetch it through the module proxy on the
+first build, which is the one thing a fresh clone needs a network for. Build
+the package, not a file — `go build .`, never `go build clock.go` — for the
+build-tag reason [above](#running).
 
 Go has no notion of an optional dependency, so every Go build resolves ZIP
-codes. The Python side is where that is a choice, and it is made the same way
-— see below.
+codes. On the Python side that is a choice — see below.
 
-`pyclock.py` is executable on its own — it carries a `#!/usr/bin/env python3`
-shebang — so the Python side needs no build step, only a copy of it and of
-`ziptz.py` beside it:
+### Python
 
-```sh
-cp pyclock.py /usr/local/bin/pyclock          # and, for ZIP codes:
-curl -sO https://raw.githubusercontent.com/choey/ziptz/v0.1.0/ziptz.py
-mv ziptz.py /usr/local/bin/
-```
-
-or, to manage it like any other Python tool instead:
-
-```sh
-pip install .
-```
-
-which puts a `pyclock` entry point on your `PATH` inside whatever environment
-you ran `pip` in, and pulls `ziptz-us` with it. `pip install -e .` does the
-same but re-reads this checkout on every run, for working on it in place. To
-run the test suite from a clone, `make setup` is the shorter path — it builds a
-`.venv` here that every `make` target then uses.
-
-`ziptz` is a requirement of the Python package, not an extra, so a `pip
-install` of the clock resolves ZIP codes exactly as a `go install` of it does.
-It is named `ziptz-us` there — that is its distribution name on PyPI, where the
-bare `ziptz` is an old empty registration pip cannot install — and it still
-imports as `ziptz`. It is 23 KB with no dependencies of its own, so requiring
-it costs less than explaining when you would want it left out.
-
-**Not `pip install clock`.** That name on PyPI belongs to an unrelated datetime
-library from 2014, and installing it will quietly get you that instead. This
-publishes under a distribution name of its own; the command it installs is
-still `clock`, the same way `ziptz-us` still imports as `ziptz`. `pipx` is the
-better verb for a program rather than a library, since it gets its own
-environment and puts the command on your `PATH` regardless:
+`pipx` is the better verb for a program rather than a library: it gets its own
+environment and puts the command on your `PATH` regardless of what else is
+installed.
 
 ```sh
 pipx install terminal-clock     # then: pyclock ET,PT,UTC
 ```
 
-`ziptz-us` comes with it, so ZIP codes work out of the box exactly as they do
-from a `go install`.
+`pip install terminal-clock` does the same inside whatever environment you run
+it in. Either way the command is `pyclock`, and `ziptz-us` comes with it, so
+ZIP codes work out of the box exactly as they do from a `go install`.
 
-**The Python command is `pyclock`, not `clock`.** `go install` already produces
-a binary called `clock` — that name is the last element of the Go module path
-and not ours to choose — so the two would shadow each other on `PATH`. Named
-apart, both can be installed at once, which is the only way to check this
-project's central claim without a checkout:
+**Not `pip install clock`.** That name on PyPI belongs to an unrelated datetime
+library from 2014, and installing it will quietly get you that instead of this.
+`ziptz` has the same problem and the same answer: it is `ziptz-us` on PyPI,
+where the bare name is an old empty registration pip cannot install, and it
+still imports as `ziptz`.
+
+From a clone:
 
 ```sh
-clock ET,PT,UTC | diff - <(pyclock ET,PT,UTC) && echo "byte for byte"
+pip install .        # a pyclock entry point, plus ziptz-us
+pip install -e .     # the same, re-reading this checkout on every run
+make setup           # a .venv here, which every make target then uses
 ```
 
-They print the same help, report the same version, and answer to the same name
-in their own usage text; only the file, the module and the command differ.
+`make setup` is the shorter path for running the test suite, and the one that
+works on a system python that refuses `pip install` outright.
 
-Copying is still a first-class path, and it is the reason `pyclock.py` guards its
-import of `ziptz` rather than requiring it outright: without the library every
-zone name, abbreviation and country code still works, and a ZIP code says what
-to install instead of the clock refusing to start.
+`pyclock.py` also runs as it stands — it carries a `#!/usr/bin/env python3`
+shebang and needs no build step — so copying the one file is a first-class
+path:
 
-That is also the one thing a checkout no longer does for free. `ziptz` used to
-sit in this repository, so `python3 pyclock.py 94110` worked out of a clone with
-nothing installed; it is its own module now, so the Python clock wants it
-installed — `pip install ziptz-us`, or a copy of `ziptz.py` beside `pyclock.py`.
-Every other kind of zone works without it, and `make test` says so plainly
-rather than reporting a Go clock that resolves ZIPs and a Python one that
-cannot as hundreds of differences.
+```sh
+cp pyclock.py /usr/local/bin/pyclock          # and, for ZIP codes:
+curl -sO https://raw.githubusercontent.com/choey/ziptz/v0.1.2/ziptz.py
+mv ziptz.py /usr/local/bin/
+```
+
+That second half is optional, and it is why `pyclock.py` guards its import of
+`ziptz` rather than requiring it outright: without the library every zone name,
+abbreviation and country code still works, and a ZIP code says what to install
+instead of the clock refusing to start. `ziptz` is a hard requirement of the
+*package*, not an extra — it is 23 KB with no dependencies of its own, so
+requiring it costs less than explaining when you would want it left out.
+
+That guard is also the one thing a checkout no longer does for free. `ziptz`
+used to sit in this repository, so `python3 pyclock.py 94110` worked out of a
+clone with nothing installed; it is its own module now, so the Python clock
+wants it installed — `pip install ziptz-us`, or a copy of `ziptz.py` beside
+`pyclock.py`. Every other kind of zone works without it, and `make test` says
+so plainly rather than reporting a Go clock that resolves ZIPs and a Python one
+that cannot as hundreds of differences.
+
+### Versions
 
 However it got there, `clock --version` says which release you have, and both
-implementations print the same line. `ziptz` is released on its own cycle and
-answers separately — `ziptz.Version` in Go, `ziptz.__version__` in Python — so
-a ZIP that resolves to the wrong zone is a question about that version rather
-than this one.
+implementations print the same line. They also print the same help and answer
+to the same name in their own usage text; only the file, the module and the
+command differ. `ziptz` is released on its own cycle and answers separately —
+`ziptz.Version` in Go, `ziptz.__version__` in Python — so a ZIP that resolves
+to the wrong zone is a question about that version rather than this one.
 
 ## Usage
 

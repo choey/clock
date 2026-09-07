@@ -21,6 +21,13 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
   alternating between them, and three things it claimed are fixed: a `replace`
   directive in `go.mod` that does not exist, a sentence saying the Python
   command is still `clock`, and a `curl` line pinning ziptz two releases back.
+- The README's examples are the installed commands now -- `clock` and
+  `pyclock` -- rather than `./pyclock.py` and `go run .`, which only worked
+  from a checkout and only showed one of the two ports. Which install leaves
+  which command is a table at the top of the installation section rather than
+  a sentence inside it, and `## Running` follows `## Installation` instead of
+  preceding it, since it now shows commands you have to install first. The
+  from-a-clone invocations are still there, under a heading that says so.
 
 ## 0.2.1
 

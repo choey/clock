@@ -48,6 +48,22 @@ library — also standard library only, and also written in both languages.
 
 ### Go
 
+No toolchain needed: every release carries a binary for each platform below.
+
+```sh
+curl -Lo clock https://github.com/choey/clock/releases/latest/download/clock_darwin_arm64
+chmod +x clock && ./clock ET,PT,UTC
+```
+
+Swap the name for `clock_darwin_amd64`, `clock_linux_amd64`,
+`clock_linux_arm64` or `clock_freebsd_amd64`. `SHA256SUMS` in the same release
+covers all five, so `shasum -a 256 -c SHA256SUMS --ignore-missing` checks what
+you got. The binaries are built from the tag with `CGO_ENABLED=0` — the clock
+is pure Go with no cgo — which is also why the Linux ones run on a distro
+older than whatever built them.
+
+With a toolchain:
+
 ```sh
 go install github.com/choey/clock@latest
 ```

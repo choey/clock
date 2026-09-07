@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,14 +8,39 @@ build-backend = "setuptools.build_meta"
 # from 2014 with a real release, so installing that name gets you something
 # else entirely rather than an error -- which is why this is not it.
 name = "terminal-clock"
-version = "0.2.0"
+version = "0.2.1"
 description = "Analog terminal clocks, one face per time zone"
 requires-python = ">=3.9"
 readme = "README.md"
-# The table form rather than PEP 639's bare SPDX string, which would need
-# setuptools 77 where this asks for 61. Same choice as ziptz's.
-license = { text = "MIT" }
+# PEP 639. The table form and the License:: classifier are both deprecated with
+# a 2027-02-18 removal date, and `requires` above is the floor for the *build*
+# environment, which pip fills with the latest setuptools regardless -- so the
+# build was already on 77. requires-python is untouched; 3.9 still installs it.
+license = "MIT"
+# NOTICE ships with LICENSE because a clock installed from here carries
+# ziptz's tables, and the ODbL attribution travels with the thing that carries
+# them rather than with the repository they were generated in.
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "cho", email = "choey2k5@gmail.com" }]
+# What someone would type into a search box looking for this.
+keywords = ["clock", "terminal", "tui", "timezone", "time-zone", "world-clock",
+            "console", "braille", "ascii-art", "analog"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Utilities",
+]
+
 # Required, so that a pip install gives the clock the README describes -- ZIP
 # tokens included, since the zone table advertises them. ziptz-us is 23 KB with
 # no dependencies of its own, by the same hand and on the same release cycle, so
@@ -25,13 +50,19 @@ authors = [{ name = "cho", email = "choey2k5@gmail.com" }]
 #
 # pyclock.py still guards the import, and that guard is not for pip. It is
 # for `cp pyclock.py /usr/local/bin/pyclock` -- one file, no packaging --
-# where a ZIP
-# token says what to install and every other kind of zone still works. difftest
-# covers that path with two cases run from a directory ziptz is not in.
+# where a ZIP token says what to install and every other kind of zone still
+# works. difftest covers that path with two cases run from a directory ziptz
+# is not in.
 #
 # ziptz-us on PyPI, ziptz to import: the bare name is an empty 2013 squat that
 # pip cannot install. Naming it wrong here would resolve to nothing at all.
 dependencies = ["ziptz-us"]
+
+[project.urls]
+Homepage = "https://github.com/choey/clock"
+Repository = "https://github.com/choey/clock"
+Issues = "https://github.com/choey/clock/issues"
+Changelog = "https://github.com/choey/clock/blob/main/CHANGELOG.md"
 
 [project.scripts]
 pyclock = "pyclock:main"
@@ -44,7 +75,3 @@ pyclock = "pyclock:main"
 # by an unrelated 2014 package, and whichever of the two installs last
 # silently overwrites the other.
 py-modules = ["pyclock"]
-# NOTICE ships with LICENSE because a clock installed from here carries ziptz's
-# tables, and the ODbL attribution for them travels with the thing that carries
-# them rather than with the repository they were generated in.
-license-files = ["LICENSE", "NOTICE"]

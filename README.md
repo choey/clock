@@ -9,7 +9,7 @@ identical output.
 ./pyclock.py 10001,PT,Jakarta,UTC
 ```
 
-![Four clocks, in a 2x2 grid: PDT, EDT, UTC and WIB](screenshot.png)
+![Four clocks, in a 2x2 grid: PDT, EDT, UTC and WIB](https://raw.githubusercontent.com/choey/clock/main/screenshot.png)
 
 On a terminal the hands are coloured apart — hour yellow, minute cyan, second
 red.
@@ -520,7 +520,7 @@ Arizona skips daylight saving and the Navajo Nation around it does not.
 
 One gap remains: PO-box and single-building ZIPs have no delivery-area data to
 place them precisely, so even given in full they fall back to their prefix's
-answer. See [ARCHITECTURE.md](ARCHITECTURE.md#zip-resolution) for how the two
+answer. See [ARCHITECTURE.md](https://github.com/choey/clock/blob/main/ARCHITECTURE.md#zip-resolution) for how the two
 lookup tables are built and encoded, and [When to
 regenerate](https://github.com/choey/ziptz#when-to-regenerate) for when they
 need to be.
@@ -646,7 +646,7 @@ gives the screen and the terminal back before it stops, so a stopped clock
 leaves a shell you can use rather than one with no echo and no cursor, and
 takes them again when `fg` brings it back. A clock stopped this way is stopped
 by `SIGSTOP` rather than `SIGTSTP` — the reason is in
-[ARCHITECTURE.md](ARCHITECTURE.md), and the visible part of it is that the
+[ARCHITECTURE.md](https://github.com/choey/clock/blob/main/ARCHITECTURE.md), and the visible part of it is that the
 shell says `Stopped(SIGSTOP)` where it usually says `Stopped`.
 
 Piping into something that stops reading — `clock | head` — is an ordinary way
@@ -659,7 +659,7 @@ screen active; `stty sane` and `printf '\033[?1049l'` fix it.
 
 ## Development
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for how the renderer itself works —
+See [ARCHITECTURE.md](https://github.com/choey/clock/blob/main/ARCHITECTURE.md) for how the renderer itself works —
 the braille canvas, the colour layering, the repaint strategy.
 
 `tools/difftest.sh` proves the two implementations agree. It pins both to a
@@ -851,9 +851,9 @@ come from timezone-boundary-builder (ODbL).
 
 ## Licence
 
-MIT; see [LICENSE](LICENSE).
+MIT; see [LICENSE](https://github.com/choey/clock/blob/main/LICENSE).
 
-[NOTICE](NOTICE) is the other half, and matters because a clock is not only
+[NOTICE](https://github.com/choey/clock/blob/main/NOTICE) is the other half, and matters because a clock is not only
 this repository's code. `go build` links `ziptz` into the binary and the
 documented Python install copies `ziptz.py` alongside `pyclock.py`, so
 distributing a clock distributes its ZIP tables — which carry an ODbL

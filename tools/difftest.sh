@@ -824,12 +824,18 @@ fi
 # there and names it if it is not, so every zone name still works and only ZIP
 # tokens are refused. Nothing else can reach that message -- a clone always has
 # ziptz installed alongside it.
+#
+# -S is what does the hiding, and it has to: ziptz is a pip install now, so it
+# lives in the venv's site-packages and follows python3 into any directory a
+# copy of pyclock.py is put in. Running from elsewhere used to be enough, back
+# when ziptz was a directory in this tree. -S drops site-packages and leaves
+# the standard library, which is exactly the machine this message is for.
 echo "== without ziptz =="
 mkdir -p "$out/alone"
 cp pyclock.py "$out/alone/pyclock.py"
 alone_err="$out/alone.err"
 if (cd "$out/alone" && env -u PYTHONPATH COLUMNS=80 LINES=24 \
-	CLOCK_FREEZE="$SUMMER" python3 pyclock.py 94110 >/dev/null 2>"$alone_err"); then
+	CLOCK_FREEZE="$SUMMER" python3 -S pyclock.py 94110 >/dev/null 2>"$alone_err"); then
 	echo 'FAIL a ZIP without ziptz should have failed'
 	fail=$((fail + 1))
 elif grep -q 'is a ZIP code, and resolving one needs the ziptz' "$alone_err"; then
@@ -844,7 +850,7 @@ cat "$alone_err" >>"$out/all.err"
 
 # ... and everything else still works there, since only ZIP tokens need it.
 if (cd "$out/alone" && env -u PYTHONPATH COLUMNS=80 LINES=24 \
-	CLOCK_FREEZE="$SUMMER" python3 pyclock.py ET,PT,Berlin >/dev/null 2>"$alone_err"); then
+	CLOCK_FREEZE="$SUMMER" python3 -S pyclock.py ET,PT,Berlin >/dev/null 2>"$alone_err"); then
 	pass=$((pass + 1))
 	[ -z "$verbose" ] || printf 'ok   zone names still work without ziptz\n'
 else
@@ -887,3 +893,6 @@ version_agrees clock \
 	"$(sed -n 's/^const version = "\(.*\)"$/\1/p' clock.go)" \
 	"$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' pyclock.py)" \
 	"$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
+
+printf '\n%s passed, %s failed\n' "$pass" "$fail"
+[ "$fail" -eq 0 ]

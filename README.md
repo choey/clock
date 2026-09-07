@@ -6,7 +6,8 @@ independent implementations — Python and Go — that render byte-for-byte
 identical output.
 
 ```sh
-./pyclock.py 10001,PT,Jakarta,UTC
+clock 10001,PT,Jakarta,UTC      # the Go build
+pyclock 10001,PT,Jakarta,UTC    # the Python one, to the same byte
 ```
 
 ![Four clocks, in a 2x2 grid: PDT, EDT, UTC and WIB](https://raw.githubusercontent.com/choey/clock/main/screenshot.png)
@@ -14,27 +15,21 @@ identical output.
 On a terminal the hands are coloured apart — hour yellow, minute cyan, second
 red.
 
-## Running
-
-```sh
-python3 pyclock.py   # or: make run-py
-go run .            # or: make run-go
-```
-
-Press space to hold the frame still, `h` or `?` for the key list, and `q` (or
-Ctrl+C) to quit.
-
-Go needs `go run .`, not `go run clock.go`: the three termios ioctl requests
-are the one thing that differs between the BSDs and Linux, so they live in
-build-tagged `term_*.go` files, and naming a single file skips them.
-
 ## Installation
 
-The two ports install separately and are named apart on purpose. `go install`
-produces a binary called `clock` — that name is the last element of the Go
-module path and not ours to choose — so the Python side takes `pyclock`, and
-the two can sit on one `PATH` without shadowing each other. That is also the
-only way to check this project's central claim without a checkout:
+The two ports install separately, and the command each one leaves you with has
+a different name:
+
+| how you install it | the command |
+| --- | --- |
+| a [downloaded binary](#go), or `go install github.com/choey/clock@latest` | `clock` |
+| `pipx install terminal-clock`, or `pip install terminal-clock` | `pyclock` |
+
+They are named apart on purpose. `go install` produces a binary called
+`clock` — that name is the last element of the Go module path, not ours to
+choose — so the Python side takes `pyclock`, and the two can sit on one
+`PATH` without shadowing each other. That is also the only way to check this
+project's central claim without a checkout:
 
 ```sh
 clock ET,PT,UTC | diff - <(pyclock ET,PT,UTC) && echo "byte for byte"
@@ -79,7 +74,7 @@ go install .                                       # or $GOPATH/bin
 Both read `ziptz` from `go.mod` and fetch it through the module proxy on the
 first build, which is the one thing a fresh clone needs a network for. Build
 the package, not a file — `go build .`, never `go build clock.go` — for the
-build-tag reason [above](#running).
+build-tag reason [below](#running).
 
 Go has no notion of an optional dependency, so every Go build resolves ZIP
 codes. On the Python side that is a choice — see below.
@@ -148,6 +143,31 @@ to the same name in their own usage text; only the file, the module and the
 command differ. `ziptz` is released on its own cycle and answers separately —
 `ziptz.Version` in Go, `ziptz.__version__` in Python — so a ZIP that resolves
 to the wrong zone is a question about that version rather than this one.
+
+## Running
+
+The Go build is `clock` and the Python one is `pyclock` — two names for one
+program, because `go install` does not let its binary be called anything but
+the last element of the module path. Either takes the same arguments:
+
+```sh
+clock 10001,PT,Jakarta,UTC
+pyclock 10001,PT,Jakarta,UTC
+```
+
+Press space to hold the frame still, `h` or `?` for the key list, and `q` (or
+Ctrl+C) to quit.
+
+From a clone, with neither installed:
+
+```sh
+go run .             # or: make run-go
+python3 pyclock.py   # or: make run-py
+```
+
+Go needs `go run .`, not `go run clock.go`: the three termios ioctl requests
+are the one thing that differs between the BSDs and Linux, so they live in
+build-tagged `term_*.go` files, and naming a single file skips them.
 
 ## Usage
 
@@ -568,7 +588,7 @@ meant for another program, which is not the same as a typo on the command
 line.
 
 ```sh
-CLOCK_CELL_RATIO=2.6 python3 pyclock.py
+CLOCK_CELL_RATIO=2.6 clock       # or pyclock; both read it
 ```
 
 Inside, `ROWS`/`rowsN` is the face height in terminal rows — what `--scale`

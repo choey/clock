@@ -60,12 +60,11 @@ jobs:
       # its own; the Go clock links it through go.mod. Without it here the two
       # would differ on every ZIP, which difftest refuses to start rather than
       # report as hundreds of diffs.
-      # Falls back to the tag while ziptz-us is not on PyPI yet. Written this
-      # way round rather than pinned to the tag so that it starts using the
-      # published wheel the moment there is one, with no edit here -- and so
-      # that this file never claims an install path that does not work.
+      # ziptz-us is on PyPI now, so this is the same line the README gives a
+      # reader. The git fallback that used to sit here was for the window
+      # before the first upload, and pinned a tag that has since been passed.
       - name: install ziptz
-        run: pip install ziptz-us || pip install "git+https://github.com/choey/ziptz@v0.1.0"
+        run: pip install ziptz-us
 
       - name: compile the Python side
         run: python3 -m compileall -q pyclock.py tools

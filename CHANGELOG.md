@@ -13,6 +13,38 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 
 Nothing yet.
 
+## 0.2.1
+
+Packaging and the test harness. Neither clock changed -- the two tags build
+the same program, and `go install ...@v0.2.0` stays as valid as this one.
+
+For packaging, what changed is what PyPI is handed -- which 0.2.0 was tagged
+before anyone had looked at. Keywords, classifiers and project links, so the
+page says which pythons and which systems; a licence declared as PEP 639's
+`license = "MIT"` with `license-files`, rather than the table form and a
+`License ::` classifier that both carry a 2027 removal date; and README links
+made absolute, because a relative `ARCHITECTURE.md` resolves against github.com
+in a repository and against nothing at all on PyPI.
+
+The version number exists so that the tag and the uploaded artifact are the
+same thing. 0.2.0 was tagged, then improved, and rather than move a tag the
+Go proxy has already cached, this is the tag that matches what was published.
+
+And two things in `tools/difftest.sh` are fixed, which matter more than any of
+the above:
+
+- **It reports its result again.** Splitting ziptz out took the ziptz checks
+  off the end of the file and took the two lines below them too -- the summary
+  and `[ "$fail" -eq 0 ]`. Since then it had counted every failure and then
+  exited on whatever the last command happened to return, which was always
+  zero. `make test` could not fail on a difftest case in 0.1.0 or 0.2.0.
+- **The without-ziptz case hides ziptz again.** It copies `pyclock.py` into an
+  empty directory and runs it there, which stopped meaning anything once ziptz
+  became a `pip install` that follows the interpreter everywhere. It runs under
+  `-S` now, which drops site-packages and leaves the standard library. That
+  case had been failing, invisibly, for exactly as long as the summary was
+  missing.
+
 ## 0.2.0
 
 Two names moved. Nothing about the picture changed.

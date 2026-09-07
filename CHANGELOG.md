@@ -11,7 +11,16 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 
 ## Unreleased
 
-Nothing yet.
+- **Every release carries prebuilt binaries.** `go install` wanted a Go
+  toolchain, which was a strange price for a clock and until now the only way
+  to get the Go port. Five targets, cross-compiled from one runner with
+  `CGO_ENABLED=0` -- the clock is pure Go, so this costs nothing but the
+  workflow. `SHA256SUMS` covers them, and the workflow checks the binary's
+  `--version` against the tag before it uploads anything.
+- The installation section reads as Go and Python separately rather than
+  alternating between them, and three things it claimed are fixed: a `replace`
+  directive in `go.mod` that does not exist, a sentence saying the Python
+  command is still `clock`, and a `curl` line pinning ziptz two releases back.
 
 ## 0.2.1
 

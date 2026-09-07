@@ -62,7 +62,7 @@ const (
 // carry the same string, and difftest holds all three together: a clock that
 // cannot say what it is turns every bug report into a round trip, and one that
 // says the wrong thing is worse than one that says nothing at all.
-const version = "0.1.0"
+const version = "0.2.0"
 
 const usage = `clock - analog terminal clocks
 

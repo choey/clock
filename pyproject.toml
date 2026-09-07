@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 # from 2014 with a real release, so installing that name gets you something
 # else entirely rather than an error -- which is why this is not it.
 name = "terminal-clock"
-version = "0.1.0"
+version = "0.2.0"
 description = "Analog terminal clocks, one face per time zone"
 requires-python = ">=3.9"
 readme = "README.md"

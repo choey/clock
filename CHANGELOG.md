@@ -13,6 +13,31 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 
 Nothing yet.
 
+## 0.2.0
+
+Two names moved. Nothing about the picture changed.
+
+- **The Python command is `pyclock`.** `go install` produces a binary called
+  `clock` -- that is the last element of the Go module path, not a choice -- so
+  a pip entry point by the same name meant the two shadowed each other on
+  `PATH` and could not be installed together. Apart, they compose:
+  `clock ET,PT | diff - <(pyclock ET,PT)`, which is the first time this
+  project's central claim has been checkable without a clone. `clock.py` is
+  `pyclock.py`, and the module it installs is `pyclock` -- `clock` on PyPI is
+  an unrelated 2014 package that claimed the same top-level name, and whichever
+  installed second silently overwrote the other.
+- **`go install github.com/choey/clock@latest` works.** It never did: `go.mod`
+  declared `module clock`, so the proxy refused it with "module declares its
+  path as: clock". `v0.1.0` is cached with the wrong path and stays broken;
+  this is the first tag that can be installed that way.
+- ZIP resolution is `ziptz-us` from PyPI now, not a directory in this
+  repository. `make setup` builds a `.venv` for the test suite, which a system
+  python can no longer satisfy on its own.
+
+The program still calls itself `clock` in its own usage text, in both ports.
+`--help` is compared byte for byte, so a port that renamed itself there would
+fail every case.
+
 ## 0.1.0
 
 First release.

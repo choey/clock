@@ -57,7 +57,7 @@ LEAVE_ALT = "\x1b[?1049l"
 # same string, and difftest holds all three together: a clock that cannot say
 # what it is turns every bug report into a round trip, and one that says the
 # wrong thing is worse than one that says nothing at all.
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 # What both ports exit with when the reader goes away -- `clock | head`. 128
 # plus SIGPIPE, which is what a shell reports for a filter that died of it;

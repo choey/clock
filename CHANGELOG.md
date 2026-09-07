@@ -6,7 +6,7 @@ worth stating: the *picture* is part of the interface. A change that alters
 what a frame looks like is a minor bump at least, never a patch, which is what
 the golden frames in `tools/golden/` exist to make impossible to do by accident.
 
-The version is written in `clock.py`, `clock.go` and `pyproject.toml`, and
+The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 `tools/docnums.py` fails the build if the three disagree.
 
 ## Unreleased

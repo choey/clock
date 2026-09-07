@@ -6,7 +6,7 @@ independent implementations — Python and Go — that render byte-for-byte
 identical output.
 
 ```sh
-./clock.py 10001,PT,Jakarta,UTC
+./pyclock.py 10001,PT,Jakarta,UTC
 ```
 
 ![Four clocks, in a 2x2 grid: PDT, EDT, UTC and WIB](screenshot.png)
@@ -17,7 +17,7 @@ red.
 ## Running
 
 ```sh
-python3 clock.py   # or: make run-py
+python3 pyclock.py   # or: make run-py
 go run .            # or: make run-go
 ```
 
@@ -58,27 +58,27 @@ Go has no notion of an optional dependency, so every Go build resolves ZIP
 codes. The Python side is where that is a choice, and it is made the same way
 — see below.
 
-`clock.py` is executable on its own — it carries a `#!/usr/bin/env python3`
+`pyclock.py` is executable on its own — it carries a `#!/usr/bin/env python3`
 shebang — so the Python side needs no build step, only a copy of it and of
 `ziptz.py` beside it:
 
 ```sh
-cp clock.py /usr/local/bin/clock            # and, for ZIP codes:
+cp pyclock.py /usr/local/bin/pyclock          # and, for ZIP codes:
 curl -sO https://raw.githubusercontent.com/choey/ziptz/v0.1.0/ziptz.py
 mv ziptz.py /usr/local/bin/
 ```
 
-or, to manage them like any other Python tool instead:
+or, to manage it like any other Python tool instead:
 
 ```sh
-pip install ./ziptz .
+pip install .
 ```
 
-which puts a `clock` entry point on your `PATH` inside whatever environment
-you ran `pip` in — a virtualenv, or `pipx install ./ziptz .` for one isolated
-from your other Python packages. `pip install -e ./ziptz -e .` does the same
-but re-reads both files from this checkout on every run, for working on them in
-place.
+which puts a `pyclock` entry point on your `PATH` inside whatever environment
+you ran `pip` in, and pulls `ziptz-us` with it. `pip install -e .` does the
+same but re-reads this checkout on every run, for working on it in place. To
+run the test suite from a clone, `make setup` is the shorter path — it builds a
+`.venv` here that every `make` target then uses.
 
 `ziptz` is a requirement of the Python package, not an extra, so a `pip
 install` of the clock resolves ZIP codes exactly as a `go install` of it does.
@@ -95,21 +95,34 @@ better verb for a program rather than a library, since it gets its own
 environment and puts the command on your `PATH` regardless:
 
 ```sh
-pipx install terminal-clock     # then: clock ET,PT,UTC
+pipx install terminal-clock     # then: pyclock ET,PT,UTC
 ```
 
 `ziptz-us` comes with it, so ZIP codes work out of the box exactly as they do
 from a `go install`.
 
-Copying is still a first-class path, and it is the reason `clock.py` guards its
+**The Python command is `pyclock`, not `clock`.** `go install` already produces
+a binary called `clock` — that name is the last element of the Go module path
+and not ours to choose — so the two would shadow each other on `PATH`. Named
+apart, both can be installed at once, which is the only way to check this
+project's central claim without a checkout:
+
+```sh
+clock ET,PT,UTC | diff - <(pyclock ET,PT,UTC) && echo "byte for byte"
+```
+
+They print the same help, report the same version, and answer to the same name
+in their own usage text; only the file, the module and the command differ.
+
+Copying is still a first-class path, and it is the reason `pyclock.py` guards its
 import of `ziptz` rather than requiring it outright: without the library every
 zone name, abbreviation and country code still works, and a ZIP code says what
 to install instead of the clock refusing to start.
 
 That is also the one thing a checkout no longer does for free. `ziptz` used to
-sit in this repository, so `python3 clock.py 94110` worked out of a clone with
+sit in this repository, so `python3 pyclock.py 94110` worked out of a clone with
 nothing installed; it is its own module now, so the Python clock wants it
-installed — `pip install ziptz-us`, or a copy of `ziptz.py` beside `clock.py`.
+installed — `pip install ziptz-us`, or a copy of `ziptz.py` beside `pyclock.py`.
 Every other kind of zone works without it, and `make test` says so plainly
 rather than reporting a Go clock that resolves ZIPs and a Python one that
 cannot as hundreds of differences.
@@ -539,7 +552,7 @@ meant for another program, which is not the same as a typo on the command
 line.
 
 ```sh
-CLOCK_CELL_RATIO=2.6 python3 clock.py
+CLOCK_CELL_RATIO=2.6 python3 pyclock.py
 ```
 
 Inside, `ROWS`/`rowsN` is the face height in terminal rows — what `--scale`
@@ -732,7 +745,7 @@ something to hold: both must paint one readout over and over while held, and
 many while running.
 
 difftest also keeps everything the Python clock writes to stderr and, at the
-end, checks that every message `clock.py` can raise turned up in it —
+end, checks that every message `pyclock.py` can raise turned up in it —
 `tools/errcover.py`. A message nothing ever prints is a message nothing tests,
 and it looks exactly like one nobody has broken yet. Two are exempt, with the
 reason written down: both need a machine with no working tz database, and Go
@@ -741,7 +754,7 @@ will not give its up even then, falling back to the copy inside the binary.
 That check is what turned up the clock's one Python-only behaviour going
 untested: without `ziptz` installed, a ZIP token says what to install while
 every zone name, abbreviation and country code still works. Two cases now run
-`clock.py` from a directory where the library is not there to import.
+`pyclock.py` from a directory where the library is not there to import.
 
 `tools/fitfuzz.py` throws window sizes at both implementations and checks what
 comes back fits in them: no line wider than the window, no more lines than it
@@ -755,7 +768,7 @@ tools/fitfuzz.py 400
 
 It checks where the grid sits, too, when it was told: `--halign left` leaves
 no margin on the left, `right` ends at the last column, `center` balances the
-two to within a column, and the same three vertically. Making `clock.py`
+two to within a column, and the same three vertically. Making `pyclock.py`
 ignore `--valign` fails it within a few dozen sizes.
 
 It found one on its first run, in both implementations: the readout under a
@@ -842,7 +855,7 @@ MIT; see [LICENSE](LICENSE).
 
 [NOTICE](NOTICE) is the other half, and matters because a clock is not only
 this repository's code. `go build` links `ziptz` into the binary and the
-documented Python install copies `ziptz.py` alongside `clock.py`, so
+documented Python install copies `ziptz.py` alongside `pyclock.py`, so
 distributing a clock distributes its ZIP tables — which carry an ODbL
 attribution from the boundary data they were produced against. `NOTICE` states
 it, and belongs with any copy you pass on. The zone names, offsets and

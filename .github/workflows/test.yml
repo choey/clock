@@ -68,7 +68,7 @@ jobs:
         run: pip install ziptz-us || pip install "git+https://github.com/choey/ziptz@v0.1.0"
 
       - name: compile the Python side
-        run: python3 -m compileall -q clock.py tools
+        run: python3 -m compileall -q pyclock.py tools
 
       # difftest, keytest, fitfuzz, argfuzz and docnums. The goldens in tools/golden
       # are bytes rendered on someone's machine, so this is also where a

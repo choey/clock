@@ -152,7 +152,7 @@ check() {
 	if env CLOCK_FREEZE="$freeze" COLUMNS="$cols" LINES="$lines" \
 		CLOCK_CELL_RATIO="${ratio:-}" TZDIR="${tzdir:-}" \
 		CLOCK_FRAMES="${frames:-}" CLOCK_STEP="${step:-}" \
-		python3 clock.py "$@" >"$out/py.out" 2>"$out/py.err" </dev/null
+		python3 pyclock.py "$@" >"$out/py.out" 2>"$out/py.err" </dev/null
 	then py_status=0
 	else py_status=$?
 	fi
@@ -460,7 +460,7 @@ done
 echo "== unknown terminal size =="
 env -u COLUMNS -u LINES CLOCK_FREEZE="$SUMMER" "$out/clock" ET,PT,UTC \
 	>"$out/go.out" 2>"$out/go.err" </dev/null || true
-env -u COLUMNS -u LINES CLOCK_FREEZE="$SUMMER" python3 clock.py ET,PT,UTC \
+env -u COLUMNS -u LINES CLOCK_FREEZE="$SUMMER" python3 pyclock.py ET,PT,UTC \
 	>"$out/py.out" 2>"$out/py.err" </dev/null || true
 if cmp -s "$out/go.out" "$out/py.out" && cmp -s "$out/go.err" "$out/py.err"; then
 	pass=$((pass + 1))
@@ -620,7 +620,7 @@ check "2026-11-01 01:30:00 ET" 200 60 ET,UTC
 # with one. The local zone is the one that is not UTC.
 #
 # The early years are here for a third reason: %Y pads to four digits under
-# one C library and not another, so the canonical spelling clock.py compares
+# one C library and not another, so the canonical spelling pyclock.py compares
 # against is written out by hand rather than handed back to strftime. Every
 # year before 1000 was a different answer on Linux than on a Mac.
 for at in 0000-01-01T00:00:00.000000Z 0001-01-01T00:00:00.000000Z \
@@ -695,7 +695,7 @@ for unfrozen in "CLOCK_FRAMES=3" "CLOCK_STEP=19" "CLOCK_FRAMES=1 CLOCK_STEP=19";
 		"$out/clock" ET 2>"$out/go.err"; echo $? >"$out/go.st" ) |
 		head -c 4096 >"$out/go.out"
 	( set +e; env -u CLOCK_FREEZE COLUMNS=200 LINES=60 $unfrozen \
-		python3 clock.py ET 2>"$out/py.err"; echo $? >"$out/py.st" ) |
+		python3 pyclock.py ET 2>"$out/py.err"; echo $? >"$out/py.st" ) |
 		head -c 4096 >"$out/py.out"
 	cat "$out/py.err" >>"$out/all.err"
 	if cmp -s "$out/go.out" "$out/py.out" && cmp -s "$out/go.err" "$out/py.err" &&
@@ -728,7 +728,7 @@ tzcase() {
 	else go_status=$?
 	fi
 	if env CLOCK_FREEZE="$SUMMER" COLUMNS=80 LINES=24 TZ="$tzval" \
-		python3 clock.py "$@" >"$out/py.out" 2>"$out/py.err" </dev/null
+		python3 pyclock.py "$@" >"$out/py.out" 2>"$out/py.err" </dev/null
 	then py_status=0
 	else py_status=$?
 	fi
@@ -826,10 +826,10 @@ fi
 # ziptz installed alongside it.
 echo "== without ziptz =="
 mkdir -p "$out/alone"
-cp clock.py "$out/alone/clock.py"
+cp pyclock.py "$out/alone/pyclock.py"
 alone_err="$out/alone.err"
 if (cd "$out/alone" && env -u PYTHONPATH COLUMNS=80 LINES=24 \
-	CLOCK_FREEZE="$SUMMER" python3 clock.py 94110 >/dev/null 2>"$alone_err"); then
+	CLOCK_FREEZE="$SUMMER" python3 pyclock.py 94110 >/dev/null 2>"$alone_err"); then
 	echo 'FAIL a ZIP without ziptz should have failed'
 	fail=$((fail + 1))
 elif grep -q 'is a ZIP code, and resolving one needs the ziptz' "$alone_err"; then
@@ -844,7 +844,7 @@ cat "$alone_err" >>"$out/all.err"
 
 # ... and everything else still works there, since only ZIP tokens need it.
 if (cd "$out/alone" && env -u PYTHONPATH COLUMNS=80 LINES=24 \
-	CLOCK_FREEZE="$SUMMER" python3 clock.py ET,PT,Berlin >/dev/null 2>"$alone_err"); then
+	CLOCK_FREEZE="$SUMMER" python3 pyclock.py ET,PT,Berlin >/dev/null 2>"$alone_err"); then
 	pass=$((pass + 1))
 	[ -z "$verbose" ] || printf 'ok   zone names still work without ziptz\n'
 else
@@ -855,13 +855,13 @@ fi
 
 echo "== embedded table parity =="
 sed -n 's/^	{"\([A-Z]*\)", "\([A-Za-z_/]*\)"},$/\1=\2/p' clock.go >"$out/go.tab"
-sed -n 's/^    ("\([A-Z]*\)", "\([A-Za-z_/]*\)"),$/\1=\2/p' clock.py >"$out/py.tab"
+sed -n 's/^    ("\([A-Z]*\)", "\([A-Za-z_/]*\)"),$/\1=\2/p' pyclock.py >"$out/py.tab"
 if [ -s "$out/go.tab" ] && cmp -s "$out/go.tab" "$out/py.tab"; then
 	pass=$((pass + 1))
 	[ -z "$verbose" ] || printf 'ok   alias and hint tables match (%s entries)\n' \
 		"$(wc -l <"$out/go.tab" | tr -d ' ')"
 else
-	echo 'FAIL alias/hint tables differ between clock.go and clock.py'
+	echo 'FAIL alias/hint tables differ between clock.go and pyclock.py'
 	diff -u "$out/py.tab" "$out/go.tab" || true
 	fail=$((fail + 1))
 fi
@@ -885,5 +885,5 @@ version_agrees() {
 
 version_agrees clock \
 	"$(sed -n 's/^const version = "\(.*\)"$/\1/p' clock.go)" \
-	"$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' clock.py)" \
+	"$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' pyclock.py)" \
 	"$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"

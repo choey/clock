@@ -75,7 +75,7 @@ def documented(verbose):
     A flag added to the usage text and nowhere else is a flag nobody finds:
     --help is what you read when you already know it exists.
     """
-    clock = (ROOT / "clock.py").read_text(encoding="utf-8")
+    clock = (ROOT / "pyclock.py").read_text(encoding="utf-8")
     usage = re.search(r'USAGE = """(.*?)"""', clock, re.S).group(1)
     names = sorted(set(re.findall(r"--[a-z][a-z-]+", usage)))
     names += sorted(set(re.findall(r"CLOCK_[A-Z_]+", clock)))
@@ -96,14 +96,14 @@ def documented(verbose):
 def versions(verbose):
     """The one number that is written three times and shown to the user.
 
-    clock.py, clock.go and pyproject.toml each declare it, and `clock
+    pyclock.py, clock.go and pyproject.toml each declare it, and `clock
     --version` prints it from two of them -- so a bump that misses one makes
     the two implementations disagree about which release they are, which is
     the single claim difftest cannot catch: it compares the two clocks to each
     other, and a wrong version printed identically by both is still wrong.
     """
     found = {
-        "clock.py": r'^VERSION = "([^"]+)"',
+        "pyclock.py": r'^VERSION = "([^"]+)"',
         "clock.go": r'^const version = "([^"]+)"',
         "pyproject.toml": r'^version = "([^"]+)"',
     }

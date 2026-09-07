@@ -58,7 +58,7 @@ const (
 	symmetryWindow = 8
 )
 
-// version is the release this source belongs to. clock.py and pyproject.toml
+// version is the release this source belongs to. pyclock.py and pyproject.toml
 // carry the same string, and difftest holds all three together: a clock that
 // cannot say what it is turns every bug report into a round trip, and one that
 // says the wrong thing is worse than one that says nothing at all.
@@ -119,7 +119,7 @@ examples:
 `
 
 // haligns and valigns are where the grid can sit when it does not fill the
-// window, and what --halign and --valign accept. Same order as clock.py's
+// window, and what --halign and --valign accept. Same order as pyclock.py's
 // tables, and the wording of the error they raise comes off these lists.
 var (
 	whens = []string{"always", "auto", "never"}
@@ -143,7 +143,7 @@ var needs = map[string]string{
 
 // hotkeys is the key list h or ? puts up in a modal. In the order the keys
 // are reached for rather than alphabetically, and kept in the same order as
-// clock.py's table.
+// pyclock.py's table.
 var hotkeys = []struct{ key, what string }{
 	{"space", "hold the frame"},
 	{"h ?", "toggle this list"},
@@ -189,7 +189,7 @@ func envCellRatio() float64 {
 
 // A day inside Python's datetime range at each end. The pinned instant is
 // converted into every zone on screen, and a zone can sit 14 hours from UTC,
-// so an instant on datetime.min itself overflows the moment clock.py shows it
+// so an instant on datetime.min itself overflows the moment pyclock.py shows it
 // in Los Angeles -- where this implementation, whose time has no such bound,
 // draws it without comment. A day of headroom is more than the 14 hours
 // anywhere is away.
@@ -264,7 +264,7 @@ func freezeDigits(s string) (int, bool) {
 // second, an optional one-to-six-digit fraction, and a literal Z. Hand-scanned
 // rather than handed to time.Parse -- which takes a one-digit month, where
 // strptime takes fewer than six fractional digits -- so that the shape
-// accepted is controlled entirely in this file, and clock.py's version of
+// accepted is controlled entirely in this file, and pyclock.py's version of
 // this function can be made to agree with it deliberately rather than by
 // coincidence.
 //
@@ -1005,7 +1005,7 @@ func parseChoice(flag, val string, choices []string) (string, error) {
 
 // parsePad reads a padding: -1 for the even fill, or a percentage 0-100. Takes
 // "10" as readily as "10%", and nothing else -- no sign, no decimal point, no
-// space, since clock.py hand-scans the same digits.
+// space, since pyclock.py hand-scans the same digits.
 func parsePad(flag, val string) (int, error) {
 	if val == "even" {
 		return -1, nil
@@ -1101,7 +1101,7 @@ type geometry struct {
 // parseArgs reads the command line: one optional zone list, and the flags in
 // any position. Hand-rolled rather than package flag, which insists every
 // flag precede the first positional -- "clock ET,PT -n 2" would silently
-// ignore the -n. clock.py runs the same algorithm for the same reason.
+// ignore the -n. pyclock.py runs the same algorithm for the same reason.
 func parseArgs(argv []string) (int, string, string, string, geometry, bool, float64, float64, bool, bool, error) {
 	perRow := defaultPerRow // only used when an explicit -n/--per-row overrides perRowAuto below
 	colorWhen := "auto"
@@ -1294,7 +1294,7 @@ func parseArgs(argv []string) (int, string, string, string, geometry, bool, floa
 // EST, MST, HST, GMT, CET and EET are real zones with fixed, DST-free
 // meanings, so they are looked up verbatim instead: aliasing GMT to
 // Europe/London would make it read BST every July, which is simply wrong.
-// Sorted, and kept in the same order as clock.py's table.
+// Sorted, and kept in the same order as pyclock.py's table.
 var zoneAliases = []struct{ name, zone string }{
 	{"ACT", "Australia/Adelaide"},
 	{"AET", "Australia/Sydney"},
@@ -2026,7 +2026,7 @@ func frame(faces []dial, now time.Time, perRow int, color bool, dayWhen string, 
 // Asking os.Stat for ModeCharDevice instead is the obvious version and is
 // wrong in exactly one place that matters -- /dev/null is a character device.
 // Under it, `clock >/dev/null` took the alternate screen and ran forever
-// where clock.py drew one frame and exited, and nothing caught it: every
+// where pyclock.py drew one frame and exited, and nothing caught it: every
 // redirection in difftest goes to a regular file.
 func isTerminal(f *os.File) bool {
 	var t syscall.Termios
@@ -2436,7 +2436,7 @@ func quietTerminal() (restore, requiet func()) {
 // clock would hand the terminal back and carry straight on, which is a Ctrl+Z
 // that does nothing. Nothing catches, blocks or swallows SIGSTOP, so it stops.
 //
-// clock.py has no such trouble and stops itself the same way regardless: what
+// pyclock.py has no such trouble and stops itself the same way regardless: what
 // a shell prints for a job stopped by SIGSTOP differs from what it prints for
 // one stopped by SIGTSTP -- "Stopped(SIGSTOP)" against "Stopped" in bash --
 // and two ports that stopped by different signals would not stop alike. The one thing lost is that SIGTSTP is discarded when the process
@@ -2656,7 +2656,7 @@ func run() error {
 		// ordering both turn on the zones' offsets at now, which move only at
 		// a tz transition, and a transition happens on a whole second -- so a
 		// second is the coarsest interval that cannot skip one, and at 19ms
-		// frames that is ~50x less work. Unix() floors, and clock.py floors
+		// frames that is ~50x less work. Unix() floors, and pyclock.py floors
 		// rather than truncating to match it, so the two hold the same number
 		// here before 1970 as well as after -- see the longer note there for
 		// why nothing drawn would differ either way.
@@ -2820,7 +2820,7 @@ func main() {
 		// sends itself is not one raised by a write to fd 1, and the runtime
 		// ignores it, so there is no dying of the signal to be had here. 141
 		// is what the shell would have shown either way, and it is what
-		// clock.py exits with for the same case.
+		// pyclock.py exits with for the same case.
 		if errors.Is(err, errPipe) {
 			os.Exit(pipeStatus)
 		}

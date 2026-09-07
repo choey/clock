@@ -2,7 +2,7 @@
 
 # A .venv here, if there is one, wins for everything below -- `make setup`
 # builds it. This is a PATH entry rather than a $(PYTHON) variable threaded
-# through every tool because the harnesses run `python3 clock.py` and
+# through every tool because the harnesses run `python3 pyclock.py` and
 # `#!/usr/bin/env python3` in a dozen places, and those should keep working
 # unchanged whether the venv exists or not. Absent, the entry is inert and
 # everything falls back to the system python3.
@@ -12,7 +12,7 @@ run-go:
 	go run .
 
 run-py:
-	python3 clock.py
+	python3 pyclock.py
 
 # The Python clock resolves ZIP codes through ziptz, which is a module of its
 # own; the Go clock links it through go.mod and so always has it. That

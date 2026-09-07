@@ -58,7 +58,7 @@ CTRL_C, CTRL_Z = b"\x03", b"\x1a"
 # quick. Nothing depends on how many land -- only that at least one does.
 SETTLE = 0.25
 
-# What both ports exit with when the reader goes away; PIPE_STATUS in clock.py
+# What both ports exit with when the reader goes away; PIPE_STATUS in pyclock.py
 # and pipeStatus in clock.go say the same thing, and this holds them to it.
 PIPE_STATUS = 141
 
@@ -227,7 +227,7 @@ def readouts(painted):
     return re.findall(rb"\d\d:\d\d:\d\d\.\d\d\d", painted)
 
 
-IMPLS = (("go", ["./clock-keytest"]), ("py", [sys.executable, "clock.py"]))
+IMPLS = (("go", ["./clock-keytest"]), ("py", [sys.executable, "pyclock.py"]))
 
 passed = failed = 0
 verbose = "-v" in sys.argv[1:]
@@ -384,7 +384,7 @@ def not_a_terminal(name):
     The clock decides full-screen or one-frame-and-exit from stdout, and
     /dev/null is a character device -- so the obvious test, "is this a
     character device", says terminal and is wrong. Under it the Go clock took
-    the alternate screen and ran forever where clock.py drew its frame and
+    the alternate screen and ran forever where pyclock.py drew its frame and
     exited, with every difftest case redirecting to a regular file and seeing
     nothing.
 

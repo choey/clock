@@ -110,7 +110,7 @@ def main():
     # Both, not one: the invariant is each implementation's to keep, and a
     # window that overflows in one and refuses in the other is difftest's to
     # catch, not this.
-    binaries = ([str(ROOT / "clock-fitfuzz")], [sys.executable, "clock.py"])
+    binaries = ([str(ROOT / "clock-fitfuzz")], [sys.executable, "pyclock.py"])
 
     rng = random.Random(SEED)
     checked = failures = complained = 0

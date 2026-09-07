@@ -27,7 +27,7 @@ the numeral's own dot —
 the centre dot, plus whichever neighbour doesn't cross a cell boundary —
 rather than straddling symmetrically; the tick moves by at most half a dot
 of true centring, invisible, in exchange for never looking disjointed. See
-`spoke()`'s comments in clock.go/clock.py for the exact rule.
+`spoke()`'s comments in clock.go/pyclock.py for the exact rule.
 
 While fixing that, a second bug turned up in the same function: giving a
 thick, non-tapered spoke (any tick) an offset endpoint at one end and a
@@ -53,11 +53,11 @@ rather than stepping once a second.
 **What a frame costs.** Fifty repaints a second, one of the two ports being
 Python, invites the question. Measured with `tools/framecost.py` on an
 Apple-silicon laptop, a 200x60 window: Go spends a couple of per cent of a
-tick on a frame, one face or twelve; clock.py spends a fifth of one on a
+tick on a frame, one face or twelve; pyclock.py spends a fifth of one on a
 single face and something under half of one on twelve. Both have room, and
 Python has less of it than a glance at the picture would suggest -- a machine
 ten times slower is one where the Python clock stops sweeping smoothly and the
-Go one has not noticed anything. Neither drifts when that happens: clock.py
+Go one has not noticed anything. Neither drifts when that happens: pyclock.py
 sleeps to the next multiple of the tick and clock.go takes a ticker whose
 channel holds one, so a frame that runs long costs the frame after it rather
 than delaying every frame that follows. That tool measures and does not check
@@ -94,7 +94,7 @@ is the one `isatty(3)` asks: does this descriptor have a termios? Go's obvious
 alternative -- `Stat` and `ModeCharDevice` -- answers a different question, and
 differs on exactly the case people redirect to: `/dev/null` is a character
 device, so under it the Go clock took the alternate screen and ran forever
-where clock.py drew one frame and exited. Every redirection in difftest goes to
+where pyclock.py drew one frame and exited. Every redirection in difftest goes to
 a regular file, which both got right, so the disagreement sat there unseen;
 `tools/keytest.py` is where it is pinned now, since catching it means being
 willing to stop waiting.
@@ -128,7 +128,7 @@ not available to the Go port: `signal.Notify` installs the runtime's handler,
 everything but a couple of special cases — and a handler with no channel left
 to send to returns, swallowing the signal. The clock would hand the terminal
 back and carry straight on, which is a Ctrl+Z that does nothing. Nothing
-catches, blocks or swallows `SIGSTOP`. clock.py could have done it the usual
+catches, blocks or swallows `SIGSTOP`. pyclock.py could have done it the usual
 way and does not, because the two would then stop by different signals and a
 shell says so: bash prints `Stopped(SIGSTOP)` where it would otherwise print
 `Stopped`. What that costs is the one protection `SIGTSTP` carries and

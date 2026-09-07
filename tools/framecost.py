@@ -70,7 +70,7 @@ def main():
     built = tempfile.TemporaryDirectory(prefix="clock-framecost.")
     binary = str(Path(built.name) / "clock")
     subprocess.run(["go", "build", "-o", binary, "."], cwd=ROOT, check=True)
-    impls = (("go", [binary]), ("py", [sys.executable, "clock.py"]))
+    impls = (("go", [binary]), ("py", [sys.executable, "pyclock.py"]))
     try:
         print(f"\n{COLS}x{LINES}, {FRAMES - 1} frames, best of {RUNS}\n")
         print(f"{'':4} {'faces':>5} {'startup':>9} {'per frame':>10} {'of a tick':>10}")
@@ -89,7 +89,7 @@ def main():
         built.cleanup()
 
     # Neither clock sleeps for a tick after the work, which would make the
-    # period the tick plus the frame: clock.py sleeps to the next multiple of
+    # period the tick plus the frame: pyclock.py sleeps to the next multiple of
     # the tick on a monotonic clock, and clock.go takes a ticker, whose channel
     # holds one tick and drops the rest. So a frame that costs more than it has
     # does not push the next one late -- it loses it. A share over 100% is a

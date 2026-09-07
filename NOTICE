@@ -17,7 +17,7 @@ ZIP code resolution is ziptz, MIT licensed, developed alongside this clock:
 
 A clock carries it rather than merely calling it. `go build` links the Go
 package in, so the compiled binary contains ziptz's lookup tables; the Python
-install this repository documents copies `ziptz.py` beside `clock.py`, which
+install this repository documents copies `ziptz.py` beside `pyclock.py`, which
 carries them too. Either way, distributing a clock distributes those tables, and the
 attribution below travels with them.
 

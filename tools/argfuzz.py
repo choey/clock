@@ -197,7 +197,7 @@ def main():
         for _ in range(count):
             env, argv = case(rng)
             go = run([binary] + argv, env)
-            py = run([sys.executable, "clock.py"] + argv, env)
+            py = run([sys.executable, "pyclock.py"] + argv, env)
             if go == py:
                 passed += 1
                 if verbose:

@@ -7,7 +7,7 @@ the other, or one whose path no case walks, looks exactly like a message
 nobody has broken yet.
 
 So difftest keeps everything the Python clock wrote to stderr, and this reads
-clock.py for the messages it can raise and checks each one turned up. What is
+pyclock.py for the messages it can raise and checks each one turned up. What is
 left is either a case worth adding or an exemption worth writing down.
 
     tools/errcover.py <stderr-log>
@@ -66,7 +66,7 @@ def main():
     printed = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 
     missing, exempted = [], 0
-    for lineno, text in messages(ROOT / "clock.py"):
+    for lineno, text in messages(ROOT / "pyclock.py"):
         if text in printed:
             continue
         why = next((reason for mark, reason in EXEMPT.items() if mark in text), None)
@@ -78,7 +78,7 @@ def main():
     if missing:
         print(f"FAIL {len(missing)} error messages no case produces:")
         for lineno, text in sorted(missing):
-            print(f"     clock.py:{lineno}  {text[:80]}")
+            print(f"     pyclock.py:{lineno}  {text[:80]}")
         print("     (add a case that reaches it, or an exemption saying why not)")
         return 1
     print(f"ok   every error message reachable by a test was printed by one "

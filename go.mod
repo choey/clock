@@ -1,4 +1,4 @@
-module clock
+module github.com/choey/clock
 
 go 1.21
 

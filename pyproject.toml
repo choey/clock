@@ -23,8 +23,9 @@ authors = [{ name = "cho", email = "choey2k5@gmail.com" }]
 # make it optional at all, so requiring it here is what makes the two ports
 # behave alike out of the box.
 #
-# clock.py still guards the import, and that guard is not for pip. It is for
-# `cp clock.py /usr/local/bin/clock` -- one file, no packaging -- where a ZIP
+# pyclock.py still guards the import, and that guard is not for pip. It is
+# for `cp pyclock.py /usr/local/bin/pyclock` -- one file, no packaging --
+# where a ZIP
 # token says what to install and every other kind of zone still works. difftest
 # covers that path with two cases run from a directory ziptz is not in.
 #
@@ -33,10 +34,16 @@ authors = [{ name = "cho", email = "choey2k5@gmail.com" }]
 dependencies = ["ziptz-us"]
 
 [project.scripts]
-clock = "clock:main"
+pyclock = "pyclock:main"
 
 [tool.setuptools]
-py-modules = ["clock"]
+# pyclock, not clock. The Go build already owns "clock" -- that is the last
+# element of its module path, so `go install` produces a binary by that name
+# -- and the two have to be installable side by side rather than shadowing
+# each other on PATH. As a module name "clock" is also already taken on PyPI
+# by an unrelated 2014 package, and whichever of the two installs last
+# silently overwrites the other.
+py-modules = ["pyclock"]
 # NOTICE ships with LICENSE because a clock installed from here carries ziptz's
 # tables, and the ODbL attribution for them travels with the thing that carries
 # them rather than with the repository they were generated in.

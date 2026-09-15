@@ -382,7 +382,9 @@ whichever July 22, again by the wall clock right now, lands closest.
 The zone does not have to be UTC either — it can be anything a `--zones`
 argument accepts, an IANA name, alias or fixed-offset abbreviation included:
 `CLOCK_FREEZE="8/22 09:53 PT"` pins whichever August 22 in Pacific time is
-closest to now, daylight saving and all.
+closest to now, daylight saving and all. A state or city works as well, with
+underscores for the spaces in its name, since a space is what separates the
+date, the clock and the zone: `CLOCK_FREEZE="10 New_Mexico"`.
 
 `CLOCK_FREEZE` pins the time, not the size: with the default `--scale auto`,
 the same command still comes out a different size in a different window. Add
@@ -424,14 +426,16 @@ Resolved in this order, first match winning:
 
 | You type | You get | |
 |---|---|---|
+| `local` | your system zone | `TZ` decides it; see below |
+| `94110` `941` | the zone that ZIP is in | US only |
 | `ET` `CT` `MT` `PT` | `America/New_York` and friends | follows daylight saving, so it reads `EST` in winter and `EDT` in summer |
 | `AKT` `HT` `BST` `UK` `IST` `JST` `KST` `SGT` `HKT` `AET` `ACT` `AWT` `NZT` | the obvious place | same |
 | `Europe/Berlin` `UTC` `EST` `MST` `HST` `GMT` `CET` `Etc/GMT+5` | itself | any name the tz database knows |
-| `Berlin` `Jakarta` `New_York` `Indiana/Indianapolis` | the zone that ends in it | the city alone, where only one zone ends that way |
 | `PST` `PDT` `EDT` `CST` `CDT` `MDT` `AKST` `AKDT` `HDT` | that exact offset | a fixed clock that never shifts |
 | `JP` `GB` `DE` | that country's zone | 2-letter ISO code, via `zone.tab` |
-| `94110` `941` | the zone that ZIP is in | US only |
-| `local` | your system zone | `TZ` decides it; see below |
+| `Berlin` `Jakarta` `New York` `Indiana/Indianapolis` | the zone that ends in it, labelled `CEST (Berlin)` | the city alone, where only one zone ends that way |
+| `Arizona` `New Mexico` `Washington DC` `American Samoa` | the zone its capital keeps, labelled `MST (Arizona)` | a US state, DC, or a territory |
+| `Seattle` `Salt Lake City` `Mumbai` `Munich` | that city's zone, labelled `PDT (Seattle)` | a common city the tz database has no zone for |
 
 ### Your system zone
 
@@ -463,14 +467,21 @@ zone ends that way — `Berlin` for `Europe/Berlin`, `Jakarta` for
 `Indianapolis` and `Indiana/Indianapolis` both reach
 `America/Indiana/Indianapolis`.
 
+A space will do for an underscore — `"New York"` is `New_York` — and the face
+names the city as well as the zone, spelt the way the tz database spells it:
+`clock berlin` reads `CEST (Berlin)`. What was typed was a place, and the label
+is the one place that says which clock it landed on.
+
 Whole segments only: `York` is not `New_York`, and `Berl` is not `Berlin`.
 Names come from `zone.tab`, the same file the country codes are read from,
 which lists the canonical zones and leaves out the backward-compatibility
 links — so `Eastern` is not a name here, while `US/Eastern` still resolves the
 ordinary way, in full.
 
-This is looked up last, after the tz database has had its say, so a city can
-never shadow a name the database itself answers to.
+This is looked up after everything else the tz database answers to, and before
+the [states and cities](#states-and-cities) this clock carries itself, so
+neither a city nor anything written here can shadow a name the database
+answers to.
 
 Ambiguity is refused rather than guessed at:
 
@@ -518,6 +529,79 @@ clock: US spans 8 time zones; name one: America/New_York, America/Chicago, ...
 Countries whose zones merely agree — Germany lists both `Europe/Berlin` and the
 `Europe/Busingen` enclave — collapse to one and resolve without complaint.
 
+### States and cities
+
+A US state works as a zone, and so do DC, the territories, and the common cities
+the tz database has no zone of its own for. Each is labelled with where it
+landed, which matters most when two places share a clock for only part of the
+year:
+
+```
+$ clock Arizona,Idaho       # in July
+   MST (Arizona)      MDT (Idaho)
+$ clock Arizona,Idaho       # in January
+   MST (Arizona, Idaho)
+```
+
+Arizona keeps `MST` all year while Idaho moves, so in winter they are one face
+and in summer two.
+
+**A state means the zone its capital keeps.** For most states that is the only
+zone there is. Where a state spans two, the capital's is also where most of it
+lives — but not all of it. Going by the populations GeoNames lists for their
+towns, about a quarter of South Dakota and of Tennessee keep another clock, and
+about a fifth of Indiana and of Idaho; Kentucky, North Dakota, Florida,
+Nebraska, Texas and Michigan have smaller parts on a second clock, and Kansas,
+Oregon and Arizona's Navajo Nation — which keeps daylight saving where the rest
+of Arizona does not — smaller still. Alaska's western Aleutians keep a clock of
+their own as well, on too few people for GeoNames' list of towns to show them. A
+corner of Alabama around Phenix City keeps Eastern time without the law saying
+so. The label is what tells anyone in one of those parts that they have been
+given the other clock:
+
+```
+$ clock "Texas,El Paso"
+   MDT (El Paso)      CDT (Texas)
+```
+
+A ZIP code, or a city, is exact where a state cannot be.
+
+Full names only, with a space or an underscore between words: `New Mexico`,
+`New_Mexico` or `"new mexico"`. The two-letter codes are not taken, because
+`CA`, `IN`, `DE` and `GA` are Canada, India, Germany and Gabon already.
+`Washington` is the state, and the city is `"Washington DC"` or
+`"District of Columbia"`. `Georgia` is the state, and the country is `GE`. The
+territories are `"US Virgin Islands"`, `"American Samoa"` and
+`"Northern Mariana Islands"`; `Guam` and `"Puerto Rico"` are names the tz
+database itself answers to, and resolve there.
+
+**A city** is one of about a hundred — Seattle, Dallas, Salt Lake City, Mumbai,
+Munich, Rio de Janeiro — that people want a clock for and no IANA zone is named
+after. Cities that do have a zone, like Los Angeles, Chicago or Hong Kong, are
+[the city alone](#the-city-alone) instead, and are labelled the same way.
+
+Some names belong to more than one city, on more than one clock. The table
+keeps a shared name only when the city it means is at least three times the
+size of the largest namesake on another clock: `Portland` is Oregon, nearly ten
+times the size of Portland, Maine, and `Manchester` is England, five times
+Manchester, New Hampshire. Four common names fail that and are left out, as
+unknown zones, to be named in full or by ZIP instead:
+
+| left out | because of | instead |
+|---|---|---|
+| `San Jose` | San José, Costa Rica, a third the size | `95113`, or `America/Los_Angeles` |
+| `St. Louis` | Saint-Louis, Senegal, nearly as large | `63101`, or `America/Chicago` |
+| `Barcelona` | Barcelona, Venezuela, half the size | `Europe/Madrid`, or `ES` |
+| `Venice` | Venice, California, nearly as large as the Venice GeoNames counts in Italy | `Europe/Rome`, or `IT` |
+
+Matching folds ASCII case and reads an underscore as a space, and forgives
+nothing else, for the reason in [Case
+folding](https://github.com/choey/clock/blob/main/ARCHITECTURE.md#case-folding):
+two spaces in a row are not one. Both tables are looked up after the tz
+database, city tails included, so a future release that names a zone after one
+of these cities takes it over; `tools/placecheck.py` fails if any row is already
+answered by something the clock asks first.
+
 ### Duplicates
 
 Two zones showing the same wall clock are one face, whatever you called them:
@@ -525,6 +609,12 @@ Two zones showing the same wall clock are one face, whatever you called them:
 labelled with the abbreviation, and when more than one spelling collapsed onto
 it, with those spellings too — `UK,BST` reads `BST/UK`, while `PDT,PDT` was
 never ambiguous and stays plain `PDT`.
+
+A place keeps its name through a merge, in parentheses after the rest:
+`Boise,Denver` reads `MDT (Boise, Denver)`, and `MT,Boise` reads
+`MDT/MT (Boise)`. A list too long for its cell is cut before the closing
+parenthesis rather than through it: `MDT (Utah, Colorado, Ne...)`, in a window
+60 columns wide.
 
 Whether two zones agree is a property of the instant, not of the zones, so the
 grouping is redone as the clock runs rather than fixed at startup. `PT` and
@@ -715,11 +805,11 @@ tools/difftest.sh -v
 ```
 
 What none of that can see is a change that alters the picture in *both*
-implementations — which is how every change is made, in one pass. So sixteen
+implementations — which is how every change is made, in one pass. So eighteen
 frames are kept as bytes in `tools/golden/`, one of each kind of picture the
 clock can draw, and compared after the two are compared with each other.
-Shortening the second hand in both passes every differential case and fails
-15 of the 16 goldens.
+Shortening the second hand to 0.70 of the radius, in both, passes every
+differential case and fails every one of the 18 goldens.
 
 ```sh
 BLESS=1 tools/difftest.sh    # accept the new rendering, deliberately
@@ -783,9 +873,10 @@ many while running.
 difftest also keeps everything the Python clock writes to stderr and, at the
 end, checks that every message `pyclock.py` can raise turned up in it —
 `tools/errcover.py`. A message nothing ever prints is a message nothing tests,
-and it looks exactly like one nobody has broken yet. Two are exempt, with the
-reason written down: both need a machine with no working tz database, and Go
-will not give its up even then, falling back to the copy inside the binary.
+and it looks exactly like one nobody has broken yet. Three are exempt, with
+the reason written down: each needs a machine whose tz database is missing or
+lacks a zone the tables name, and Go will not give its up even then, falling
+back to the copy inside the binary.
 
 That check is what turned up the clock's one Python-only behaviour going
 untested: without `ziptz` installed, a ZIP token says what to install while
@@ -820,6 +911,20 @@ and the 11 letters those fold onto — and regenerating the tables would leave t
 sentences quietly false, since they still read fine and nothing else reads
 prose. It recomputes each from the shipped tables and checks the file says it.
 Dropping one exception group makes four documents fail at once.
+
+`tools/placecheck.py` holds the state and city tables to what they claim. It
+runs every row through the real resolver, in four spellings, and fails on a zone
+that does not load, on a row something asked earlier already answers to — a city
+called `Japan` would be the tz database's, never the table's — and on a table
+out of order. What it cannot see offline is a zone that loads and is simply
+wrong: moving Seattle to Denver in both ports passes it. That, and any change to
+a row, is what `--geonames` is for, which checks every zone against a downloaded
+GeoNames city list.
+
+```sh
+tools/placecheck.py -v
+tools/placecheck.py --geonames ~/geonames    # a directory holding cities1000.txt
+```
 
 `.github/workflows/test.yml` runs all of that on push and pull request, on the
 floor and the ceiling of what the project claims to support — Go 1.21 with

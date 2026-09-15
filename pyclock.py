@@ -92,12 +92,13 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
   -h, --help         this message
   --version          print the version and exit
 
-A zone is an IANA name (Europe/Berlin), the city off the end of one where
-that is unambiguous (Berlin, Jakarta), a regional abbreviation (ET CT MT PT
-AKT HT BST IST JST AET ...), a 2-letter country code (JP, GB), or a US ZIP
-code (94110). ET/CT/MT/PT follow daylight saving, so they read EST or EDT
-depending on the date; EST/EDT/PST/PDT and the rest are the fixed offsets,
-which never shift.
+A zone is an IANA name (Europe/Berlin), a city (Berlin, Seattle), a US state
+(Arizona), a regional abbreviation (ET CT MT PT AKT HT BST IST JST AET ...),
+a 2-letter country code (JP, GB), or a US ZIP code (94110). A state or city
+is labelled with the zone it landed in, as MST (Arizona); write one with a
+space in quotes, "New Mexico", or with underscores, New_Mexico. ET/CT/MT/PT
+follow daylight saving, so they read EST or EDT depending on the date;
+EST/EDT/PST/PDT and the rest are the fixed offsets, which never shift.
 
 The hands are coloured on a terminal and plain when redirected; NO_COLOR
 turns the colour off everywhere. Auto puts a weekday on the readouts only
@@ -115,6 +116,7 @@ examples:
   clock ET,PT,UTC
   clock -n 2 ET,PT,UTC
   clock Berlin,Jakarta
+  clock Arizona,Boise,"Salt Lake City"
   clock Europe/Berlin,Asia/Tokyo,94110 --per-row 2
 """
 
@@ -534,7 +536,9 @@ def _parse_freeze_clock_zone(value, now):
     "15:30 UTC", "15:30 PT", "2026-07-22 15:30 UTC", "2026/07/22 15:30 UTC"
     or "7/22 15:30 PT" -- or None if value is not shaped like this format at
     all. The zone is anything resolve_zone accepts: an alias, an IANA name,
-    a fixed offset abbreviation, a country code, a city -- and resolve_zone
+    a fixed offset abbreviation, a country code, a US state, a city, with
+    underscores for any space in its name, since a space is what separates
+    the date, the clock and the zone -- and resolve_zone
     raises its own ClockError, which is left to propagate rather than
     caught, once a date and a clock have already parsed and the trailing
     word is clearly meant as a zone.
@@ -557,7 +561,7 @@ def _parse_freeze_clock_zone(value, now):
     if clock is None:
         return None
     hour, minute, second = clock
-    zone = resolve_zone(zone_part, now)
+    zone, _ = resolve_zone(zone_part, now)
     if not date_part:
         return _freeze_closest_day(now, zone, hour, minute, second)
     date = _parse_freeze_date(date_part)
@@ -1134,6 +1138,178 @@ ZONE_FIXED = (
     ("PST", -8 * 3600),
 )
 
+# The fifty states, DC, and the territories with ZIP codes, each by the zone
+# its capital keeps, so a state that spans two means the capital's -- and the
+# face says which it landed on, MST (Arizona), so a reader in the other part
+# is told rather than misled. Washington is the state; the city is Washington
+# DC. Two-letter codes are not taken, because CA, IN, DE and GA are countries
+# already. New York, Puerto Rico and Guam are not in the table only because
+# the tz database names zones after them, and the database is always asked
+# first. Sorted, same order as clock.go's table.
+US_STATES = (
+    ("Alabama", "America/Chicago"),
+    ("Alaska", "America/Juneau"),
+    ("American Samoa", "Pacific/Pago_Pago"),
+    ("Arizona", "America/Phoenix"),
+    ("Arkansas", "America/Chicago"),
+    ("California", "America/Los_Angeles"),
+    ("Colorado", "America/Denver"),
+    ("Connecticut", "America/New_York"),
+    ("Delaware", "America/New_York"),
+    ("District of Columbia", "America/New_York"),
+    ("Florida", "America/New_York"),
+    ("Georgia", "America/New_York"),
+    ("Hawaii", "Pacific/Honolulu"),
+    ("Idaho", "America/Boise"),
+    ("Illinois", "America/Chicago"),
+    ("Indiana", "America/Indiana/Indianapolis"),
+    ("Iowa", "America/Chicago"),
+    ("Kansas", "America/Chicago"),
+    ("Kentucky", "America/New_York"),
+    ("Louisiana", "America/Chicago"),
+    ("Maine", "America/New_York"),
+    ("Maryland", "America/New_York"),
+    ("Massachusetts", "America/New_York"),
+    ("Michigan", "America/Detroit"),
+    ("Minnesota", "America/Chicago"),
+    ("Mississippi", "America/Chicago"),
+    ("Missouri", "America/Chicago"),
+    ("Montana", "America/Denver"),
+    ("Nebraska", "America/Chicago"),
+    ("Nevada", "America/Los_Angeles"),
+    ("New Hampshire", "America/New_York"),
+    ("New Jersey", "America/New_York"),
+    ("New Mexico", "America/Denver"),
+    ("North Carolina", "America/New_York"),
+    ("North Dakota", "America/Chicago"),
+    ("Northern Mariana Islands", "Pacific/Saipan"),
+    ("Ohio", "America/New_York"),
+    ("Oklahoma", "America/Chicago"),
+    ("Oregon", "America/Los_Angeles"),
+    ("Pennsylvania", "America/New_York"),
+    ("Rhode Island", "America/New_York"),
+    ("South Carolina", "America/New_York"),
+    ("South Dakota", "America/Chicago"),
+    ("Tennessee", "America/Chicago"),
+    ("Texas", "America/Chicago"),
+    ("U.S. Virgin Islands", "America/St_Thomas"),
+    ("US Virgin Islands", "America/St_Thomas"),
+    ("Utah", "America/Denver"),
+    ("Vermont", "America/New_York"),
+    ("Virginia", "America/New_York"),
+    ("Washington", "America/Los_Angeles"),
+    ("Washington D.C.", "America/New_York"),
+    ("Washington DC", "America/New_York"),
+    ("West Virginia", "America/New_York"),
+    ("Wisconsin", "America/Chicago"),
+    ("Wyoming", "America/Denver"),
+)
+
+# Places people want a clock for that the tz database does not name a zone
+# after -- Seattle, Mumbai, Munich. Each was checked against GeoNames, and a
+# name shared by cities on different clocks is kept only when the largest on
+# this clock is three times the size of any namesake on another: so Portland
+# is Oregon, while San Jose, St. Louis, Barcelona and Venice are left out.
+# Cities the tz database does name, Los Angeles and Hong Kong among them, are
+# left to it. Sorted, same order as clock.go's table.
+COMMON_CITIES = (
+    ("Abu Dhabi", "Asia/Dubai"),
+    ("Abuja", "Africa/Lagos"),
+    ("Albuquerque", "America/Denver"),
+    ("Ankara", "Europe/Istanbul"),
+    ("Atlanta", "America/New_York"),
+    ("Austin", "America/Chicago"),
+    ("Baltimore", "America/New_York"),
+    ("Bangalore", "Asia/Kolkata"),
+    ("Beijing", "Asia/Shanghai"),
+    ("Bengaluru", "Asia/Kolkata"),
+    ("Boston", "America/New_York"),
+    ("Brasilia", "America/Sao_Paulo"),
+    ("Busan", "Asia/Seoul"),
+    ("Calgary", "America/Edmonton"),
+    ("Canberra", "Australia/Sydney"),
+    ("Cape Town", "Africa/Johannesburg"),
+    ("Charlotte", "America/New_York"),
+    ("Chengdu", "Asia/Shanghai"),
+    ("Chennai", "Asia/Kolkata"),
+    ("Christchurch", "Pacific/Auckland"),
+    ("Cincinnati", "America/New_York"),
+    ("Cleveland", "America/New_York"),
+    ("Cologne", "Europe/Berlin"),
+    ("Columbus", "America/New_York"),
+    ("Dallas", "America/Chicago"),
+    ("Delhi", "Asia/Kolkata"),
+    ("Durban", "Africa/Johannesburg"),
+    ("Edinburgh", "Europe/London"),
+    ("El Paso", "America/Denver"),
+    ("Florence", "Europe/Rome"),
+    ("Fort Worth", "America/Chicago"),
+    ("Frankfurt", "Europe/Berlin"),
+    ("Geneva", "Europe/Zurich"),
+    ("Glasgow", "Europe/London"),
+    ("Guadalajara", "America/Mexico_City"),
+    ("Guangzhou", "Asia/Shanghai"),
+    ("Hamburg", "Europe/Berlin"),
+    ("Hanoi", "Asia/Ho_Chi_Minh"),
+    ("Houston", "America/Chicago"),
+    ("Hyderabad", "Asia/Kolkata"),
+    ("Islamabad", "Asia/Karachi"),
+    ("Jacksonville", "America/New_York"),
+    ("Jeddah", "Asia/Riyadh"),
+    ("Kansas City", "America/Chicago"),
+    ("Krakow", "Europe/Warsaw"),
+    ("Kyoto", "Asia/Tokyo"),
+    ("Lahore", "Asia/Karachi"),
+    ("Las Vegas", "America/Los_Angeles"),
+    ("Lyon", "Europe/Paris"),
+    ("Manchester", "Europe/London"),
+    ("Marseille", "Europe/Paris"),
+    ("Mecca", "Asia/Riyadh"),
+    ("Memphis", "America/Chicago"),
+    ("Miami", "America/New_York"),
+    ("Milan", "Europe/Rome"),
+    ("Milwaukee", "America/Chicago"),
+    ("Minneapolis", "America/Chicago"),
+    ("Montreal", "America/Toronto"),
+    ("Mumbai", "Asia/Kolkata"),
+    ("Munich", "Europe/Berlin"),
+    ("Naples", "Europe/Rome"),
+    ("Nashville", "America/Chicago"),
+    ("New Delhi", "Asia/Kolkata"),
+    ("New Orleans", "America/Chicago"),
+    ("New York City", "America/New_York"),
+    ("Oklahoma City", "America/Chicago"),
+    ("Omaha", "America/Chicago"),
+    ("Orlando", "America/New_York"),
+    ("Osaka", "Asia/Tokyo"),
+    ("Ottawa", "America/Toronto"),
+    ("Philadelphia", "America/New_York"),
+    ("Pittsburgh", "America/New_York"),
+    ("Portland", "America/Los_Angeles"),
+    ("Pretoria", "Africa/Johannesburg"),
+    ("Pune", "Asia/Kolkata"),
+    ("Quebec City", "America/Toronto"),
+    ("Raleigh", "America/New_York"),
+    ("Rio de Janeiro", "America/Sao_Paulo"),
+    ("Rotterdam", "Europe/Amsterdam"),
+    ("Sacramento", "America/Los_Angeles"),
+    ("Saint Petersburg", "Europe/Moscow"),
+    ("Salt Lake City", "America/Denver"),
+    ("San Antonio", "America/Chicago"),
+    ("San Diego", "America/Los_Angeles"),
+    ("San Francisco", "America/Los_Angeles"),
+    ("Seattle", "America/Los_Angeles"),
+    ("Seville", "Europe/Madrid"),
+    ("Shenzhen", "Asia/Shanghai"),
+    ("St. Petersburg", "Europe/Moscow"),
+    ("Tampa", "America/New_York"),
+    ("Tel Aviv", "Asia/Jerusalem"),
+    ("The Hague", "Europe/Amsterdam"),
+    ("Tucson", "America/Phoenix"),
+    ("Wellington", "Pacific/Auckland"),
+    ("Yokohama", "Asia/Tokyo"),
+)
+
 
 def alias_names():
     return " ".join(name for name, _ in ZONE_ALIASES)
@@ -1236,7 +1412,8 @@ def suffix_zones(token):
 
     Europe/Berlin for "Berlin", and America/Indiana/Indianapolis for either
     "Indianapolis" or "Indiana/Indianapolis". Whole segments only, so "Berl"
-    finds nothing and "York" does not answer for "New_York".
+    finds nothing and "York" does not answer for "New_York". A space reads as
+    the underscore it stands for, so "New York" finds it all the same.
 
     Read out of zone.tab, the same file the country codes come from, which
     lists the canonical zones and leaves out the backward-compatibility links
@@ -1246,7 +1423,7 @@ def suffix_zones(token):
     data, found = zone_tab()
     if not found:
         return [], False
-    want = "/" + ascii_lower(token)
+    want = "/" + ascii_lower(token).replace(" ", "_")
     out = []
     for line in data.split("\n"):
         if not line or line.startswith("#"):
@@ -1258,15 +1435,17 @@ def suffix_zones(token):
 
 
 def suffix_zone(token):
-    """One zone named by its tail alone, or None when nothing matches.
+    """One zone named by its tail alone, and the name to label it with --
+    (None, "") when nothing matches.
 
     Ambiguity is refused rather than guessed at. Every city in the tz database
     is unique today, but nothing promises it stays that way, and two clocks an
-    ocean apart is not a choice to make on the reader's behalf.
+    ocean apart is not a choice to make on the reader's behalf. The name is
+    place_name's: the part of the zone that was typed.
     """
     names, found = suffix_zones(token)
     if not found or not names:
-        return None
+        return None, ""
     if len(names) > 1:
         shown, tail = names, ""
         if len(shown) > 8:
@@ -1278,15 +1457,53 @@ def suffix_zone(token):
             + tail
         )
     try:
-        return ZoneInfo(names[0])
+        return ZoneInfo(names[0]), place_name(names[0], token)
     except Exception:
-        return None
+        return None, ""
+
+
+def place_name(zone, token):
+    """The part of zone a token matched, written the way a person writes it.
+
+    The zone's own capitals, and spaces for its underscores. Both "new_york"
+    and "New York" show as New York, and Indiana/Indianapolis keeps both
+    parts, since that is how much of the name was typed.
+    """
+    parts = zone.split("/")
+    n = min(token.count("/") + 1, len(parts))
+    return "/".join(parts[-n:]).replace("_", " ")
+
+
+def place_key(s):
+    """How a state or city is matched: ASCII case folded, and an underscore
+    read as the space it stands for, so New_Mexico and "new mexico" both find
+    New Mexico. Nothing else is forgiven -- not runs of spaces, since Python
+    and Go do not agree about which characters are spaces."""
+    return ascii_lower(s).replace("_", " ")
+
+
+def place_zone(token):
+    """A US state or a common city, and the name to label it with -- the
+    table's own spelling, whatever case the token was typed in. (None, "")
+    when the token is neither."""
+    key = place_key(token)
+    for table in (US_STATES, COMMON_CITIES):
+        for name, target in table:
+            if place_key(name) != key:
+                continue
+            try:
+                return ZoneInfo(target), name
+            except Exception:
+                raise ClockError(
+                    f"{name} means {target}, which this system's time zone database lacks"
+                ) from None
+    return None, ""
 
 
 def unknown_zone(token):
     return ClockError(
         f'unknown zone "{token}"; use an IANA name (Europe/Berlin), a city '
-        f"off the end of one (Berlin, Jakarta), an abbreviation "
+        f"(Berlin, Seattle), a US state (Arizona), an abbreviation "
         f"({alias_names()}), a 2-letter country code (JP), or a US ZIP code"
     )
 
@@ -1323,76 +1540,93 @@ def local_zone():
 
 
 def resolve_zone(token, at):
-    """Turn one token into a tzinfo, or None meaning the system's local zone.
+    """Turn one token into a tzinfo, and the place it named if it named one.
+
+    The tzinfo is None for the system's local zone. The place is a US state, a
+    city from COMMON_CITIES, or a city off the end of an IANA zone -- and "" for
+    every other kind of zone.
 
     Order matters: the alias table is consulted before the tz database only for
     names the database lacks, the fixed-offset table only after it so that real
     zones win, and "local" and "" are intercepted because Python
     and Go disagree about both -- ZoneInfo("Local") raises where
     LoadLocation("Local") works, and ZoneInfo("") raises where LoadLocation("")
-    quietly returns UTC.
+    quietly returns UTC. Places come last of all, the database's own tails
+    before the tables here.
     """
     if token.startswith("/") or ".." in token:
         raise ClockError(f'"{token}" is not a zone name')
     if ascii_lower(token) == "local":
-        return local_zone()
+        return local_zone(), ""
     if token.isascii() and token.isdigit():
-        return zip_zone(token)
+        return zip_zone(token), ""
     up = ascii_upper(token)
     for name, target in ZONE_ALIASES:
         if name == up:
             try:
-                return ZoneInfo(target)
+                return ZoneInfo(target), ""
             except Exception:
                 raise ClockError(
                     f"{up} means {target}, which this system's time zone database lacks"
                 ) from None
     try:
-        return ZoneInfo(token)
+        return ZoneInfo(token), ""
     except Exception:
         pass
     for name, offset in ZONE_FIXED:
         if name == up:
-            return timezone(timedelta(seconds=offset), name)
+            return timezone(timedelta(seconds=offset), name), ""
     if len(up) == 2 and "A" <= up[0] <= "Z" and "A" <= up[1] <= "Z":
         found = country_zone(up, at)
         if found is not None:
-            return found
-    # Last, so a city can never shadow a name the database itself answers to.
-    named = suffix_zone(token)
-    if named is not None:
-        return named
+            return found, ""
+    # Last, so a city can never shadow a name the database itself answers to:
+    # the database's own tails first, then the states and cities written here.
+    for lookup in (suffix_zone, place_zone):
+        zone, place = lookup(token)
+        if zone is not None:
+            return zone, place
     raise unknown_zone(token)
 
 
 def resolve_zones(zone_list, at):
-    """Turn the comma-separated list into (token, zone) pairs, left to right.
+    """The zone list as (token, zone, place) triples, left to right.
 
     The token is carried along because merge_zones labels a face with the
-    spellings that asked for it, not just the zone it landed on.
+    spellings that asked for it, not just the zone it landed on -- and the
+    place, when the token named one, for the parentheses after that label.
     """
     if not zone_list:
-        return [("", local_zone())]
+        return [("", local_zone(), "")]
     out = []
     for token in zone_list.split(","):
         token = token.strip(" \t")
         if not token:
             raise ClockError(f'empty zone in "{zone_list}"')
-        out.append((token, resolve_zone(token, at)))
+        out.append((token, *resolve_zone(token, at)))
     return out
 
 
-def zone_label(abbr, tokens):
+def zone_label(abbr, tokens, plain, places):
     """The name written over one face.
 
     Just the abbreviation, unless more than one spelling collapsed onto this
     face -- then each spelling that reads differently is named too, because
     that is the only place the ambiguity is visible. PDT,PDT asked the same
     question twice and gets one plain answer.
+
+    A state or city follows in parentheses whatever else collapsed with it,
+    since the zone it landed in is written nowhere else: Boise alone is
+    MDT (Boise), and MT,Boise is MDT/MT (Boise). tokens is every spelling that
+    asked for this face, plain the ones that named no place, and places the
+    names of the ones that did.
     """
-    if len(tokens) < 2:
-        return abbr
-    return "/".join([abbr] + [t for t in tokens if ascii_upper(t) != ascii_upper(abbr)])
+    label = abbr
+    if len(tokens) >= 2:
+        label = "/".join([abbr] + [t for t in plain if ascii_upper(t) != ascii_upper(abbr)])
+    if places:
+        label += " (" + ", ".join(places) + ")"
+    return label
 
 
 def merge_zones(zones, now):
@@ -1407,16 +1641,29 @@ def merge_zones(zones, now):
     calls it once a second, which is as often as its answer can change.
     """
     out, index = [], {}
-    for token, zone in zones:
+    for token, zone, place in zones:
         t = in_zone(now, zone)
         key = (f"{t:%Z}", int(t.utcoffset().total_seconds()))
         if key not in index:
             index[key] = len(out)
-            out.append((key[0], [], zone))
-        _, tokens, _ = out[index[key]]
-        if token and not any(ascii_upper(token) == ascii_upper(seen) for seen in tokens):
-            tokens.append(token)
-    return [(zone_label(abbr, tokens), zone) for abbr, tokens, zone in out]
+            out.append((key[0], [], [], [], zone))
+        _, tokens, plain, places, _ = out[index[key]]
+        if not token or contains_fold(tokens, token):
+            continue
+        tokens.append(token)
+        if not place:
+            plain.append(token)
+        elif not contains_fold(places, place):
+            places.append(place)
+    return [
+        (zone_label(abbr, tokens, plain, places), zone)
+        for abbr, tokens, plain, places, zone in out
+    ]
+
+
+def contains_fold(items, s):
+    """Whether items holds s, ASCII case folded."""
+    return any(ascii_upper(item) == ascii_upper(s) for item in items)
 
 
 def in_zone(t, zone):
@@ -1464,6 +1711,26 @@ def truncate(s, n):
     """Cut s to n characters."""
     n = max(0, n)
     return s if len(s) <= n else s[:n]
+
+
+def fit_label(label, n):
+    """Cut a face's label to n characters the way truncate does -- except that
+    a label ending in a list of places keeps its closing parenthesis.
+
+    In a narrow cell "MDT (Utah, Colorado, New Mexico)" ends "...)" instead of
+    stopping partway through a name with the list left open. A cut that would
+    keep none of the list is a plain truncation instead, since "MDT (...)" says
+    less than the first letters of the place would.
+    """
+    if len(label) <= n:
+        return label
+    at = label.find(" (")
+    if at < 0 or not label.endswith(")"):
+        return truncate(label, n)
+    keep = n - len("...)")
+    if keep <= at + len(" ("):
+        return truncate(label, n)
+    return label[:keep].rstrip(" ,") + "...)"
 
 
 # Weekday names, Sunday first to match Go's time.Weekday. A table rather than
@@ -1633,7 +1900,7 @@ def frame(faces, now, per_row, color, day_when, lay):
             row([pad_left + part + pad_right for part in line]) for line in zip(*drawn)
         )
         rows.append(
-            row([center(truncate(label, cell), cell, lay.extra_left) for label, _ in chunk])
+            row([center(fit_label(label, cell), cell, lay.extra_left) for label, _ in chunk])
         )
         rows.append(
             row([center(digital(t, weekday), cell, lay.extra_left) for t in times])

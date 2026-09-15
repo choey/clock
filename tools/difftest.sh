@@ -244,6 +244,48 @@ for tzdir in "$out/tz2" "$out/tz10"; do
 done
 tzdir=
 
+echo "== states and cities =="
+# A state, a city from the table, or a city off the end of an IANA zone is
+# labelled with the zone it landed in: MST (Arizona). A space and an underscore
+# are the same character here and nowhere else, and the name shown is the
+# table's or the zone's own spelling rather than the token's. Arizona keeps MST
+# all year while Idaho moves, so that pair is two faces in July and one in
+# January -- the case the label is for.
+for zones in Arizona arizona ARIZONA Boise "New Mexico" New_Mexico "new mexico" "New  Mexico" \
+	Washington "Washington DC" "Washington D.C." Washington_DC "District of Columbia" \
+	"US Virgin Islands" "U.S. Virgin Islands" "American Samoa" "Northern Mariana Islands" \
+	Seattle "Salt Lake City" Salt_Lake_City "New York" New_York "new york" "Hong Kong" Guam \
+	"Puerto Rico" "Ho Chi Minh" Indiana/Indianapolis Tennessee Mumbai Bangalore "St. Petersburg" \
+	Arizona,Idaho Boise,Denver MT,Boise Arizona,Phoenix Arizona,America/Phoenix PT,Seattle,Portland \
+	Boise,America/Boise "New York,New_York,ET" Boise,boise "Texas,El Paso" "Washington,Washington DC"; do
+	check "$SUMMER" 200 60 "$zones"
+	check "$WINTER" 200 60 "$zones"
+done
+
+# Left out of the city table for sharing a name with a city nearly as large on
+# another clock, so unknown zones -- and the two-letter state codes, never
+# taken because each is a country already.
+for zones in "St. Louis" "Saint Louis" "San Jose" Barcelona Venice CA IN DE GA; do
+	check "$SUMMER" 200 60 "$zones"
+done
+
+# A list of places too long for its cell keeps its closing parenthesis, down to
+# the width where it would keep none of the list and is cut like any label.
+for size in "30 20" "40 24" "48 24" "60 24" "80 24" "100 30"; do
+	for zones in "Seattle,Portland,San Francisco,Las Vegas,Sacramento" \
+		"Arizona,Utah,Colorado,New Mexico,Wyoming,Montana,Idaho" "MT,Boise,Salt Lake City" \
+		"ET,America/New_York,New York" "Northern Mariana Islands"; do
+		check "$SUMMER" "${size% *}" "${size#* }" "$zones"
+	done
+done
+
+# CLOCK_FREEZE takes a place as its zone too, but it splits on spaces, so a
+# place with one in its name is written with underscores there.
+for pin in "10 Arizona" "8/22 09:53 New_Mexico" "8/22 09:53 New Mexico" "10 Washington_DC" \
+	"10 St._Louis" "2026-03-08 02:30:00 Tennessee" "7/22 10 Seattle"; do
+	check "$pin" 80 24 UTC
+done
+
 echo "== cli grammar =="
 check "$SUMMER" 200 60 ET,PT,UTC -n 2
 check "$SUMMER" 200 60 -n 2 ET,PT,UTC
@@ -793,6 +835,10 @@ golden date-together     "$SUMMER" 120 24 --day=auto ET,JP
 golden too-narrow        "$SUMMER" 20 24 ET,PT,UTC
 golden fixed-offset      "$SUMMER" 80 24 PST,PDT
 golden winter            "$WINTER" 120 24 ET,PT,UTC
+# A state, a city from the table, a city off the end of an IANA zone, and a
+# place merged with an abbreviation; then a list of places too long for its cell.
+golden places            "$SUMMER" 120 24 "Arizona,Boise,New York,Seattle,MT"
+golden places-narrow     "$SUMMER" 60 24 "Arizona,Utah,Colorado,New Mexico,Wyoming,Montana,Idaho"
 frames=3
 step=19
 golden sequence-3        "$SUMMER" 80 24 UTC
@@ -860,14 +906,14 @@ else
 fi
 
 echo "== embedded table parity =="
-sed -n 's/^	{"\([A-Z]*\)", "\([A-Za-z_/]*\)"},$/\1=\2/p' clock.go >"$out/go.tab"
-sed -n 's/^    ("\([A-Z]*\)", "\([A-Za-z_/]*\)"),$/\1=\2/p' pyclock.py >"$out/py.tab"
+sed -n 's/^	{"\([A-Za-z][A-Za-z .]*\)", "\([A-Za-z_/]*\)"},$/\1=\2/p' clock.go >"$out/go.tab"
+sed -n 's/^    ("\([A-Za-z][A-Za-z .]*\)", "\([A-Za-z_/]*\)"),$/\1=\2/p' pyclock.py >"$out/py.tab"
 if [ -s "$out/go.tab" ] && cmp -s "$out/go.tab" "$out/py.tab"; then
 	pass=$((pass + 1))
-	[ -z "$verbose" ] || printf 'ok   alias and hint tables match (%s entries)\n' \
+	[ -z "$verbose" ] || printf 'ok   alias, hint, state and city tables match (%s entries)\n' \
 		"$(wc -l <"$out/go.tab" | tr -d ' ')"
 else
-	echo 'FAIL alias/hint tables differ between clock.go and pyclock.py'
+	echo 'FAIL alias, hint, state or city tables differ between clock.go and pyclock.py'
 	diff -u "$out/py.tab" "$out/go.tab" || true
 	fail=$((fail + 1))
 fi
@@ -893,6 +939,23 @@ version_agrees clock \
 	"$(sed -n 's/^const version = "\(.*\)"$/\1/p' clock.go)" \
 	"$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' pyclock.py)" \
 	"$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
+
+echo "== error coverage =="
+# Not `out=$(...)`: out is the scratch directory the EXIT trap removes, and
+# shadowing it here would leave the directory behind and try to remove a
+# message instead.
+#
+# f3b4ae9 lost this block along with the summary below it. The summary came
+# back in 0.2.1 and this did not, so from f3b4ae9 until now nothing ran
+# errcover at all: the log was written case by case and deleted unread at exit,
+# while the README went on saying difftest checks it.
+if coverage=$(tools/errcover.py "$out/all.err"); then
+	pass=$((pass + 1))
+	[ -z "$verbose" ] || echo "$coverage"
+else
+	echo "$coverage"
+	fail=$((fail + 1))
+fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

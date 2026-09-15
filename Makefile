@@ -38,6 +38,7 @@ test:
 	tools/fitfuzz.py
 	tools/argfuzz.py
 	tools/docnums.py
+	tools/placecheck.py
 
 clean:
 	rm -rf .venv dist build

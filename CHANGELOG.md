@@ -11,6 +11,34 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 
 ## Unreleased
 
+- **US states and common cities are zones, and a face says where one landed.**
+  `clock Arizona,Boise,"Salt Lake City"` draws `MST (Arizona)` and
+  `MDT (Boise, Salt Lake City)`. A state means the zone its capital keeps,
+  which for a state that spans two is not every resident's clock -- the label
+  is how they find out. About a hundred cities the tz database has no zone for
+  are in a table checked against GeoNames, and a name shared with a comparably
+  large city on another clock is left out, which is why `San Jose` and
+  `St. Louis` are not there.
+- **A city off the end of an IANA name is labelled the same way**, so
+  `clock Berlin` reads `CEST (Berlin)` where it used to read `CEST`. That
+  changes what an existing command line draws, which by this file's own rule
+  makes the next release a minor one.
+- A space in a place's name does the work of its underscore: `"New York"` is
+  `New_York`. A list of places too long for its cell ends `...)` instead of
+  stopping partway through a name.
+- `tools/placecheck.py` runs every state and city through the real resolver,
+  and fails on a row that does not load, cannot be reached, or is out of order;
+  `--geonames` re-checks every zone against GeoNames. difftest's table parity
+  matched only upper-case names, so until now it covered the alias tables and
+  nothing else.
+- **`tools/errcover.py` runs again.** The ziptz split removed the lines in
+  `tools/difftest.sh` that ran it, together with the summary and exit status
+  0.2.1 put back -- and put back without it. So since then nothing has checked
+  that every error message the clock can print is printed by some case, while
+  the README said difftest does. It is back, and passes.
+- The README's zone table said it listed the forms in the order they are tried,
+  and did not: `local` and ZIP codes are tried first, and a city off the end of
+  an IANA name after country codes. It does now.
 - **Every release carries prebuilt binaries.** `go install` wanted a Go
   toolchain, which was a strange price for a clock and until now the only way
   to get the Go port. Five targets, cross-compiled from one runner with

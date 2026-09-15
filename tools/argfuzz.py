@@ -75,6 +75,11 @@ ZONEISH = (
     "local", "LOCAL", "94110", "941", "9411o", "JP", "jp", "ZZ", "", ",", "UTC,",
     ",UTC", "UTC,,PT", " UTC ", "Europe/Berlin", "Europe/", "/etc/passwd",
     "../Europe/Berlin", "ＵＴＣ", "Etc/GMT+5", "PST", "PDT",
+    # States and cities, which are matched with an underscore read as a space --
+    # the one place a token's spaces mean something -- and, like everything
+    # else, folded ASCII only.
+    "Arizona", "arizona", "New Mexico", "New_Mexico", "new  mexico", "Washington DC",
+    "Washington_D.C.", "St. Louis", "Boise", "Salt Lake City", "New York", "Ｂoise", "İdaho",
 )
 
 FLAGS = ("-n", "--per-row", "--scale", "--cell-ratio", "--hpad", "--vpad",
@@ -106,7 +111,9 @@ FREEZEISH = (FROZEN, "2026-01-15T09:53:07.123456Z", "2026-11-01T05:59:59.900000Z
              "26-07-22 10 UTC", "8/22/26 09:53 PT", "8/22/2026 09:53:35 PT",
              "07-22-26 09:53 UTC", "8/22 09:53:35 PT", "8/22 09:53:35 pt",
              "10 PDT", "10 94110", "10 local", "10 nonsense",
-             "2026-03-08 02:30:00 ET", "2026-11-01 01:30:00 ET")
+             "2026-03-08 02:30:00 ET", "2026-11-01 01:30:00 ET",
+             "10 Arizona", "8/22 09:53 New_Mexico", "8/22 09:53 New Mexico",
+             "2026-03-08 02:30:00 Tennessee", "10 St._Louis")
 
 
 def mutate(rng, argv):

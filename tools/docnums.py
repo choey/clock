@@ -66,7 +66,18 @@ CLAIMS = (
 # the library the clock actually depends on -- so a ziptz release that moved a
 # ZIP would fail this repository's prose too, which is the point.
 
-WORDS = {"eleven": 11, "ten": 10, "twelve": 12, "sixteen": 16, "thirty": 30, "forty": 40}
+# The figures the prose spells out. Every number word to twenty, not just the
+# ones the documents used when this was written: the table stopped at sixteen,
+# and adding two goldens made "eighteen" a word it had never been taught, which
+# crashed the check instead of letting it read the sentence.
+WORDS = {
+    word: n
+    for n, word in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve thirteen"
+        " fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
+    )
+}
+WORDS.update({"thirty": 30, "forty": 40})
 
 
 def documented(verbose):

@@ -62,7 +62,7 @@ const (
 // carry the same string, and difftest holds all three together: a clock that
 // cannot say what it is turns every bug report into a round trip, and one that
 // says the wrong thing is worse than one that says nothing at all.
-const version = "0.2.1"
+const version = "0.3.0"
 
 const usage = `clock - analog terminal clocks
 
@@ -92,12 +92,15 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
   -h, --help         this message
   --version          print the version and exit
 
-A zone is an IANA name (Europe/Berlin), the city off the end of one where
-that is unambiguous (Berlin, Jakarta), a regional abbreviation (ET CT MT PT
-AKT HT BST IST JST AET ...), a 2-letter country code (JP, GB), or a US ZIP
-code (94110). ET/CT/MT/PT follow daylight saving, so they read EST or EDT
-depending on the date; EST/EDT/PST/PDT and the rest are the fixed offsets,
-which never shift.
+A zone is an IANA name (Europe/Berlin), a city (Berlin, Seattle), a US state
+(Arizona, or its code as US-AZ), a country (Germany, or its code as DE), a
+regional abbreviation (ET CT MT PT AKT HT BST IST JST AET ...), or a US ZIP
+code (94110). Each place is labelled with the zone it landed in, as
+MST (Arizona) or CEST (DE); write a name with a space in quotes,
+"New Mexico", or with underscores, New_Mexico. The bare two letters are a
+country and never a state: CA is Canada. ET/CT/MT/PT follow daylight saving,
+so they read EST or EDT depending on the date; EST/EDT/PST/PDT and the rest
+are the fixed offsets, which never shift.
 
 The hands are coloured on a terminal and plain when redirected; NO_COLOR
 turns the colour off everywhere. Auto puts a weekday on the readouts only
@@ -115,6 +118,7 @@ examples:
   clock ET,PT,UTC
   clock -n 2 ET,PT,UTC
   clock Berlin,Jakarta
+  clock Arizona,Boise,"Salt Lake City"
   clock Europe/Berlin,Asia/Tokyo,94110 --per-row 2
 `
 
@@ -330,7 +334,10 @@ func parseFreezeInstant(v string) (time.Time, bool) {
 // the reading needs no date, or no year, typed at all for the moment that is
 // happening soon, whichever side of midnight or new year's it falls on, in
 // that zone's own calendar. The zone is anything resolveZone accepts: an
-// alias, an IANA name, a fixed offset abbreviation, a country code, a city.
+// alias, an IANA name, a fixed offset abbreviation, a country code, a US
+// state, a city -- though a place with a space in its name is written with
+// underscores here, New_Mexico, since a space is what separates the date, the
+// clock and the zone.
 //
 // ok is false and err nil when the value is not shaped like this format at
 // all -- one space (a clock and a zone) or two (a date as well) -- so freeze
@@ -353,7 +360,7 @@ func parseFreezeClockZone(v string, now time.Time) (time.Time, bool, error) {
 	if !ok {
 		return time.Time{}, false, nil
 	}
-	loc, err := resolveZone(zonePart, now)
+	loc, _, err := resolveZone(zonePart, now)
 	if err != nil {
 		return time.Time{}, false, err
 	}
@@ -1337,6 +1344,244 @@ var zoneFixed = []struct {
 	{"PST", -8 * 3600},
 }
 
+// usStates are the fifty states, DC, and the territories with ZIP codes, each
+// by the zone its capital keeps, so a state that spans two means the capital's
+// -- and the face says which it landed on, MST (Arizona), so a reader in the
+// other part is told rather than misled. Washington is the state; the city is
+// Washington DC. Two-letter codes are not taken, because CA, IN, DE and GA are
+// countries already. New York, Puerto Rico and Guam are not in the table only
+// because the tz database names zones after them, and the database is always
+// asked first. Sorted, same order as pyclock.py's table.
+var usStates = []struct{ name, zone string }{
+	{"Alabama", "America/Chicago"},
+	{"Alaska", "America/Juneau"},
+	{"American Samoa", "Pacific/Pago_Pago"},
+	{"Arizona", "America/Phoenix"},
+	{"Arkansas", "America/Chicago"},
+	{"California", "America/Los_Angeles"},
+	{"Colorado", "America/Denver"},
+	{"Connecticut", "America/New_York"},
+	{"Delaware", "America/New_York"},
+	{"District of Columbia", "America/New_York"},
+	{"Florida", "America/New_York"},
+	{"Georgia", "America/New_York"},
+	{"Hawaii", "Pacific/Honolulu"},
+	{"Idaho", "America/Boise"},
+	{"Illinois", "America/Chicago"},
+	{"Indiana", "America/Indiana/Indianapolis"},
+	{"Iowa", "America/Chicago"},
+	{"Kansas", "America/Chicago"},
+	{"Kentucky", "America/New_York"},
+	{"Louisiana", "America/Chicago"},
+	{"Maine", "America/New_York"},
+	{"Maryland", "America/New_York"},
+	{"Massachusetts", "America/New_York"},
+	{"Michigan", "America/Detroit"},
+	{"Minnesota", "America/Chicago"},
+	{"Mississippi", "America/Chicago"},
+	{"Missouri", "America/Chicago"},
+	{"Montana", "America/Denver"},
+	{"Nebraska", "America/Chicago"},
+	{"Nevada", "America/Los_Angeles"},
+	{"New Hampshire", "America/New_York"},
+	{"New Jersey", "America/New_York"},
+	{"New Mexico", "America/Denver"},
+	{"North Carolina", "America/New_York"},
+	{"North Dakota", "America/Chicago"},
+	{"Northern Mariana Islands", "Pacific/Saipan"},
+	{"Ohio", "America/New_York"},
+	{"Oklahoma", "America/Chicago"},
+	{"Oregon", "America/Los_Angeles"},
+	{"Pennsylvania", "America/New_York"},
+	{"Rhode Island", "America/New_York"},
+	{"South Carolina", "America/New_York"},
+	{"South Dakota", "America/Chicago"},
+	{"Tennessee", "America/Chicago"},
+	{"Texas", "America/Chicago"},
+	{"U.S. Virgin Islands", "America/St_Thomas"},
+	{"US Virgin Islands", "America/St_Thomas"},
+	{"Utah", "America/Denver"},
+	{"Vermont", "America/New_York"},
+	{"Virginia", "America/New_York"},
+	{"Washington", "America/Los_Angeles"},
+	{"Washington D.C.", "America/New_York"},
+	{"Washington DC", "America/New_York"},
+	{"West Virginia", "America/New_York"},
+	{"Wisconsin", "America/Chicago"},
+	{"Wyoming", "America/Denver"},
+}
+
+// commonCities are places people want a clock for that the tz database does
+// not name a zone after -- Seattle, Mumbai, Munich. Each was checked against
+// GeoNames, and a name shared by cities on different clocks is kept only when
+// the largest on this clock is three times the size of any namesake on
+// another: so Portland is Oregon, while San Jose, St. Louis, Barcelona and
+// Venice are left out. Cities the tz database does name, Los Angeles and Hong
+// Kong among them, are left to it. Sorted, same order as pyclock.py's table.
+var commonCities = []struct{ name, zone string }{
+	{"Abu Dhabi", "Asia/Dubai"},
+	{"Abuja", "Africa/Lagos"},
+	{"Albuquerque", "America/Denver"},
+	{"Ankara", "Europe/Istanbul"},
+	{"Atlanta", "America/New_York"},
+	{"Austin", "America/Chicago"},
+	{"Baltimore", "America/New_York"},
+	{"Bangalore", "Asia/Kolkata"},
+	{"Beijing", "Asia/Shanghai"},
+	{"Bengaluru", "Asia/Kolkata"},
+	{"Boston", "America/New_York"},
+	{"Brasilia", "America/Sao_Paulo"},
+	{"Busan", "Asia/Seoul"},
+	{"Calgary", "America/Edmonton"},
+	{"Canberra", "Australia/Sydney"},
+	{"Cape Town", "Africa/Johannesburg"},
+	{"Charlotte", "America/New_York"},
+	{"Chengdu", "Asia/Shanghai"},
+	{"Chennai", "Asia/Kolkata"},
+	{"Christchurch", "Pacific/Auckland"},
+	{"Cincinnati", "America/New_York"},
+	{"Cleveland", "America/New_York"},
+	{"Cologne", "Europe/Berlin"},
+	{"Columbus", "America/New_York"},
+	{"Dallas", "America/Chicago"},
+	{"Delhi", "Asia/Kolkata"},
+	{"Durban", "Africa/Johannesburg"},
+	{"Edinburgh", "Europe/London"},
+	{"El Paso", "America/Denver"},
+	{"Florence", "Europe/Rome"},
+	{"Fort Worth", "America/Chicago"},
+	{"Frankfurt", "Europe/Berlin"},
+	{"Geneva", "Europe/Zurich"},
+	{"Glasgow", "Europe/London"},
+	{"Guadalajara", "America/Mexico_City"},
+	{"Guangzhou", "Asia/Shanghai"},
+	{"Hamburg", "Europe/Berlin"},
+	{"Hanoi", "Asia/Ho_Chi_Minh"},
+	{"Houston", "America/Chicago"},
+	{"Hyderabad", "Asia/Kolkata"},
+	{"Islamabad", "Asia/Karachi"},
+	{"Jacksonville", "America/New_York"},
+	{"Jeddah", "Asia/Riyadh"},
+	{"Kansas City", "America/Chicago"},
+	{"Krakow", "Europe/Warsaw"},
+	{"Kyoto", "Asia/Tokyo"},
+	{"Lahore", "Asia/Karachi"},
+	{"Las Vegas", "America/Los_Angeles"},
+	{"Lyon", "Europe/Paris"},
+	{"Manchester", "Europe/London"},
+	{"Marseille", "Europe/Paris"},
+	{"Mecca", "Asia/Riyadh"},
+	{"Memphis", "America/Chicago"},
+	{"Miami", "America/New_York"},
+	{"Milan", "Europe/Rome"},
+	{"Milwaukee", "America/Chicago"},
+	{"Minneapolis", "America/Chicago"},
+	{"Montreal", "America/Toronto"},
+	{"Mumbai", "Asia/Kolkata"},
+	{"Munich", "Europe/Berlin"},
+	{"Naples", "Europe/Rome"},
+	{"Nashville", "America/Chicago"},
+	{"New Delhi", "Asia/Kolkata"},
+	{"New Orleans", "America/Chicago"},
+	{"New York City", "America/New_York"},
+	{"Oklahoma City", "America/Chicago"},
+	{"Omaha", "America/Chicago"},
+	{"Orlando", "America/New_York"},
+	{"Osaka", "Asia/Tokyo"},
+	{"Ottawa", "America/Toronto"},
+	{"Philadelphia", "America/New_York"},
+	{"Pittsburgh", "America/New_York"},
+	{"Portland", "America/Los_Angeles"},
+	{"Pretoria", "Africa/Johannesburg"},
+	{"Pune", "Asia/Kolkata"},
+	{"Quebec City", "America/Toronto"},
+	{"Raleigh", "America/New_York"},
+	{"Rio de Janeiro", "America/Sao_Paulo"},
+	{"Rotterdam", "Europe/Amsterdam"},
+	{"Sacramento", "America/Los_Angeles"},
+	{"Saint Petersburg", "Europe/Moscow"},
+	{"Salt Lake City", "America/Denver"},
+	{"San Antonio", "America/Chicago"},
+	{"San Diego", "America/Los_Angeles"},
+	{"San Francisco", "America/Los_Angeles"},
+	{"Seattle", "America/Los_Angeles"},
+	{"Seville", "Europe/Madrid"},
+	{"Shenzhen", "Asia/Shanghai"},
+	{"St. Petersburg", "Europe/Moscow"},
+	{"Tampa", "America/New_York"},
+	{"Tel Aviv", "Asia/Jerusalem"},
+	{"The Hague", "Europe/Amsterdam"},
+	{"Tucson", "America/Phoenix"},
+	{"Wellington", "Pacific/Auckland"},
+	{"Yokohama", "Asia/Tokyo"},
+}
+
+// usCodes are the ISO 3166-2 codes for the same places -- US-CA, US-NY -- and
+// the only short form taken. The bare two letters cannot be: most already mean
+// something else here, and most of those mean a different clock, since CA is
+// Canada, IN India, DE Germany, and CT and MT are this clock's own Central and
+// Mountain. Each code names a row in the table above, or a name the tz database
+// answers to itself (US-NY, US-PR, US-GU), and the face is labelled with that
+// full name rather than the code. Sorted, same order as pyclock.py's table.
+var usCodes = []struct{ code, name string }{
+	{"US-AK", "Alaska"},
+	{"US-AL", "Alabama"},
+	{"US-AR", "Arkansas"},
+	{"US-AS", "American Samoa"},
+	{"US-AZ", "Arizona"},
+	{"US-CA", "California"},
+	{"US-CO", "Colorado"},
+	{"US-CT", "Connecticut"},
+	{"US-DC", "District of Columbia"},
+	{"US-DE", "Delaware"},
+	{"US-FL", "Florida"},
+	{"US-GA", "Georgia"},
+	{"US-GU", "Guam"},
+	{"US-HI", "Hawaii"},
+	{"US-IA", "Iowa"},
+	{"US-ID", "Idaho"},
+	{"US-IL", "Illinois"},
+	{"US-IN", "Indiana"},
+	{"US-KS", "Kansas"},
+	{"US-KY", "Kentucky"},
+	{"US-LA", "Louisiana"},
+	{"US-MA", "Massachusetts"},
+	{"US-MD", "Maryland"},
+	{"US-ME", "Maine"},
+	{"US-MI", "Michigan"},
+	{"US-MN", "Minnesota"},
+	{"US-MO", "Missouri"},
+	{"US-MP", "Northern Mariana Islands"},
+	{"US-MS", "Mississippi"},
+	{"US-MT", "Montana"},
+	{"US-NC", "North Carolina"},
+	{"US-ND", "North Dakota"},
+	{"US-NE", "Nebraska"},
+	{"US-NH", "New Hampshire"},
+	{"US-NJ", "New Jersey"},
+	{"US-NM", "New Mexico"},
+	{"US-NV", "Nevada"},
+	{"US-NY", "New York"},
+	{"US-OH", "Ohio"},
+	{"US-OK", "Oklahoma"},
+	{"US-OR", "Oregon"},
+	{"US-PA", "Pennsylvania"},
+	{"US-PR", "Puerto Rico"},
+	{"US-RI", "Rhode Island"},
+	{"US-SC", "South Carolina"},
+	{"US-SD", "South Dakota"},
+	{"US-TN", "Tennessee"},
+	{"US-TX", "Texas"},
+	{"US-UT", "Utah"},
+	{"US-VA", "Virginia"},
+	{"US-VI", "US Virgin Islands"},
+	{"US-VT", "Vermont"},
+	{"US-WA", "Washington"},
+	{"US-WI", "Wisconsin"},
+	{"US-WV", "West Virginia"},
+	{"US-WY", "Wyoming"},
+}
+
 func aliasNames() string {
 	names := make([]string, len(zoneAliases))
 	for i, a := range zoneAliases {
@@ -1361,9 +1606,10 @@ func isCountryCode(s string) bool {
 	return s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'A' && s[1] <= 'Z'
 }
 
-// zoneTab returns the contents of the tz database's country table, and whether
-// it was found at all. Absent on stripped-down systems, so never fatal.
-func zoneTab() (string, bool) {
+// tzFile returns one of the tz database's own tables, and whether it was found
+// at all. Absent on stripped-down systems, so never fatal: what reads it says
+// so instead.
+func tzFile(name string) (string, bool) {
 	for _, dir := range []string{
 		os.Getenv("TZDIR"),
 		"/usr/share/zoneinfo",
@@ -1373,11 +1619,44 @@ func zoneTab() (string, bool) {
 		if dir == "" {
 			continue
 		}
-		if data, err := os.ReadFile(dir + "/zone.tab"); err == nil {
+		if data, err := os.ReadFile(dir + "/" + name); err == nil {
 			return string(data), true
 		}
 	}
 	return "", false
+}
+
+// zoneTab is the table of countries and their zones.
+func zoneTab() (string, bool) {
+	return tzFile("zone.tab")
+}
+
+// countryByName reads iso3166.tab, the database's own list of countries, for
+// the code a name stands for and the spelling to label it with. An "&" may be
+// written "and", since the tab writes Antigua & Barbuda; nothing else is
+// forgiven, so the four names holding a character outside ASCII -- Curacao,
+// Reunion, Cote d'Ivoire and the Aland Islands, as the tab does not spell
+// them -- have to be typed the way it does, for the reason in ARCHITECTURE's
+// Case folding.
+func countryByName(token string) (code, name string, ok bool) {
+	data, found := tzFile("iso3166.tab")
+	if !found {
+		return "", "", false
+	}
+	key := placeKey(token)
+	for _, line := range strings.Split(data, "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		f := strings.Split(line, "\t")
+		if len(f) < 2 {
+			continue
+		}
+		if placeKey(f[1]) == key || placeKey(strings.ReplaceAll(f[1], " & ", " and ")) == key {
+			return f[0], f[1], true
+		}
+	}
+	return "", "", false
 }
 
 // countryZones lists a country's zones in file order, which is the tz
@@ -1403,7 +1682,7 @@ func countryZones(cc string) ([]string, bool) {
 // countryZone resolves a 2-letter country code, collapsing zones that agree.
 // Germany lists Europe/Berlin and Europe/Busingen, an enclave that has kept
 // the same time since 1970, so DE is not genuinely ambiguous; the US is.
-func countryZone(cc string, at time.Time) (*time.Location, error) {
+func countryZone(cc, label string, at time.Time) (*time.Location, error) {
 	names, found := countryZones(cc)
 	if !found {
 		return nil, fmt.Errorf(
@@ -1431,20 +1710,17 @@ func countryZone(cc string, at time.Time) (*time.Location, error) {
 	case len(locs) == 1:
 		return locs[0], nil
 	}
-	shown := kept
-	tail := ""
-	if len(shown) > 8 {
-		tail = fmt.Sprintf(" (and %d more)", len(shown)-8)
-		shown = shown[:8]
-	}
-	return nil, fmt.Errorf("%s spans %d time zones; name one: %s%s",
-		cc, len(kept), strings.Join(shown, ", "), tail)
+	// All of them, however many: the list is what the reader has to choose
+	// from, and a count of the ones it withheld helps nobody choose.
+	return nil, fmt.Errorf("%s spans %d time zones; name one: %s",
+		label, len(kept), strings.Join(kept, ", "))
 }
 
 // suffixZones is the zones whose name ends with the token as a whole path
 // segment: Europe/Berlin for "Berlin", and America/Indiana/Indianapolis for
 // either "Indianapolis" or "Indiana/Indianapolis". Whole segments only, so
-// "Berl" finds nothing and "York" does not answer for "New_York".
+// "Berl" finds nothing and "York" does not answer for "New_York". A space
+// reads as the underscore it stands for, so "New York" finds it all the same.
 //
 // Read out of zone.tab, the same file the country codes come from, which lists
 // the canonical zones and leaves out the backward-compatibility links -- so
@@ -1455,7 +1731,7 @@ func suffixZones(token string) ([]string, bool) {
 	if !found {
 		return nil, false
 	}
-	want := "/" + asciiLower(token)
+	want := "/" + strings.ReplaceAll(asciiLower(token), " ", "_")
 	var out []string
 	for _, line := range strings.Split(data, "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -1473,31 +1749,82 @@ func suffixZones(token string) ([]string, bool) {
 // matches. Ambiguity is refused rather than guessed at: every city in the tz
 // database is unique today, but nothing promises it stays that way, and two
 // clocks an ocean apart is not a choice to make on the reader's behalf.
-func suffixZone(token string) (*time.Location, error) {
+//
+// The name it returns is placeName's: the part of the zone that was typed.
+func suffixZone(token string) (*time.Location, string, error) {
 	names, found := suffixZones(token)
 	if !found || len(names) == 0 {
-		return nil, nil
+		return nil, "", nil
 	}
 	if len(names) > 1 {
-		shown, tail := names, ""
-		if len(shown) > 8 {
-			tail = fmt.Sprintf(" (and %d more)", len(shown)-8)
-			shown = shown[:8]
-		}
-		return nil, fmt.Errorf("%s names %d zones; name one in full: %s%s",
-			token, len(names), strings.Join(shown, ", "), tail)
+		return nil, "", fmt.Errorf("%s names %d zones; name one in full: %s",
+			token, len(names), strings.Join(names, ", "))
 	}
 	loc, err := time.LoadLocation(names[0])
 	if err != nil {
-		return nil, nil
+		return nil, "", nil
 	}
-	return loc, nil
+	return loc, placeName(names[0], token), nil
+}
+
+// placeName is the part of zone a token matched, written the way a person
+// writes it: the zone's own capitals, and spaces for its underscores. Both
+// "new_york" and "New York" show as New York, and Indiana/Indianapolis keeps
+// both parts, since that is how much of the name was typed.
+func placeName(zone, token string) string {
+	parts := strings.Split(zone, "/")
+	n := strings.Count(token, "/") + 1
+	if n > len(parts) {
+		n = len(parts)
+	}
+	return strings.ReplaceAll(strings.Join(parts[len(parts)-n:], "/"), "_", " ")
+}
+
+// placeKey is how a state or city is matched: ASCII case folded, and an
+// underscore read as the space it stands for, so New_Mexico and "new mexico"
+// both find New Mexico. Nothing else is forgiven -- not runs of spaces, since
+// Go and Python do not agree about which characters are spaces.
+func placeKey(s string) string {
+	return strings.ReplaceAll(asciiLower(s), "_", " ")
+}
+
+// placeZone is a US state, its ISO 3166-2 code, or a common city, and the name
+// to label it with -- the table's own spelling whatever case the token was
+// typed in, and for a code the full name rather than the code.
+func placeZone(token string) (*time.Location, string, error) {
+	key := placeKey(token)
+	named := ""
+	for _, c := range usCodes {
+		if placeKey(c.code) == key {
+			named = c.name
+			key = placeKey(named)
+			break
+		}
+	}
+	for _, table := range [][]struct{ name, zone string }{usStates, commonCities} {
+		for _, p := range table {
+			if placeKey(p.name) != key {
+				continue
+			}
+			loc, err := time.LoadLocation(p.zone)
+			if err != nil {
+				return nil, "", fmt.Errorf("%s means %s, which this system's time zone database lacks", p.name, p.zone)
+			}
+			return loc, p.name, nil
+		}
+	}
+	if named != "" {
+		// US-NY, US-PR and US-GU name the three places the tz database
+		// answers to itself, which is why they are not rows above.
+		return suffixZone(named)
+	}
+	return nil, "", nil
 }
 
 func unknownZone(token string) error {
 	return fmt.Errorf("unknown zone \"%s\"; use an IANA name (Europe/Berlin), "+
-		"a city off the end of one (Berlin, Jakarta), an abbreviation (%s), "+
-		"a 2-letter country code (JP), or a US ZIP code",
+		"a city (Berlin, Seattle), a US state (Arizona, US-AZ), an abbreviation (%s), "+
+		"a country (Germany, JP), or a US ZIP code",
 		token, aliasNames())
 }
 
@@ -1529,66 +1856,97 @@ func localZone() (*time.Location, error) {
 	return time.Local, nil
 }
 
-// resolveZone turns one token into a location. Order matters: the alias table
-// is consulted before the tz database only for names the database lacks, the
-// fixed-offset table only after it so that real zones win, and
+// resolveZone turns one token into a location, and the place it named when it
+// named one -- a US state, a city from commonCities, or a city off the end of
+// an IANA zone -- which is "" for every other kind of zone. Order matters: the
+// alias table is consulted before the tz database only for names the database
+// lacks, the fixed-offset table only after it so that real zones win, and
 // "local" and "" are intercepted because Go and Python disagree about both --
 // LoadLocation("Local") works where ZoneInfo("Local") raises, and
-// LoadLocation("") quietly returns UTC where ZoneInfo("") raises.
-func resolveZone(token string, at time.Time) (*time.Location, error) {
+// LoadLocation("") quietly returns UTC where ZoneInfo("") raises. Places come
+// last of all, the database's own tails before the tables here.
+func resolveZone(token string, at time.Time) (*time.Location, string, error) {
 	if strings.HasPrefix(token, "/") || strings.Contains(token, "..") {
-		return nil, fmt.Errorf("\"%s\" is not a zone name", token)
+		return nil, "", fmt.Errorf("\"%s\" is not a zone name", token)
 	}
 	if asciiEqualFold(token, "local") {
-		return localZone()
+		loc, err := localZone()
+		return loc, "", err
 	}
 	if allDigits(token) {
-		return ziptz.Location(token)
+		loc, err := ziptz.Location(token)
+		return loc, "", err
 	}
 	up := asciiUpper(token)
 	for _, a := range zoneAliases {
 		if a.name == up {
 			loc, err := time.LoadLocation(a.zone)
 			if err != nil {
-				return nil, fmt.Errorf("%s means %s, which this system's time zone database lacks", up, a.zone)
+				return nil, "", fmt.Errorf("%s means %s, which this system's time zone database lacks", up, a.zone)
 			}
-			return loc, nil
+			return loc, "", nil
 		}
 	}
 	if loc, err := time.LoadLocation(token); err == nil {
-		return loc, nil
+		// A country the database also keeps a zone or a compatibility link
+		// under -- Japan, Cuba, Singapore -- resolves there, as it always
+		// did, and is labelled with the country all the same. GB and NZ are
+		// links as well as codes, and are labelled like every other code
+		// rather than being the two that are not.
+		if _, name, ok := countryByName(token); ok {
+			return loc, name, nil
+		}
+		if isCountryCode(up) {
+			if names, found := countryZones(up); found && len(names) > 0 {
+				return loc, up, nil
+			}
+		}
+		return loc, "", nil
 	}
 	for _, f := range zoneFixed {
 		if f.name == up {
-			return time.FixedZone(f.name, f.offset), nil
+			return time.FixedZone(f.name, f.offset), "", nil
 		}
 	}
 	if isCountryCode(up) {
-		loc, err := countryZone(up, at)
+		loc, err := countryZone(up, up, at)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if loc != nil {
-			return loc, nil
+			return loc, up, nil
 		}
 	}
-	// Last, so a city can never shadow a name the database itself answers to.
-	named, err := suffixZone(token)
-	if err != nil {
-		return nil, err
+	// Last, so a city can never shadow a name the database itself answers to:
+	// the database's own tails first, then the states and cities written here.
+	if loc, place, err := suffixZone(token); err != nil || loc != nil {
+		return loc, place, err
 	}
-	if named != nil {
-		return named, nil
+	if loc, place, err := placeZone(token); err != nil || loc != nil {
+		return loc, place, err
 	}
-	return nil, unknownZone(token)
+	// A country by name, last of all: Georgia is the state, and the country
+	// is GE, because the table above is asked first.
+	if code, name, ok := countryByName(token); ok {
+		loc, err := countryZone(code, name, at)
+		if err != nil {
+			return nil, "", err
+		}
+		if loc != nil {
+			return loc, name, nil
+		}
+	}
+	return nil, "", unknownZone(token)
 }
 
-// request is one zone as it was asked for: the token the user typed, and where
-// it landed. The token is carried along because mergeZones labels a face with
-// the spellings that asked for it, not just the zone it landed on.
+// request is one zone as it was asked for: the token the user typed, where it
+// landed, and the place it named if it named one. The token is carried along
+// because mergeZones labels a face with the spellings that asked for it, not
+// just the zone it landed on; the place, for the parentheses after that label.
 type request struct {
 	token string
 	loc   *time.Location
+	place string
 }
 
 // dial is one face after merging: the name written over it, and its zone.
@@ -1604,7 +1962,7 @@ func resolveZones(list string, at time.Time) ([]request, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []request{{"", loc}}, nil
+		return []request{{"", loc, ""}}, nil
 	}
 	tokens := strings.Split(list, ",")
 	out := make([]request, 0, len(tokens))
@@ -1613,11 +1971,11 @@ func resolveZones(list string, at time.Time) ([]request, error) {
 		if tok == "" {
 			return nil, fmt.Errorf("empty zone in \"%s\"", list)
 		}
-		loc, err := resolveZone(tok, at)
+		loc, place, err := resolveZone(tok, at)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, request{tok, loc})
+		out = append(out, request{tok, loc, place})
 	}
 	return out, nil
 }
@@ -1626,17 +1984,27 @@ func resolveZones(list string, at time.Time) ([]request, error) {
 // more than one spelling collapsed onto this face -- then each spelling that
 // reads differently is named too, because that is the only place the ambiguity
 // is visible. PDT,PDT asked the same question twice and gets one plain answer.
-func zoneLabel(abbr string, tokens []string) string {
-	if len(tokens) < 2 {
-		return abbr
-	}
-	parts := []string{abbr}
-	for _, t := range tokens {
-		if !asciiEqualFold(t, abbr) {
-			parts = append(parts, t)
+//
+// A state or city follows in parentheses whatever else collapsed with it,
+// since the zone it landed in is written nowhere else: Boise alone is
+// MDT (Boise), and MT,Boise is MDT/MT (Boise). tokens is every spelling that
+// asked for this face, plain the ones that named no place, and places the
+// names of the ones that did.
+func zoneLabel(abbr string, tokens, plain, places []string) string {
+	label := abbr
+	if len(tokens) >= 2 {
+		parts := []string{abbr}
+		for _, t := range plain {
+			if !asciiEqualFold(t, abbr) {
+				parts = append(parts, t)
+			}
 		}
+		label = strings.Join(parts, "/")
 	}
-	return strings.Join(parts, "/")
+	if len(places) > 0 {
+		label += " (" + strings.Join(places, ", ") + ")"
+	}
+	return label
 }
 
 // mergeZones collapses zones that show the same wall clock at now into one
@@ -1651,6 +2019,8 @@ func mergeZones(zones []request, now time.Time) []dial {
 	type group struct {
 		abbr   string
 		tokens []string
+		plain  []string
+		places []string
 		loc    *time.Location
 	}
 	var groups []*group
@@ -1666,26 +2036,32 @@ func mergeZones(zones []request, now time.Time) []dial {
 			index[key] = g
 			groups = append(groups, g)
 		}
-		if z.token == "" {
+		if z.token == "" || containsFold(g.tokens, z.token) {
 			continue
 		}
-		dup := false
-		for _, prev := range g.tokens {
-			if asciiEqualFold(prev, z.token) {
-				dup = true
-				break
-			}
-		}
-		if !dup {
-			g.tokens = append(g.tokens, z.token)
+		g.tokens = append(g.tokens, z.token)
+		if z.place == "" {
+			g.plain = append(g.plain, z.token)
+		} else if !containsFold(g.places, z.place) {
+			g.places = append(g.places, z.place)
 		}
 	}
 
 	out := make([]dial, len(groups))
 	for i, g := range groups {
-		out[i] = dial{zoneLabel(g.abbr, g.tokens), g.loc}
+		out[i] = dial{zoneLabel(g.abbr, g.tokens, g.plain, g.places), g.loc}
 	}
 	return out
+}
+
+// containsFold is whether list holds s, ASCII case folded.
+func containsFold(list []string, s string) bool {
+	for _, v := range list {
+		if asciiEqualFold(v, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // utcOffset is how far loc sits from UTC at now, in seconds east.
@@ -1743,6 +2119,29 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n])
+}
+
+// fitLabel cuts a face's label to n runes the way truncate does, except that a
+// label ending in a list of places keeps its closing parenthesis: in a narrow
+// cell "MDT (Utah, Colorado, New Mexico)" ends "...)" instead of stopping
+// partway through a name with the list left open. A cut that would keep none
+// of the list is a plain truncation instead, since "MDT (...)" says less than
+// the first letters of the place would.
+func fitLabel(label string, n int) string {
+	r := []rune(label)
+	if len(r) <= n {
+		return label
+	}
+	at := strings.Index(label, " (")
+	if at < 0 || !strings.HasSuffix(label, ")") {
+		return truncate(label, n)
+	}
+	open := utf8.RuneCountInString(label[:at]) + len(" (")
+	keep := n - len("...)")
+	if keep <= open {
+		return truncate(label, n)
+	}
+	return strings.TrimRight(string(r[:keep]), " ,") + "...)"
 }
 
 // dayNames is Sunday-first, indexed by time.Weekday. A table rather than a
@@ -2009,7 +2408,7 @@ func frame(faces []dial, now time.Time, perRow int, color bool, dayWhen string, 
 		labels := make([]string, len(chunk))
 		digits := make([]string, len(chunk))
 		for i, d := range chunk {
-			labels[i] = center(truncate(d.label, cell), cell, lay.extraLeft)
+			labels[i] = center(fitLabel(d.label, cell), cell, lay.extraLeft)
 			digits[i] = center(digital(times[i], weekday), cell, lay.extraLeft)
 		}
 		rows = append(rows, row(labels))

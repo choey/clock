@@ -11,6 +11,96 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.3.0
+
+Places, and faces that say which place they are. A zone can be a US state,
+one of about a hundred common cities, or a country by name or by code -- and
+a face that a place landed on now says so in parentheses: `MST (Arizona)`,
+`PDT (Seattle)`, `CEST (DE)`.
+
+That last part changes what an existing command line draws, which is what
+makes this a minor release rather than a patch: `clock Berlin` reads
+`CEST (Berlin)` where it read `CEST`, and `clock JP` reads `JST (JP)`. Five
+golden frames were re-blessed for it, each one line, each the label row.
+
+- **US states and common cities are zones, and a face says where one landed.**
+  `clock Arizona,Boise,"Salt Lake City"` draws `MST (Arizona)` and
+  `MDT (Boise, Salt Lake City)`. A state means the zone its capital keeps,
+  which for a state that spans two is not every resident's clock -- the label
+  is how they find out. About a hundred cities the tz database has no zone for
+  are in a table checked against GeoNames, and a name shared with a comparably
+  large city on another clock is left out, which is why `San Jose` and
+  `St. Louis` are not there.
+- `tools/keytest.py`'s hold case reads each phase on its own frames. It
+  compared the whole run against fixed counts, which made it flake on a loaded
+  CI runner -- 0.6s bought eight frames where a quiet machine paints thirty --
+  and, worse, could not see a clock that held and never let go, since the
+  readouts painted before the first keystroke satisfied the count that was
+  meant to prove the clock had started again. Both sabotages fail it now; only
+  the first did before.
+- keytest's job-control shim reader splits the line the shim sends it without
+  checking it first, so a shim that died before naming the clock took the whole
+  run down with `IndexError: list index out of range` -- about one run in ten
+  here. It now says what it was handed instead. The race itself, a shim that
+  fails to start, is not fixed.
+- `go.mod` asks for `ziptz v0.1.2`, the version pip resolves `ziptz-us` to. It
+  had been pinned at v0.1.0 since the split: the tables are identical between
+  those tags, so nothing was wrong, but a release whose two ports name
+  different versions of the same library is drift waiting to be a bug.
+- `tools/placecheck.py`'s country checks compare clocks rather than zone names,
+  and read the labels out of `iso3166.tab` instead of repeating its spellings.
+  They had encoded one machine's tzdata: `GB` and `Japan` land on
+  backward-compatibility links where a build installs them and on the country's
+  own zone where it does not, which is the same clock and would have failed the
+  check on the second kind of machine.
+- **A place that spans zones names every one of them.** The message stopped at
+  eight and counted the rest -- `Asia/Chita (and 3 more)` -- which is a list
+  you cannot choose from, since the three it withheld were three of the
+  answers. Russia's eleven and Canada's ten are all there now, and so is every
+  zone behind an ambiguous city name.
+- **A country says where it landed too, by code or by name.** `clock DE` draws
+  `CEST (DE)` where it drew `CEST`, and `clock Germany` now works at all, along
+  with every other name in the tz database's `iso3166.tab` -- an `&` may be
+  written `and`. A country that spans zones still asks you to pick, in
+  whichever spelling you typed: `United States spans 8 time zones`. Adding the
+  label changes what an existing command line draws wherever a country code is
+  on it.
+- **A state can also be its ISO 3166-2 code**, `US-CA`, labelled with the full
+  name it stands for: `PDT (California)`. The bare two letters are not taken
+  and cannot be -- 32 of the 56 already mean something else here, and 26 of
+  those a different clock, `CA` being Canada -- so a short form that worked for
+  some states and silently drew another country for others is the thing this
+  avoids.
+- difftest's table parity compared only rows whose name and zone fit the
+  character classes it spelled out, so a row holding a hyphen or a space --
+  `America/Port-au-Prince`, or a code's full name -- was dropped from both
+  sides at once and never compared, while the check still said the tables
+  match. It takes every row of two quoted strings now, the key list included.
+- `tools/placecheck.py` checks the codes too, describes what it checks
+  accurately, and reports a state row with no capital recorded rather than
+  crashing on it.
+- **A city off the end of an IANA name is labelled the same way**, so
+  `clock Berlin` reads `CEST (Berlin)` where it used to read `CEST`. That
+  changes what an existing command line draws, which by this file's own rule
+  makes the next release a minor one.
+- A space in a place's name does the work of its underscore: `"New York"` is
+  `New_York`. A list of places too long for its cell ends `...)` instead of
+  stopping partway through a name.
+- `tools/placecheck.py` runs every state and city through the real resolver,
+  and fails on a row that does not load, cannot be reached, or is out of order;
+  `--geonames` re-checks every zone against GeoNames. difftest's table parity
+  matched only upper-case names, so until now it covered the alias tables and
+  nothing else.
+- **`tools/errcover.py` runs again.** The ziptz split removed the lines in
+  `tools/difftest.sh` that ran it, together with the summary and exit status
+  0.2.1 put back -- and put back without it. So since then nothing has checked
+  that every error message the clock can print is printed by some case, while
+  the README said difftest does. It is back, and passes.
+- The README's zone table said it listed the forms in the order they are tried,
+  and did not: `local` and ZIP codes are tried first, and a city off the end of
+  an IANA name after country codes. It does now.
 - **Every release carries prebuilt binaries.** `go install` wanted a Go
   toolchain, which was a strange price for a clock and until now the only way
   to get the Go port. Five targets, cross-compiled from one runner with

@@ -29,6 +29,10 @@ SEED = 20260715
 
 ZONES = ["UTC", "ET,PT", "ET,PT,UTC", "ET,PT,UTC,JP", "ET,PT,UTC,JP,GB,NZ",
          "94110", "ET,PT,UTC,JP,GB,NZ,IN,CN,BR,ZA",
+         # Labels that are a list of places, which fit their cell by ending in
+         # "...)" -- the one label that is cut on purpose rather than just cut.
+         "Arizona,Utah,Colorado,New Mexico,Wyoming,Montana,Idaho",
+         "Seattle,Portland,MT,Boise,Salt Lake City,Northern Mariana Islands",
          # More faces than any window here can hold in one row, so the grid
          # wraps and the short last row's gutters have to line up with the
          # rows above it.

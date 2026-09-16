@@ -230,7 +230,8 @@ done
 
 # Every city in the tz database is unique today, so ambiguity only shows up
 # against a zone.tab written for the purpose: two zones sharing a tail, and
-# ten, which is past the eight the message lists before it starts counting.
+# ten, which is more than anyone would want to read and is listed in full
+# anyway -- a list that stops short is a list you cannot choose from.
 mkdir -p "$out/tz2" "$out/tz10"
 printf 'XX\t+0000\tEurope/Berlin\nYY\t+0000\tAmerica/Berlin\n' >"$out/tz2/zone.tab"
 : >"$out/tz10/zone.tab"
@@ -243,6 +244,77 @@ for tzdir in "$out/tz2" "$out/tz10"; do
 	done
 done
 tzdir=
+
+echo "== states and cities =="
+# A state, a city from the table, or a city off the end of an IANA zone is
+# labelled with the zone it landed in: MST (Arizona). A space and an underscore
+# are the same character here and nowhere else, and the name shown is the
+# table's or the zone's own spelling rather than the token's. Arizona keeps MST
+# all year while Idaho moves, so that pair is two faces in July and one in
+# January -- the case the label is for.
+for zones in Arizona arizona ARIZONA Boise "New Mexico" New_Mexico "new mexico" "New  Mexico" \
+	Washington "Washington DC" "Washington D.C." Washington_DC "District of Columbia" \
+	"US Virgin Islands" "U.S. Virgin Islands" "American Samoa" "Northern Mariana Islands" \
+	Seattle "Salt Lake City" Salt_Lake_City "New York" New_York "new york" "Hong Kong" Guam \
+	"Puerto Rico" "Ho Chi Minh" Indiana/Indianapolis Tennessee Mumbai Bangalore "St. Petersburg" \
+	Arizona,Idaho Boise,Denver MT,Boise Arizona,Phoenix Arizona,America/Phoenix PT,Seattle,Portland \
+	Boise,America/Boise "New York,New_York,ET" Boise,boise "Texas,El Paso" "Washington,Washington DC"; do
+	check "$SUMMER" 200 60 "$zones"
+	check "$WINTER" 200 60 "$zones"
+done
+
+# Left out of the city table for sharing a name with a city nearly as large on
+# another clock, so unknown zones -- and the two-letter state codes, never
+# taken because each is a country already.
+for zones in "St. Louis" "Saint Louis" "San Jose" Barcelona Venice CA IN DE GA; do
+	check "$SUMMER" 200 60 "$zones"
+done
+
+# A list of places too long for its cell keeps its closing parenthesis, down to
+# the width where it would keep none of the list and is cut like any label.
+for size in "30 20" "40 24" "48 24" "60 24" "80 24" "100 30"; do
+	for zones in "Seattle,Portland,San Francisco,Las Vegas,Sacramento" \
+		"Arizona,Utah,Colorado,New Mexico,Wyoming,Montana,Idaho" "MT,Boise,Salt Lake City" \
+		"ET,America/New_York,New York" "Northern Mariana Islands"; do
+		check "$SUMMER" "${size% *}" "${size#* }" "$zones"
+	done
+done
+
+# The ISO 3166-2 codes, the only short form taken, labelled with the full name
+# rather than the code. US-NY, US-PR and US-GU reach names the tz database
+# answers to itself. The bare two letters stay what they were: NY and TX are
+# nothing, CA and IN are countries, MT and CT are this clock's own.
+for zones in US-CA us-ca Us-Ca US-AZ US-NY US-PR US-GU US-VI US-DC US-MP US-TX US-ND \
+	"US-CA,California" "US-NY,New York,ET" "US-AZ,Arizona,Phoenix" US-ZZ USCA "US-" "US- CA" \
+	NY TX MT CT CA IN; do
+	check "$SUMMER" 200 60 "$zones"
+	check "$WINTER" 200 60 "$zones"
+done
+
+# A country by its code or by its name, each labelled with what was typed --
+# CEST (DE) and CEST (Germany). The names are iso3166.tab's, the database's own
+# list, so a country it also keeps a zone or a compatibility link under (Japan,
+# Cuba, Singapore, Turkey) still resolves there and is labelled all the same.
+# Georgia is the state and GE the country, because the state table is asked
+# first; Malta and Portugal are the reverse case, names the database answers to
+# whose codes this clock spends on Mountain and Pacific.
+for zones in DE de JP GB NZ IN FR Germany germany GERMANY Japan France India \
+	Cuba Singapore Turkey Iceland Poland Portugal PT Malta MT Georgia GE \
+	"Korea (South)" "Antigua & Barbuda" "Antigua and Barbuda" "Trinidad and Tobago" \
+	"Bosnia and Herzegovina" "United States" US "Britain (UK)" UK \
+	"Côte d’Ivoire" "Cote d'\''Ivoire" "Curaçao" Curacao "Samoa" "Samoa (American)" \
+	DE,Germany DE,Berlin "Germany,Munich,DE" JP,Japan "US-CA,California,CA"; do
+	check "$SUMMER" 200 60 "$zones"
+	check "$WINTER" 200 60 "$zones"
+done
+
+# CLOCK_FREEZE takes a place as its zone too, but it splits on spaces, so a
+# place with one in its name is written with underscores there.
+for pin in "10 Arizona" "8/22 09:53 New_Mexico" "8/22 09:53 New Mexico" "10 Washington_DC" \
+	"10 St._Louis" "2026-03-08 02:30:00 Tennessee" "7/22 10 Seattle" "10 US-AZ" \
+	"10 DE" "10 Germany" "8/22 09:53 JP"; do
+	check "$pin" 80 24 UTC
+done
 
 echo "== cli grammar =="
 check "$SUMMER" 200 60 ET,PT,UTC -n 2
@@ -793,6 +865,10 @@ golden date-together     "$SUMMER" 120 24 --day=auto ET,JP
 golden too-narrow        "$SUMMER" 20 24 ET,PT,UTC
 golden fixed-offset      "$SUMMER" 80 24 PST,PDT
 golden winter            "$WINTER" 120 24 ET,PT,UTC
+# A state, a city from the table, a city off the end of an IANA zone, and a
+# place merged with an abbreviation; then a list of places too long for its cell.
+golden places            "$SUMMER" 120 24 "Arizona,Boise,New York,Seattle,MT"
+golden places-narrow     "$SUMMER" 60 24 "Arizona,Utah,Colorado,New Mexico,Wyoming,Montana,Idaho"
 frames=3
 step=19
 golden sequence-3        "$SUMMER" 80 24 UTC
@@ -860,14 +936,20 @@ else
 fi
 
 echo "== embedded table parity =="
-sed -n 's/^	{"\([A-Z]*\)", "\([A-Za-z_/]*\)"},$/\1=\2/p' clock.go >"$out/go.tab"
-sed -n 's/^    ("\([A-Z]*\)", "\([A-Za-z_/]*\)"),$/\1=\2/p' pyclock.py >"$out/py.tab"
+# Every row of two quoted strings in either file, whatever is inside them: the
+# aliases, the states, their codes, the cities, and the key list. The character
+# classes here used to spell out what a name and a zone may hold, which quietly
+# dropped any row they had not anticipated -- a hyphen in America/Port-au-Prince,
+# a space in a code's full name -- from both sides at once, so the two ports
+# could disagree about that row and this would still say the tables match.
+sed -n 's/^	{"\([^"]*\)", "\([^"]*\)"},$/\1=\2/p' clock.go >"$out/go.tab"
+sed -n 's/^    ("\([^"]*\)", "\([^"]*\)"),$/\1=\2/p' pyclock.py >"$out/py.tab"
 if [ -s "$out/go.tab" ] && cmp -s "$out/go.tab" "$out/py.tab"; then
 	pass=$((pass + 1))
-	[ -z "$verbose" ] || printf 'ok   alias and hint tables match (%s entries)\n' \
+	[ -z "$verbose" ] || printf 'ok   every two-string table matches across the ports (%s rows)\n' \
 		"$(wc -l <"$out/go.tab" | tr -d ' ')"
 else
-	echo 'FAIL alias/hint tables differ between clock.go and pyclock.py'
+	echo 'FAIL a two-string table differs between clock.go and pyclock.py'
 	diff -u "$out/py.tab" "$out/go.tab" || true
 	fail=$((fail + 1))
 fi
@@ -893,6 +975,23 @@ version_agrees clock \
 	"$(sed -n 's/^const version = "\(.*\)"$/\1/p' clock.go)" \
 	"$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' pyclock.py)" \
 	"$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
+
+echo "== error coverage =="
+# Not `out=$(...)`: out is the scratch directory the EXIT trap removes, and
+# shadowing it here would leave the directory behind and try to remove a
+# message instead.
+#
+# f3b4ae9 lost this block along with the summary below it. The summary came
+# back in 0.2.1 and this did not, so from f3b4ae9 until now nothing ran
+# errcover at all: the log was written case by case and deleted unread at exit,
+# while the README went on saying difftest checks it.
+if coverage=$(tools/errcover.py "$out/all.err"); then
+	pass=$((pass + 1))
+	[ -z "$verbose" ] || echo "$coverage"
+else
+	echo "$coverage"
+	fail=$((fail + 1))
+fi
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

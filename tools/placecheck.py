@@ -103,21 +103,31 @@ LEFT_TO_TZ = ("New York", "Puerto Rico", "Guam")
 COUNTRY_NOT_STATE = ("CA", "IN", "DE", "GA")
 # Countries come out of the tz database's own iso3166.tab rather than a table
 # here, so there is no list to hold to -- but the label has to be right, and
-# the names that would otherwise be decided by ordering have to stay decided.
-# (token, zone key, label): a code, a name, a country the database also keeps a
-# link under, the two whose codes this clock spends elsewhere, and the one that
-# is a state here and a country by its code.
+# the names that ordering decides have to stay decided.
+#
+# (token, a zone it must read the same clock as, the label). The zone is
+# compared as a clock and not by name on purpose: GB, Japan and Portugal land
+# on tzdata's backward-compatibility links where a build installs them and on
+# the country's own zone where it does not, and those are the same clock. This
+# check ran on a machine that has them and would have failed on one that does
+# not, which is a property of the machine and not of the clock.
 COUNTRIES = (
     ("DE", "Europe/Berlin", "DE"),
     ("de", "Europe/Berlin", "DE"),
-    ("Germany", "Europe/Berlin", "Germany"),
-    ("GB", "GB", "GB"),
-    ("Japan", "Japan", "Japan"),
-    ("Antigua and Barbuda", "America/Antigua", "Antigua & Barbuda"),
+    ("GB", "Europe/London", "GB"),
     ("Malta", "Europe/Malta", "Malta"),
-    ("Portugal", "Portugal", "Portugal"),
     ("Georgia", "America/New_York", "Georgia"),
     ("GE", "Asia/Tbilisi", "GE"),
+)
+# Tokens whose label is iso3166.tab's own spelling, which is the database's to
+# choose and not this repository's to write down: (code, a zone the country
+# must read alike). The name is read out of the file, and where it holds an "&"
+# the "and" spelling has to answer the same way.
+COUNTRY_NAMES = (
+    ("DE", "Europe/Berlin"),
+    ("JP", "Asia/Tokyo"),
+    ("PT", "Europe/Lisbon"),
+    ("AG", "America/Antigua"),
 )
 
 PROBES = [datetime(y, m, d, 12, tzinfo=timezone.utc)
@@ -141,6 +151,20 @@ class Report:
         else:
             self.failed += 1
             print(f"FAIL {what}")
+
+
+def iso3166_name(code):
+    """The tz database's own English name for a country code, or None."""
+    data, found = pyclock.tz_file("iso3166.tab")
+    if not found:
+        return None
+    for line in data.split("\n"):
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) >= 2 and fields[0] == code:
+            return fields[1]
+    return None
 
 
 def resolves(name, now):
@@ -205,10 +229,27 @@ def check_tables(report):
     for name in LEFT_TO_TZ:
         zone, place = resolves(name, now)
         report(zone is not None and place == name, f"{name} is the tz database's, as {name!r}")
+    def reads_like(key, zone):
+        try:
+            return key is not None and one_clock(key) == one_clock(zone)
+        except Exception:
+            return False
+
     for token, zone, label in COUNTRIES:
-        got = resolves(token, now)
-        report(got == (zone, label), f"{token!r} is {zone} labelled {label!r}"
-               + ("" if got == (zone, label) else f" -- got {got}"))
+        key, place = resolves(token, now)
+        ok = reads_like(key, zone) and place == label
+        report(ok, f"{token!r} reads as {zone} and is labelled {label!r}"
+               + ("" if ok else f" -- got {(key, place)}"))
+    for code, zone in COUNTRY_NAMES:
+        name = iso3166_name(code)
+        if name is None:
+            report(False, f"iso3166.tab has no name for {code}")
+            continue
+        for token in {name, name.replace(" & ", " and ")}:
+            key, place = resolves(token, now)
+            ok = reads_like(key, zone) and place == name
+            report(ok, f"{token!r} reads as {zone} and is labelled {name!r}"
+                   + ("" if ok else f" -- got {(key, place)}"))
     # A country that genuinely spans zones is refused by the name that was
     # typed, not by the code it was looked up from.
     for token in ("US", "United States"):

@@ -897,13 +897,18 @@ tools/keytest.py -v
 ```
 
 A clock repaints every 19ms whether or not anything changed, so the streams are
-collapsed to their *distinct* frames first: how many repaints landed between
-two keystrokes is the machine's speed, not the clock's behaviour. Pinned with
-`CLOCK_FREEZE`, what is left is exactly the states the keys walked through —
-`h` `q` ends on a frame with the key list still up, an unknown key paints
-nothing new. Holding is checked on a live clock instead, where there is
-something to hold: both must paint one readout over and over while held, and
-many while running.
+collapsed to their *distinct* frames first: how many repaints landed between two
+keystrokes is the machine's speed, not the clock's behaviour. Pinned with
+`CLOCK_FREEZE`, what is left is exactly the states the keys walked through — `h`
+`q` ends on a frame with the key list still up, an unknown key paints nothing
+new. Holding is checked on a live clock instead, where there is something to
+hold, and each phase is read on its own frames: what was painted between the
+first space and the second has to be one readout over and over, and what came
+after the second has to move again. Measuring the whole run at once could not
+see a clock that held and never let go, since the readouts it painted before the
+first keystroke were distinct enough to satisfy the count. The thresholds are
+shares rather than counts, because 0.6s buys thirty frames on a quiet machine
+and eight on a loaded CI runner, and a slow machine is not a broken clock.
 
 difftest also keeps everything the Python clock writes to stderr and, at the
 end, checks that every message `pyclock.py` can raise turned up in it —

@@ -116,7 +116,7 @@ def open_pty(echo=False):
     return master, slave
 
 
-def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None):
+def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None, marks=None):
     """One clock under a pty, fed `keys`, returning everything it painted.
 
     Each key is written after the frames from the previous one have had time to
@@ -126,6 +126,11 @@ def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None):
     COLUMNS and LINES ahead of the terminal itself, so those are left unset for
     a resize run -- otherwise it would keep drawing the old size at a window
     that had changed, which is the bug this would be trying to find.
+
+    `marks`, when a list is passed in, is filled with the offset into the
+    output at the end of each phase: after the settle, then after each key. A
+    caller that has to tell what one keystroke painted from what the next one
+    did slices on those rather than reading the whole run as one stream.
     """
     master, slave = open_pty()
     env = dict(os.environ, COLUMNS=str(COLS), LINES=str(LINES), TERM="xterm-256color")
@@ -157,6 +162,8 @@ def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None):
         if not drain(0.05):
             break
     drain(settle)
+    if marks is not None:
+        marks.append(len(out))
 
     for cols, lines in sizes or ():
         if proc.poll() is not None:
@@ -173,7 +180,11 @@ def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None):
         except OSError:  # it quit between the poll above and this write
             break
         if not drain(settle):
+            if marks is not None:
+                marks.append(len(out))
             break
+        if marks is not None:
+            marks.append(len(out))
 
     if proc.poll() is None:
         try:
@@ -348,29 +359,45 @@ def compare_hold(name):
     implementation *did*: how many distinct readouts it painted while held, and
     while running.
     """
+    def stamps(chunk):
+        return [s[0] for s in (readouts(c) for c in chunk.split(HOME)) if s]
+
+    def longest_run(values):
+        longest = run_len = 1 if values else 0
+        for a, b in zip(values, values[1:]):
+            run_len = run_len + 1 if a == b else 1
+            longest = max(longest, run_len)
+        return longest
+
     result = {}
     for impl, argv in IMPLS:
-        painted, status = run(argv + ["-q", "UTC"], [b" ", b" "], freeze=None, settle=0.6)
-        chunks = painted.split(HOME)
-        stamps = [readouts(c) for c in chunks]
-        flat = [s[0] for s in stamps if s]
-        result[impl] = (painted, status, flat)
+        marks = []
+        painted, status = run(argv + ["-q", "UTC"], [b" ", b" "], freeze=None,
+                              settle=0.6, marks=marks)
+        # marks are the ends of the settle, of the hold, and of running again.
+        held = stamps(painted[marks[0]:marks[1]]) if len(marks) > 1 else []
+        ran = stamps(painted[marks[1]:marks[2]]) if len(marks) > 2 else []
+        result[impl] = (status, held, ran)
 
-    for impl, (painted, status, flat) in result.items():
-        held_runs = 1
-        longest = 1
-        for a, b in zip(flat, flat[1:]):
-            held_runs = held_runs + 1 if a == b else 1
-            longest = max(longest, held_runs)
-        distinct = len(set(flat))
-        # Held for 0.6s at 19ms a frame is ~30 identical readouts; running, a
-        # readout repeats at most a couple of times. Ten is far above the one
-        # and far below the other.
-        if longest < 10:
-            report(False, name, f"{impl}: space did not hold ({longest} repeats at most)")
+    for impl, (status, held, ran) in result.items():
+        # Each phase is judged on its own frames rather than on the whole run,
+        # which is what makes the second half of this case's name true: a clock
+        # that holds and never lets go painted its distinct readouts before the
+        # first keystroke, so a count over the whole stream cannot see it.
+        #
+        # A share, not a count: 0.6s buys thirty frames on a quiet machine and
+        # eight on a loaded CI runner, and a slow machine is not a broken
+        # clock. The first frame of a phase may be one the clock had already
+        # painted before it read the key, so the longest run has to cover half
+        # the phase rather than all of it.
+        alike = longest_run(held)
+        if len(held) < 2 or alike * 2 < len(held):
+            report(False, name, f"{impl}: space did not hold "
+                                f"({alike} of {len(held)} readouts alike while held)")
             return
-        if distinct < 5:
-            report(False, name, f"{impl}: the clock never ran ({distinct} distinct readouts)")
+        if len(set(ran)) < 2:
+            report(False, name, f"{impl}: space did not let go "
+                                f"({len(set(ran))} distinct of {len(ran)} readouts after)")
             return
         if status != 0:
             report(False, name, f"{impl}: exit status {status}")
@@ -537,7 +564,15 @@ def shell_job(argv, freeze=FROZEN):
 
     os.close(tell)
     news = os.fdopen(heard, "r")
-    pid = int(news.readline().split()[1])
+    # The shim's first line names the clock. An empty one means it died before
+    # it got that far, which used to surface as an IndexError from splitting
+    # nothing -- a traceback that named neither the shim nor what it had
+    # managed to say, and took the whole run down with it.
+    first = news.readline()
+    fields = first.split()
+    if len(fields) != 2 or fields[0] != "pid":
+        raise RuntimeError(f"the job-control shim never named the clock: {first!r}")
+    pid = int(fields[1])
     try:
         yield master, slave, pid, news
     finally:

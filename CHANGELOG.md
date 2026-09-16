@@ -11,6 +11,20 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.3.0
+
+Places, and faces that say which place they are. A zone can be a US state,
+one of about a hundred common cities, or a country by name or by code -- and
+a face that a place landed on now says so in parentheses: `MST (Arizona)`,
+`PDT (Seattle)`, `CEST (DE)`.
+
+That last part changes what an existing command line draws, which is what
+makes this a minor release rather than a patch: `clock Berlin` reads
+`CEST (Berlin)` where it read `CEST`, and `clock JP` reads `JST (JP)`. Five
+golden frames were re-blessed for it, each one line, each the label row.
+
 - **US states and common cities are zones, and a face says where one landed.**
   `clock Arizona,Boise,"Salt Lake City"` draws `MST (Arizona)` and
   `MDT (Boise, Salt Lake City)`. A state means the zone its capital keeps,
@@ -19,6 +33,28 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
   are in a table checked against GeoNames, and a name shared with a comparably
   large city on another clock is left out, which is why `San Jose` and
   `St. Louis` are not there.
+- `tools/keytest.py`'s hold case reads each phase on its own frames. It
+  compared the whole run against fixed counts, which made it flake on a loaded
+  CI runner -- 0.6s bought eight frames where a quiet machine paints thirty --
+  and, worse, could not see a clock that held and never let go, since the
+  readouts painted before the first keystroke satisfied the count that was
+  meant to prove the clock had started again. Both sabotages fail it now; only
+  the first did before.
+- keytest's job-control shim reader splits the line the shim sends it without
+  checking it first, so a shim that died before naming the clock took the whole
+  run down with `IndexError: list index out of range` -- about one run in ten
+  here. It now says what it was handed instead. The race itself, a shim that
+  fails to start, is not fixed.
+- `go.mod` asks for `ziptz v0.1.2`, the version pip resolves `ziptz-us` to. It
+  had been pinned at v0.1.0 since the split: the tables are identical between
+  those tags, so nothing was wrong, but a release whose two ports name
+  different versions of the same library is drift waiting to be a bug.
+- `tools/placecheck.py`'s country checks compare clocks rather than zone names,
+  and read the labels out of `iso3166.tab` instead of repeating its spellings.
+  They had encoded one machine's tzdata: `GB` and `Japan` land on
+  backward-compatibility links where a build installs them and on the country's
+  own zone where it does not, which is the same clock and would have failed the
+  check on the second kind of machine.
 - **A place that spans zones names every one of them.** The message stopped at
   eight and counted the rest -- `Asia/Chita (and 3 more)` -- which is a list
   you cannot choose from, since the three it withheld were three of the

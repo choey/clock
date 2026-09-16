@@ -2,4 +2,4 @@ module github.com/choey/clock
 
 go 1.21
 
-require github.com/choey/ziptz v0.1.0
+require github.com/choey/ziptz v0.1.2

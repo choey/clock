@@ -430,7 +430,7 @@ Resolved in this order, first match winning:
 | You type | You get | |
 |---|---|---|
 | `local` | your system zone | `TZ` decides it; see below |
-| `94110` `941` | the zone that ZIP is in | US only |
+| `94110` `941` | the zone that ZIP is in, labelled `PDT (94110)` | US only |
 | `ET` `CT` `MT` `PT` | `America/New_York` and friends | follows daylight saving, so it reads `EST` in winter and `EDT` in summer |
 | `AKT` `HT` `BST` `UK` `IST` `JST` `KST` `SGT` `HKT` `AET` `ACT` `AWT` `NZT` | the obvious place | same |
 | `Europe/Berlin` `UTC` `EST` `MST` `HST` `GMT` `CET` `Etc/GMT+5` | itself | any name the tz database knows |
@@ -534,6 +534,15 @@ character outside ASCII, `Curaçao`, `Réunion`, `Côte d’Ivoire` and the
 folding](https://github.com/choey/clock/blob/main/ARCHITECTURE.md#case-folding).
 A name is read after the states and cities, which is the whole of why `Georgia`
 is the state and `GE` the country.
+
+Where the file spells a name unusually, the ordinary spelling works too, and the
+face is labelled with whichever you wrote. An `&` may be written `and`, an `St`
+written `Saint`, and a trailing qualifier moved to the front — `South Korea` for
+its `Korea (South)`, `American Samoa` for its `Samoa (American)`. A short list
+covers what no rule reaches: `United Kingdom` and `Great Britain` for
+`Britain (UK)`, `USA` and `United States of America`, `Czechia`, `Ivory Coast`,
+`Myanmar`, `Burma`, and the ASCII spellings of `Cote d'Ivoire` and the
+`Aland Islands`.
 
 `iso3166.tab` is not on every system — a stripped-down container may ship zone
 files without the database's tables. Without it the names stop resolving and
@@ -674,10 +683,10 @@ is usually right but not always: 233 ZIP codes, across 30 prefixes, sit on the
 losing side of a zone boundary their prefix rounds the wrong way.
 
 ```
-$ clock 79835        # Canutillo, TX — El Paso County
-   MDT               # right: five digits are always exact
-$ clock 798          # the prefix alone
-   CDT               # wrong: most of 798 is CDT, but not this ZIP
+$ clock 79835            # Canutillo, TX — El Paso County
+   MDT (79835)           # right: five digits are always exact
+$ clock 798              # the prefix alone
+   CDT (798)             # wrong: most of 798 is CDT, but not this ZIP
 ```
 
 Verified against the source: of 33,791 ZIP codes, 233 (0.69%) resolve wrongly

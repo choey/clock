@@ -11,7 +11,22 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 
 ## Unreleased
 
-Nothing yet.
+- **A ZIP code says where it landed, like every other place.** `clock 94110`
+  draws `PDT (94110)` where it drew `PDT`, which is the label 0.3.0 should have
+  given it: a ZIP is the token whose zone is least guessable of all, and it was
+  the one place form left without one. That changes the picture, so the next
+  release is a minor.
+- **A country answers to the spelling people actually write.** The tz database
+  files `Britain (UK)`, `Korea (South)` and `St Lucia`; `United Kingdom`,
+  `South Korea` and `Saint Lucia` now reach them. Three mechanical rules do
+  most of it -- an `&` written `and`, an `St` written `Saint`, a trailing
+  qualifier moved to the front -- and a short table of ten covers what no rule
+  reaches, `USA` and `Czechia` and `Ivory Coast` among them. It is a list of
+  exceptions, not a second copy of the database, and it answers even where
+  `iso3166.tab` is missing.
+- The label is the spelling that was typed rather than the file's, so nobody
+  reads `KST (Korea (South))` for having written `South Korea`.
+  `Antigua and Barbuda` draws its own spelling now instead of the file's `&`.
 
 ## 0.3.0
 

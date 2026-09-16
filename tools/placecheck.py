@@ -240,15 +240,34 @@ def check_tables(report):
         ok = reads_like(key, zone) and place == label
         report(ok, f"{token!r} reads as {zone} and is labelled {label!r}"
                + ("" if ok else f" -- got {(key, place)}"))
+    # The synonyms are this repository's, not the database's, so they are held
+    # to a list here: each has to reach the country it names, labelled with the
+    # spelling a person wrote rather than the one the file keeps.
+    names = [name for name, _ in pyclock.COUNTRY_SYNONYMS]
+    report(names == sorted(names), "COUNTRY_SYNONYMS is sorted")
+    for name, code in pyclock.COUNTRY_SYNONYMS:
+        want = iso3166_name(code)
+        key, place = resolves(name, now)
+        if want is None:
+            report(False, f"{name}: iso3166.tab has no country {code}")
+            continue
+        # A country that spans zones is refused by name, which is the country
+        # path answering just as much as one that resolves.
+        spans = key is None and place.startswith(f"{name} spans")
+        ok = spans or (key is not None and place == name)
+        report(ok, f"{name!r} is {code} ({want}) labelled {name!r}"
+               + ("" if ok else f" -- got {(key, place)}"))
     for code, zone in COUNTRY_NAMES:
         name = iso3166_name(code)
         if name is None:
             report(False, f"iso3166.tab has no name for {code}")
             continue
-        for token in {name, name.replace(" & ", " and ")}:
+        # Each spelling is labelled with itself, not with the file's, so that
+        # nobody is shown Korea (South) for having written South Korea.
+        for token in dict.fromkeys(pyclock.country_spellings(name)):
             key, place = resolves(token, now)
-            ok = reads_like(key, zone) and place == name
-            report(ok, f"{token!r} reads as {zone} and is labelled {name!r}"
+            ok = reads_like(key, zone) and place == token
+            report(ok, f"{token!r} reads as {zone} and is labelled {token!r}"
                    + ("" if ok else f" -- got {(key, place)}"))
     # A country that genuinely spans zones is refused by the name that was
     # typed, not by the code it was looked up from.

@@ -1379,6 +1379,27 @@ US_CODES = (
 )
 
 
+# The names people write where iso3166.tab writes another: it says Britain (UK),
+# Czech Republic, Myanmar (Burma), and spells four names with a character
+# outside ASCII that has to be typed exactly. Everything else a person is
+# likely to write is reached by rule in country_spellings, so this stays a list
+# of exceptions rather than a second copy of the database. It is consulted
+# before the file, and so still answers on a machine that has no iso3166.tab at
+# all. Sorted, same order as clock.go's table.
+COUNTRY_SYNONYMS = (
+    ("Aland Islands", "AX"),
+    ("Burma", "MM"),
+    ("Cote d'Ivoire", "CI"),
+    ("Czechia", "CZ"),
+    ("Great Britain", "GB"),
+    ("Ivory Coast", "CI"),
+    ("Myanmar", "MM"),
+    ("USA", "US"),
+    ("United Kingdom", "GB"),
+    ("United States of America", "US"),
+)
+
+
 def alias_names():
     return " ".join(name for name, _ in ZONE_ALIASES)
 
@@ -1439,19 +1460,53 @@ def country_by_name(token):
     does not spell them -- have to be typed the way it does, for the reason in
     ARCHITECTURE's Case folding.
     """
+    key = place_key(token)
+    for name, code in COUNTRY_SYNONYMS:
+        if place_key(name) == key:
+            return code, name, True
     data, found = tz_file("iso3166.tab")
     if not found:
         return "", "", False
-    key = place_key(token)
     for line in data.split("\n"):
         if not line or line.startswith("#"):
             continue
         fields = line.split("\t")
         if len(fields) < 2:
             continue
-        if key in (place_key(fields[1]), place_key(fields[1].replace(" & ", " and "))):
-            return fields[0], fields[1], True
+        for spelling in country_spellings(fields[1]):
+            if place_key(spelling) == key:
+                # The spelling that matched, not the file's: someone who wrote
+                # South Korea is told South Korea, and is not asked to read
+                # Korea (South) inside a pair of parentheses of its own.
+                return fields[0], spelling, True
     return "", "", False
+
+
+def country_spellings(name):
+    """Every way one of iso3166.tab's names might be written.
+
+    Its own, an "&" written out, an "St" written "Saint", and a trailing
+    qualifier moved to the front, since the file writes Korea (South) where a
+    person writes South Korea. The rules are ASCII and mechanical, so the two
+    ports cannot drift over them, and one that invents a spelling nobody types
+    -- "Burma Myanmar" -- costs a comparison and reaches nothing.
+    """
+    out = [name]
+
+    def add(s):
+        if s not in out:
+            out.append(s)
+
+    if " & " in name:
+        add(name.replace(" & ", " and "))
+    for v in list(out):
+        if v.startswith("St "):
+            add("Saint " + v[len("St "):])
+    for v in list(out):
+        i = v.find(" (")
+        if i > 0 and v.endswith(")"):
+            add(v[i + 2:-1] + " " + v[:i])
+    return out
 
 
 def country_zones(cc):
@@ -1661,7 +1716,9 @@ def resolve_zone(token, at):
     if ascii_lower(token) == "local":
         return local_zone(), ""
     if token.isascii() and token.isdigit():
-        return zip_zone(token), ""
+        # A ZIP is a place like any other, and the one whose zone is least
+        # guessable of all: 94110 says nothing about Los Angeles by itself.
+        return zip_zone(token), token
     up = ascii_upper(token)
     for name, target in ZONE_ALIASES:
         if name == up:

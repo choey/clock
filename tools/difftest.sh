@@ -308,6 +308,28 @@ for zones in DE de JP GB NZ IN FR Germany germany GERMANY Japan France India \
 	check "$WINTER" 200 60 "$zones"
 done
 
+# A country by a spelling the database does not keep: the ones reached by rule
+# -- an & written out, an St written Saint, a trailing qualifier moved to the
+# front -- and the short list of exceptions the rules cannot reach. Each is
+# labelled with the spelling that was typed rather than the file's, so nobody
+# reads Korea (South) for having written South Korea.
+for zones in "United Kingdom" "Great Britain" USA usa "United States of America" \
+	Czechia "Ivory Coast" "Cote d'\''Ivoire" Burma Myanmar "Aland Islands" \
+	"South Korea" "North Korea" "Korea (South)" "Saint Lucia" "St Lucia" \
+	"Saint Kitts and Nevis" "St Kitts & Nevis" "Antigua and Barbuda" "Antigua & Barbuda" \
+	"American Samoa" "Samoa (American)" "Burma Myanmar" "UK Britain" "United Kingdom,GB,UK"; do
+	check "$SUMMER" 200 60 "$zones"
+	check "$WINTER" 200 60 "$zones"
+done
+
+# A ZIP names a place too, and the one whose zone is least guessable, so it is
+# labelled like the rest: PDT (94110), and PDT/PT (94110) when something else
+# merged onto the same face.
+for zones in 94110 941 10001 79835 798 94110,PT 94110,10001 "94110,San Francisco" 00501 96799; do
+	check "$SUMMER" 200 60 "$zones"
+	check "$WINTER" 200 60 "$zones"
+done
+
 # CLOCK_FREEZE takes a place as its zone too, but it splits on spaces, so a
 # place with one in its name is written with underscores there.
 for pin in "10 Arizona" "8/22 09:53 New_Mexico" "8/22 09:53 New Mexico" "10 Washington_DC" \

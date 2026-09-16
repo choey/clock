@@ -1582,6 +1582,26 @@ var usCodes = []struct{ code, name string }{
 	{"US-WY", "Wyoming"},
 }
 
+// countrySynonyms are the names people write where iso3166.tab writes another:
+// it says Britain (UK), Czech Republic, Myanmar (Burma), and spells four names
+// with a character outside ASCII that has to be typed exactly. Everything else
+// a person is likely to write is reached by rule in countrySpellings, so this
+// stays a list of exceptions rather than a second copy of the database. It is
+// consulted before the file, and so still answers on a machine that has no
+// iso3166.tab at all. Sorted, same order as pyclock.py's table.
+var countrySynonyms = []struct{ name, code string }{
+	{"Aland Islands", "AX"},
+	{"Burma", "MM"},
+	{"Cote d'Ivoire", "CI"},
+	{"Czechia", "CZ"},
+	{"Great Britain", "GB"},
+	{"Ivory Coast", "CI"},
+	{"Myanmar", "MM"},
+	{"USA", "US"},
+	{"United Kingdom", "GB"},
+	{"United States of America", "US"},
+}
+
 func aliasNames() string {
 	names := make([]string, len(zoneAliases))
 	for i, a := range zoneAliases {
@@ -1639,11 +1659,16 @@ func zoneTab() (string, bool) {
 // them -- have to be typed the way it does, for the reason in ARCHITECTURE's
 // Case folding.
 func countryByName(token string) (code, name string, ok bool) {
+	key := placeKey(token)
+	for _, s := range countrySynonyms {
+		if placeKey(s.name) == key {
+			return s.code, s.name, true
+		}
+	}
 	data, found := tzFile("iso3166.tab")
 	if !found {
 		return "", "", false
 	}
-	key := placeKey(token)
 	for _, line := range strings.Split(data, "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -1652,11 +1677,48 @@ func countryByName(token string) (code, name string, ok bool) {
 		if len(f) < 2 {
 			continue
 		}
-		if placeKey(f[1]) == key || placeKey(strings.ReplaceAll(f[1], " & ", " and ")) == key {
-			return f[0], f[1], true
+		for _, spelling := range countrySpellings(f[1]) {
+			if placeKey(spelling) == key {
+				// The spelling that matched, not the file's: someone who
+				// wrote South Korea is told South Korea, and is not asked to
+				// read Korea (South) inside a pair of parentheses of its own.
+				return f[0], spelling, true
+			}
 		}
 	}
 	return "", "", false
+}
+
+// countrySpellings is every way one of iso3166.tab's names might be written:
+// its own, an "&" written out, an "St" written "Saint", and a trailing
+// qualifier moved to the front, since the file writes Korea (South) where a
+// person writes South Korea. The rules are ASCII and mechanical, so the two
+// ports cannot drift over them, and one that invents a spelling nobody types
+// -- "Burma Myanmar" -- costs a comparison and reaches nothing.
+func countrySpellings(name string) []string {
+	out := []string{name}
+	add := func(s string) {
+		for _, v := range out {
+			if v == s {
+				return
+			}
+		}
+		out = append(out, s)
+	}
+	if strings.Contains(name, " & ") {
+		add(strings.ReplaceAll(name, " & ", " and "))
+	}
+	for _, v := range append([]string(nil), out...) {
+		if strings.HasPrefix(v, "St ") {
+			add("Saint " + strings.TrimPrefix(v, "St "))
+		}
+	}
+	for _, v := range append([]string(nil), out...) {
+		if i := strings.Index(v, " ("); i > 0 && strings.HasSuffix(v, ")") {
+			add(v[i+2:len(v)-1] + " " + v[:i])
+		}
+	}
+	return out
 }
 
 // countryZones lists a country's zones in file order, which is the tz
@@ -1875,7 +1937,12 @@ func resolveZone(token string, at time.Time) (*time.Location, string, error) {
 	}
 	if allDigits(token) {
 		loc, err := ziptz.Location(token)
-		return loc, "", err
+		if err != nil {
+			return nil, "", err
+		}
+		// A ZIP is a place like any other, and the one whose zone is least
+		// guessable of all: 94110 says nothing about Los Angeles by itself.
+		return loc, token, nil
 	}
 	up := asciiUpper(token)
 	for _, a := range zoneAliases {

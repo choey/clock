@@ -290,10 +290,28 @@ for zones in US-CA us-ca Us-Ca US-AZ US-NY US-PR US-GU US-VI US-DC US-MP US-TX U
 	check "$WINTER" 200 60 "$zones"
 done
 
+# A country by its code or by its name, each labelled with what was typed --
+# CEST (DE) and CEST (Germany). The names are iso3166.tab's, the database's own
+# list, so a country it also keeps a zone or a compatibility link under (Japan,
+# Cuba, Singapore, Turkey) still resolves there and is labelled all the same.
+# Georgia is the state and GE the country, because the state table is asked
+# first; Malta and Portugal are the reverse case, names the database answers to
+# whose codes this clock spends on Mountain and Pacific.
+for zones in DE de JP GB NZ IN FR Germany germany GERMANY Japan France India \
+	Cuba Singapore Turkey Iceland Poland Portugal PT Malta MT Georgia GE \
+	"Korea (South)" "Antigua & Barbuda" "Antigua and Barbuda" "Trinidad and Tobago" \
+	"Bosnia and Herzegovina" "United States" US "Britain (UK)" UK \
+	"Côte d’Ivoire" "Cote d'\''Ivoire" "Curaçao" Curacao "Samoa" "Samoa (American)" \
+	DE,Germany DE,Berlin "Germany,Munich,DE" JP,Japan "US-CA,California,CA"; do
+	check "$SUMMER" 200 60 "$zones"
+	check "$WINTER" 200 60 "$zones"
+done
+
 # CLOCK_FREEZE takes a place as its zone too, but it splits on spaces, so a
 # place with one in its name is written with underscores there.
 for pin in "10 Arizona" "8/22 09:53 New_Mexico" "8/22 09:53 New Mexico" "10 Washington_DC" \
-	"10 St._Louis" "2026-03-08 02:30:00 Tennessee" "7/22 10 Seattle" "10 US-AZ"; do
+	"10 St._Louis" "2026-03-08 02:30:00 Tennessee" "7/22 10 Seattle" "10 US-AZ" \
+	"10 DE" "10 Germany" "8/22 09:53 JP"; do
 	check "$pin" 80 24 UTC
 done
 

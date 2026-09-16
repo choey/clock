@@ -93,13 +93,14 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
   --version          print the version and exit
 
 A zone is an IANA name (Europe/Berlin), a city (Berlin, Seattle), a US state
-(Arizona, or its code as US-AZ), a regional abbreviation (ET CT MT PT AKT HT
-BST IST JST AET ...), a 2-letter country code (JP, GB), or a US ZIP code
-(94110). A state or city is labelled with the zone it landed in, as
-MST (Arizona); write one with a space in quotes, "New Mexico", or with
-underscores, New_Mexico. The bare two letters are not a state: CA is Canada.
-ET/CT/MT/PT follow daylight saving, so they read EST or EDT depending on the
-date; EST/EDT/PST/PDT and the rest are the fixed offsets, which never shift.
+(Arizona, or its code as US-AZ), a country (Germany, or its code as DE), a
+regional abbreviation (ET CT MT PT AKT HT BST IST JST AET ...), or a US ZIP
+code (94110). Each place is labelled with the zone it landed in, as
+MST (Arizona) or CEST (DE); write a name with a space in quotes,
+"New Mexico", or with underscores, New_Mexico. The bare two letters are a
+country and never a state: CA is Canada. ET/CT/MT/PT follow daylight saving,
+so they read EST or EDT depending on the date; EST/EDT/PST/PDT and the rest
+are the fixed offsets, which never shift.
 
 The hands are coloured on a terminal and plain when redirected; NO_COLOR
 turns the colour off everywhere. Auto puts a weekday on the readouts only
@@ -1400,10 +1401,11 @@ def zip_zone(token):
         raise ClockError(str(exc)) from None
 
 
-def zone_tab():
-    """The tz database's country table, and whether it was found at all.
+def tz_file(name):
+    """One of the tz database's own tables, and whether it was found at all.
 
-    Absent on stripped-down systems, so never fatal.
+    Absent on stripped-down systems, so never fatal: what reads it says so
+    instead.
     """
     for directory in (
         os.environ.get("TZDIR", ""),
@@ -1414,11 +1416,42 @@ def zone_tab():
         if not directory:
             continue
         try:
-            with open(directory + "/zone.tab", encoding="utf-8") as handle:
+            with open(directory + "/" + name, encoding="utf-8") as handle:
                 return handle.read(), True
         except OSError:
             continue
     return "", False
+
+
+def zone_tab():
+    """The table of countries and their zones."""
+    return tz_file("zone.tab")
+
+
+def country_by_name(token):
+    """The code a country's name stands for and the spelling to label it with,
+    out of iso3166.tab -- the database's own list of countries -- and whether
+    it has one.
+
+    An "&" may be written "and", since the tab writes Antigua & Barbuda.
+    Nothing else is forgiven, so the four names holding a character outside
+    ASCII -- Curacao, Reunion, Cote d'Ivoire and the Aland Islands, as the tab
+    does not spell them -- have to be typed the way it does, for the reason in
+    ARCHITECTURE's Case folding.
+    """
+    data, found = tz_file("iso3166.tab")
+    if not found:
+        return "", "", False
+    key = place_key(token)
+    for line in data.split("\n"):
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) < 2:
+            continue
+        if key in (place_key(fields[1]), place_key(fields[1].replace(" & ", " and "))):
+            return fields[0], fields[1], True
+    return "", "", False
 
 
 def country_zones(cc):
@@ -1437,7 +1470,7 @@ def country_zones(cc):
     return out, True
 
 
-def country_zone(cc, at):
+def country_zone(cc, label, at):
     """Resolve a 2-letter country code, collapsing zones that agree.
 
     Germany lists Europe/Berlin and Europe/Busingen, an enclave that has kept
@@ -1470,7 +1503,7 @@ def country_zone(cc, at):
         tail = f" (and {len(shown) - 8} more)"
         shown = shown[:8]
     raise ClockError(
-        f"{cc} spans {len(kept)} time zones; name one: " + ", ".join(shown) + tail
+        f"{label} spans {len(kept)} time zones; name one: " + ", ".join(shown) + tail
     )
 
 
@@ -1581,7 +1614,7 @@ def unknown_zone(token):
     return ClockError(
         f'unknown zone "{token}"; use an IANA name (Europe/Berlin), a city '
         f"(Berlin, Seattle), a US state (Arizona, US-AZ), an abbreviation "
-        f"({alias_names()}), a 2-letter country code (JP), or a US ZIP code"
+        f"({alias_names()}), a country (Germany, JP), or a US ZIP code"
     )
 
 
@@ -1647,22 +1680,43 @@ def resolve_zone(token, at):
                     f"{up} means {target}, which this system's time zone database lacks"
                 ) from None
     try:
-        return ZoneInfo(token), ""
+        zone = ZoneInfo(token)
     except Exception:
         pass
+    else:
+        # A country the database also keeps a zone or a compatibility link
+        # under -- Japan, Cuba, Singapore -- resolves there, as it always did,
+        # and is labelled with the country all the same. GB and NZ are links
+        # as well as codes, and are labelled like every other code rather than
+        # being the two that are not.
+        _, name, ok = country_by_name(token)
+        if ok:
+            return zone, name
+        if len(up) == 2 and "A" <= up[0] <= "Z" and "A" <= up[1] <= "Z":
+            names, found = country_zones(up)
+            if found and names:
+                return zone, up
+        return zone, ""
     for name, offset in ZONE_FIXED:
         if name == up:
             return timezone(timedelta(seconds=offset), name), ""
     if len(up) == 2 and "A" <= up[0] <= "Z" and "A" <= up[1] <= "Z":
-        found = country_zone(up, at)
+        found = country_zone(up, up, at)
         if found is not None:
-            return found, ""
+            return found, up
     # Last, so a city can never shadow a name the database itself answers to:
     # the database's own tails first, then the states and cities written here.
     for lookup in (suffix_zone, place_zone):
         zone, place = lookup(token)
         if zone is not None:
             return zone, place
+    # A country by name, last of all: Georgia is the state, and the country is
+    # GE, because the tables above are asked first.
+    code, name, ok = country_by_name(token)
+    if ok:
+        found = country_zone(code, name, at)
+        if found is not None:
+            return found, name
     raise unknown_zone(token)
 
 

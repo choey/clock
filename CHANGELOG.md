@@ -19,6 +19,13 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
   are in a table checked against GeoNames, and a name shared with a comparably
   large city on another clock is left out, which is why `San Jose` and
   `St. Louis` are not there.
+- **A country says where it landed too, by code or by name.** `clock DE` draws
+  `CEST (DE)` where it drew `CEST`, and `clock Germany` now works at all, along
+  with every other name in the tz database's `iso3166.tab` -- an `&` may be
+  written `and`. A country that spans zones still asks you to pick, in
+  whichever spelling you typed: `United States spans 8 time zones`. Adding the
+  label changes what an existing command line draws wherever a country code is
+  on it.
 - **A state can also be its ISO 3166-2 code**, `US-CA`, labelled with the full
   name it stands for: `PDT (California)`. The bare two letters are not taken
   and cannot be -- 32 of the 56 already mean something else here, and 26 of

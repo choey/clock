@@ -432,11 +432,12 @@ Resolved in this order, first match winning:
 | `AKT` `HT` `BST` `UK` `IST` `JST` `KST` `SGT` `HKT` `AET` `ACT` `AWT` `NZT` | the obvious place | same |
 | `Europe/Berlin` `UTC` `EST` `MST` `HST` `GMT` `CET` `Etc/GMT+5` | itself | any name the tz database knows |
 | `PST` `PDT` `EDT` `CST` `CDT` `MDT` `AKST` `AKDT` `HDT` | that exact offset | a fixed clock that never shifts |
-| `JP` `GB` `DE` | that country's zone | 2-letter ISO code, via `zone.tab` |
+| `JP` `GB` `DE` | that country's zone, labelled `JST (JP)` | 2-letter ISO code, via `zone.tab` |
 | `Berlin` `Jakarta` `New York` `Indiana/Indianapolis` | the zone that ends in it, labelled `CEST (Berlin)` | the city alone, where only one zone ends that way |
 | `Arizona` `New Mexico` `Washington DC` `American Samoa` | the zone its capital keeps, labelled `MST (Arizona)` | a US state, DC, or a territory |
 | `US-AZ` `US-NY` | the state that code names | ISO 3166-2, labelled with the full name |
 | `Seattle` `Salt Lake City` `Mumbai` `Munich` | that city's zone, labelled `PDT (Seattle)` | a common city the tz database has no zone for |
+| `Germany` `France` `Korea (South)` | that country's zone, labelled `CEST (Germany)` | the country by name, spelt as `iso3166.tab` spells it |
 
 ### Your system zone
 
@@ -520,15 +521,34 @@ Two of these carry a judgement call. `CST` is the US Central reading, −06:00,
 not China — for China use `CN` or `Asia/Shanghai`. And `HDT` is −09:00, the
 Aleutian daylight zone, since Hawaii itself never leaves `HST`.
 
-A country that genuinely spans zones asks you to pick:
+A country is its 2-letter code or its name — `DE` or `Germany`, `JP` or `Japan`
+— and the face says which either way: `CEST (DE)`, `CEST (Germany)`. The names
+are the tz database's own, out of `iso3166.tab` beside `zone.tab`, so they are
+spelt the way it spells them: `Korea (South)`, `Britain (UK)`,
+`Antigua & Barbuda` — where an `&` may be written `and`. The four holding a
+character outside ASCII, `Curaçao`, `Réunion`, `Côte d’Ivoire` and the
+`Åland Islands`, have to be typed as it writes them, for the reason in [Case
+folding](https://github.com/choey/clock/blob/main/ARCHITECTURE.md#case-folding).
+A name is read after the states and cities, which is the whole of why `Georgia`
+is the state and `GE` the country.
+
+A country that genuinely spans zones asks you to pick, by whichever spelling
+you used:
 
 ```
 $ clock US
 clock: US spans 8 time zones; name one: America/New_York, America/Chicago, ...
+$ clock "United States"
+clock: United States spans 8 time zones; name one: America/New_York, ...
+$ clock Canada
+clock: Canada spans 10 time zones; name one: America/St_Johns, ... (and 2 more)
 ```
 
-Countries whose zones merely agree — Germany lists both `Europe/Berlin` and the
-`Europe/Busingen` enclave — collapse to one and resolve without complaint.
+The count is of clocks rather than of zones: `zone.tab` lists 29 for the US and
+23 for Canada, and the ones reading alike at that instant collapse first. Past
+eight the list says how many more there are. Countries whose zones *all* agree —
+Germany lists both `Europe/Berlin` and the `Europe/Busingen` enclave — collapse
+to a single face and resolve without complaint.
 
 ### States and cities
 
@@ -927,11 +947,13 @@ sentences quietly false, since they still read fine and nothing else reads
 prose. It recomputes each from the shipped tables and checks the file says it.
 Dropping one exception group makes four documents fail at once.
 
-`tools/placecheck.py` holds the state and city tables to what they claim. It
-runs every row through the real resolver, in four spellings, and fails on a zone
+`tools/placecheck.py` holds the places to what they claim. It runs every state
+and city row through the real resolver, in four spellings, and fails on a zone
 that does not load, on a row something asked earlier already answers to — a city
 called `Japan` would be the tz database's, never the table's — and on a table
-out of order. What it cannot see offline is a zone that loads and is simply
+out of order. It checks the ISO codes answer exactly as the names they stand for
+do, that the bare two letters never answer as a state, and that the countries
+the tz database supplies come back labelled as they should. What it cannot see offline is a zone that loads and is simply
 wrong: moving Seattle to Denver in both ports passes it. That, and any change to
 a row, is what `--geonames` is for, which checks every zone against a downloaded
 GeoNames city list.

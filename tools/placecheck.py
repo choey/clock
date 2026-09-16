@@ -101,6 +101,24 @@ LEFT_OUT = ("San Jose", "St. Louis", "Saint Louis", "Barcelona", "Venice")
 LEFT_TO_TZ = ("New York", "Puerto Rico", "Guam")
 # Two-letter state codes are not taken, because these are countries already.
 COUNTRY_NOT_STATE = ("CA", "IN", "DE", "GA")
+# Countries come out of the tz database's own iso3166.tab rather than a table
+# here, so there is no list to hold to -- but the label has to be right, and
+# the names that would otherwise be decided by ordering have to stay decided.
+# (token, zone key, label): a code, a name, a country the database also keeps a
+# link under, the two whose codes this clock spends elsewhere, and the one that
+# is a state here and a country by its code.
+COUNTRIES = (
+    ("DE", "Europe/Berlin", "DE"),
+    ("de", "Europe/Berlin", "DE"),
+    ("Germany", "Europe/Berlin", "Germany"),
+    ("GB", "GB", "GB"),
+    ("Japan", "Japan", "Japan"),
+    ("Antigua and Barbuda", "America/Antigua", "Antigua & Barbuda"),
+    ("Malta", "Europe/Malta", "Malta"),
+    ("Portugal", "Portugal", "Portugal"),
+    ("Georgia", "America/New_York", "Georgia"),
+    ("GE", "Asia/Tbilisi", "GE"),
+)
 
 PROBES = [datetime(y, m, d, 12, tzinfo=timezone.utc)
           for y in (2026, 2027) for m, d in ((1, 15), (3, 20), (4, 15), (7, 15), (10, 1), (11, 15))]
@@ -174,21 +192,36 @@ def check_tables(report):
                    + ("" if got == want else f" -- {got} against {want}"))
         report(pyclock.place_key(code) not in seen, f"{code} is not also a row name")
         # The reason the codes carry the US- prefix: the bare two letters are
-        # countries and abbreviations already, and have to stay that way.
+        # countries and abbreviations already, and must never answer as the
+        # state does. Some reach the same zone by accident -- MT is Montana and
+        # Mountain alike -- so it is the whole answer, label included, that has
+        # to differ.
         bare = code[len("US-"):]
-        zone, place = resolves(bare, now)
-        report(place == "" or zone is None, f"{bare} alone is not a place ({zone or place[:40]})")
+        got = resolves(bare, now)
+        report(got != want, f"{bare} alone does not answer as {name!r} does ({got})")
     for name in LEFT_OUT:
         zone, why = resolves(name, now)
         report(zone is None and why.startswith("unknown zone"), f"{name} stays out: {why[:60]}")
     for name in LEFT_TO_TZ:
         zone, place = resolves(name, now)
         report(zone is not None and place == name, f"{name} is the tz database's, as {name!r}")
+    for token, zone, label in COUNTRIES:
+        got = resolves(token, now)
+        report(got == (zone, label), f"{token!r} is {zone} labelled {label!r}"
+               + ("" if got == (zone, label) else f" -- got {got}"))
+    # A country that genuinely spans zones is refused by the name that was
+    # typed, not by the code it was looked up from.
+    for token in ("US", "United States"):
+        zone, why = resolves(token, now)
+        report(zone is None and why.startswith(f"{token} spans"),
+               f"{token!r} is refused in its own name: {why[:52]}")
     for code in COUNTRY_NOT_STATE:
         zone, place = resolves(code, now)
         # A country that spans zones is refused by name -- which is the country
         # path answering, and exactly as much a country as one that resolves.
-        country = (zone is not None and place == "") or (zone is None and place.startswith(f"{code} spans"))
+        # A code that resolves is labelled with itself; one whose country
+        # spans zones is refused by name. Either is the country path answering.
+        country = (zone is not None and place == code) or (zone is None and place.startswith(f"{code} spans"))
         report(country, f"{code} is a country code, not a state ({zone or place[:40]})")
 
 

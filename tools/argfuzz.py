@@ -82,6 +82,11 @@ ZONEISH = (
     "Washington_D.C.", "St. Louis", "Boise", "Salt Lake City", "New York", "Ｂoise", "İdaho",
     # The ISO 3166-2 codes, and the bare two letters they exist to avoid.
     "US-CA", "us-ca", "US-ZZ", "USCA", "US-", "CA", "NY",
+    # Countries by name, out of the database's own list: one that is also a
+    # compatibility link, one that spans zones, the & spelling, and two that
+    # only answer to characters outside ASCII.
+    "Germany", "germany", "Japan", "United States", "Antigua & Barbuda",
+    "Antigua and Barbuda", "Côte d’Ivoire", "Cote d'Ivoire", "Curaçao", "Curacao",
 )
 
 FLAGS = ("-n", "--per-row", "--scale", "--cell-ratio", "--hpad", "--vpad",

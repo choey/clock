@@ -93,13 +93,14 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
   --version          print the version and exit
 
 A zone is an IANA name (Europe/Berlin), a city (Berlin, Seattle), a US state
-(Arizona, or its code as US-AZ), a regional abbreviation (ET CT MT PT AKT HT
-BST IST JST AET ...), a 2-letter country code (JP, GB), or a US ZIP code
-(94110). A state or city is labelled with the zone it landed in, as
-MST (Arizona); write one with a space in quotes, "New Mexico", or with
-underscores, New_Mexico. The bare two letters are not a state: CA is Canada.
-ET/CT/MT/PT follow daylight saving, so they read EST or EDT depending on the
-date; EST/EDT/PST/PDT and the rest are the fixed offsets, which never shift.
+(Arizona, or its code as US-AZ), a country (Germany, or its code as DE), a
+regional abbreviation (ET CT MT PT AKT HT BST IST JST AET ...), or a US ZIP
+code (94110). Each place is labelled with the zone it landed in, as
+MST (Arizona) or CEST (DE); write a name with a space in quotes,
+"New Mexico", or with underscores, New_Mexico. The bare two letters are a
+country and never a state: CA is Canada. ET/CT/MT/PT follow daylight saving,
+so they read EST or EDT depending on the date; EST/EDT/PST/PDT and the rest
+are the fixed offsets, which never shift.
 
 The hands are coloured on a terminal and plain when redirected; NO_COLOR
 turns the colour off everywhere. Auto puts a weekday on the readouts only
@@ -1605,9 +1606,10 @@ func isCountryCode(s string) bool {
 	return s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'A' && s[1] <= 'Z'
 }
 
-// zoneTab returns the contents of the tz database's country table, and whether
-// it was found at all. Absent on stripped-down systems, so never fatal.
-func zoneTab() (string, bool) {
+// tzFile returns one of the tz database's own tables, and whether it was found
+// at all. Absent on stripped-down systems, so never fatal: what reads it says
+// so instead.
+func tzFile(name string) (string, bool) {
 	for _, dir := range []string{
 		os.Getenv("TZDIR"),
 		"/usr/share/zoneinfo",
@@ -1617,11 +1619,44 @@ func zoneTab() (string, bool) {
 		if dir == "" {
 			continue
 		}
-		if data, err := os.ReadFile(dir + "/zone.tab"); err == nil {
+		if data, err := os.ReadFile(dir + "/" + name); err == nil {
 			return string(data), true
 		}
 	}
 	return "", false
+}
+
+// zoneTab is the table of countries and their zones.
+func zoneTab() (string, bool) {
+	return tzFile("zone.tab")
+}
+
+// countryByName reads iso3166.tab, the database's own list of countries, for
+// the code a name stands for and the spelling to label it with. An "&" may be
+// written "and", since the tab writes Antigua & Barbuda; nothing else is
+// forgiven, so the four names holding a character outside ASCII -- Curacao,
+// Reunion, Cote d'Ivoire and the Aland Islands, as the tab does not spell
+// them -- have to be typed the way it does, for the reason in ARCHITECTURE's
+// Case folding.
+func countryByName(token string) (code, name string, ok bool) {
+	data, found := tzFile("iso3166.tab")
+	if !found {
+		return "", "", false
+	}
+	key := placeKey(token)
+	for _, line := range strings.Split(data, "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		f := strings.Split(line, "\t")
+		if len(f) < 2 {
+			continue
+		}
+		if placeKey(f[1]) == key || placeKey(strings.ReplaceAll(f[1], " & ", " and ")) == key {
+			return f[0], f[1], true
+		}
+	}
+	return "", "", false
 }
 
 // countryZones lists a country's zones in file order, which is the tz
@@ -1647,7 +1682,7 @@ func countryZones(cc string) ([]string, bool) {
 // countryZone resolves a 2-letter country code, collapsing zones that agree.
 // Germany lists Europe/Berlin and Europe/Busingen, an enclave that has kept
 // the same time since 1970, so DE is not genuinely ambiguous; the US is.
-func countryZone(cc string, at time.Time) (*time.Location, error) {
+func countryZone(cc, label string, at time.Time) (*time.Location, error) {
 	names, found := countryZones(cc)
 	if !found {
 		return nil, fmt.Errorf(
@@ -1682,7 +1717,7 @@ func countryZone(cc string, at time.Time) (*time.Location, error) {
 		shown = shown[:8]
 	}
 	return nil, fmt.Errorf("%s spans %d time zones; name one: %s%s",
-		cc, len(kept), strings.Join(shown, ", "), tail)
+		label, len(kept), strings.Join(shown, ", "), tail)
 }
 
 // suffixZones is the zones whose name ends with the token as a whole path
@@ -1798,7 +1833,7 @@ func placeZone(token string) (*time.Location, string, error) {
 func unknownZone(token string) error {
 	return fmt.Errorf("unknown zone \"%s\"; use an IANA name (Europe/Berlin), "+
 		"a city (Berlin, Seattle), a US state (Arizona, US-AZ), an abbreviation (%s), "+
-		"a 2-letter country code (JP), or a US ZIP code",
+		"a country (Germany, JP), or a US ZIP code",
 		token, aliasNames())
 }
 
@@ -1862,6 +1897,19 @@ func resolveZone(token string, at time.Time) (*time.Location, string, error) {
 		}
 	}
 	if loc, err := time.LoadLocation(token); err == nil {
+		// A country the database also keeps a zone or a compatibility link
+		// under -- Japan, Cuba, Singapore -- resolves there, as it always
+		// did, and is labelled with the country all the same. GB and NZ are
+		// links as well as codes, and are labelled like every other code
+		// rather than being the two that are not.
+		if _, name, ok := countryByName(token); ok {
+			return loc, name, nil
+		}
+		if isCountryCode(up) {
+			if names, found := countryZones(up); found && len(names) > 0 {
+				return loc, up, nil
+			}
+		}
 		return loc, "", nil
 	}
 	for _, f := range zoneFixed {
@@ -1870,12 +1918,12 @@ func resolveZone(token string, at time.Time) (*time.Location, string, error) {
 		}
 	}
 	if isCountryCode(up) {
-		loc, err := countryZone(up, at)
+		loc, err := countryZone(up, up, at)
 		if err != nil {
 			return nil, "", err
 		}
 		if loc != nil {
-			return loc, "", nil
+			return loc, up, nil
 		}
 	}
 	// Last, so a city can never shadow a name the database itself answers to:
@@ -1885,6 +1933,17 @@ func resolveZone(token string, at time.Time) (*time.Location, string, error) {
 	}
 	if loc, place, err := placeZone(token); err != nil || loc != nil {
 		return loc, place, err
+	}
+	// A country by name, last of all: Georgia is the state, and the country
+	// is GE, because the table above is asked first.
+	if code, name, ok := countryByName(token); ok {
+		loc, err := countryZone(code, name, at)
+		if err != nil {
+			return nil, "", err
+		}
+		if loc != nil {
+			return loc, name, nil
+		}
 	}
 	return nil, "", unknownZone(token)
 }

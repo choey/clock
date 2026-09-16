@@ -36,10 +36,13 @@ clock ET,PT,UTC | diff - <(pyclock ET,PT,UTC) && echo "byte for byte"
 ```
 
 Neither implementation has a third-party dependency. The Go side is standard
-library only; the Python side needs nothing beyond `zoneinfo`, which has
-shipped in the standard library since 3.9. The one thing either reaches outside
-itself for is [`ziptz`](https://github.com/choey/ziptz), the ZIP-to-zone
-library — also standard library only, and also written in both languages.
+library only; the Python side needs nothing beyond `zoneinfo`, which has shipped
+in the standard library since 3.9. The one thing either reaches outside itself
+for is [`ziptz`](https://github.com/choey/ziptz), the ZIP-to-zone library — also
+standard library only, and also written in both languages. Zones, countries and
+their names are read from the tz database already on the machine, out of its own
+`zone.tab` and `iso3166.tab`; nothing is installed for them and nothing is
+copied in here.
 
 ### Go
 
@@ -531,6 +534,12 @@ character outside ASCII, `Curaçao`, `Réunion`, `Côte d’Ivoire` and the
 folding](https://github.com/choey/clock/blob/main/ARCHITECTURE.md#case-folding).
 A name is read after the states and cities, which is the whole of why `Georgia`
 is the state and `GE` the country.
+
+`iso3166.tab` is not on every system — a stripped-down container may ship zone
+files without the database's tables. Without it the names stop resolving and
+nothing else changes: `DE` still draws Germany, since the codes come from
+`zone.tab`, and a name the tz database answers to itself still resolves but
+loses its label. Without `zone.tab` the codes go too, and say so.
 
 A country that genuinely spans zones asks you to pick, by whichever spelling
 you used:

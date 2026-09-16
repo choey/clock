@@ -93,12 +93,13 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
   --version          print the version and exit
 
 A zone is an IANA name (Europe/Berlin), a city (Berlin, Seattle), a US state
-(Arizona), a regional abbreviation (ET CT MT PT AKT HT BST IST JST AET ...),
-a 2-letter country code (JP, GB), or a US ZIP code (94110). A state or city
-is labelled with the zone it landed in, as MST (Arizona); write one with a
-space in quotes, "New Mexico", or with underscores, New_Mexico. ET/CT/MT/PT
-follow daylight saving, so they read EST or EDT depending on the date;
-EST/EDT/PST/PDT and the rest are the fixed offsets, which never shift.
+(Arizona, or its code as US-AZ), a regional abbreviation (ET CT MT PT AKT HT
+BST IST JST AET ...), a 2-letter country code (JP, GB), or a US ZIP code
+(94110). A state or city is labelled with the zone it landed in, as
+MST (Arizona); write one with a space in quotes, "New Mexico", or with
+underscores, New_Mexico. The bare two letters are not a state: CA is Canada.
+ET/CT/MT/PT follow daylight saving, so they read EST or EDT depending on the
+date; EST/EDT/PST/PDT and the rest are the fixed offsets, which never shift.
 
 The hands are coloured on a terminal and plain when redirected; NO_COLOR
 turns the colour off everywhere. Auto puts a weekday on the readouts only
@@ -1310,6 +1311,72 @@ COMMON_CITIES = (
     ("Yokohama", "Asia/Tokyo"),
 )
 
+# The ISO 3166-2 codes for the same places -- US-CA, US-NY -- and the only
+# short form taken. The bare two letters cannot be: most already mean something
+# else here, and most of those mean a different clock, since CA is Canada, IN
+# India, DE Germany, and CT and MT are this clock's own Central and Mountain.
+# Each code names a row in the table above, or a name the tz database answers
+# to itself (US-NY, US-PR, US-GU), and the face is labelled with that full name
+# rather than the code. Sorted, same order as clock.go's table.
+US_CODES = (
+    ("US-AK", "Alaska"),
+    ("US-AL", "Alabama"),
+    ("US-AR", "Arkansas"),
+    ("US-AS", "American Samoa"),
+    ("US-AZ", "Arizona"),
+    ("US-CA", "California"),
+    ("US-CO", "Colorado"),
+    ("US-CT", "Connecticut"),
+    ("US-DC", "District of Columbia"),
+    ("US-DE", "Delaware"),
+    ("US-FL", "Florida"),
+    ("US-GA", "Georgia"),
+    ("US-GU", "Guam"),
+    ("US-HI", "Hawaii"),
+    ("US-IA", "Iowa"),
+    ("US-ID", "Idaho"),
+    ("US-IL", "Illinois"),
+    ("US-IN", "Indiana"),
+    ("US-KS", "Kansas"),
+    ("US-KY", "Kentucky"),
+    ("US-LA", "Louisiana"),
+    ("US-MA", "Massachusetts"),
+    ("US-MD", "Maryland"),
+    ("US-ME", "Maine"),
+    ("US-MI", "Michigan"),
+    ("US-MN", "Minnesota"),
+    ("US-MO", "Missouri"),
+    ("US-MP", "Northern Mariana Islands"),
+    ("US-MS", "Mississippi"),
+    ("US-MT", "Montana"),
+    ("US-NC", "North Carolina"),
+    ("US-ND", "North Dakota"),
+    ("US-NE", "Nebraska"),
+    ("US-NH", "New Hampshire"),
+    ("US-NJ", "New Jersey"),
+    ("US-NM", "New Mexico"),
+    ("US-NV", "Nevada"),
+    ("US-NY", "New York"),
+    ("US-OH", "Ohio"),
+    ("US-OK", "Oklahoma"),
+    ("US-OR", "Oregon"),
+    ("US-PA", "Pennsylvania"),
+    ("US-PR", "Puerto Rico"),
+    ("US-RI", "Rhode Island"),
+    ("US-SC", "South Carolina"),
+    ("US-SD", "South Dakota"),
+    ("US-TN", "Tennessee"),
+    ("US-TX", "Texas"),
+    ("US-UT", "Utah"),
+    ("US-VA", "Virginia"),
+    ("US-VI", "US Virgin Islands"),
+    ("US-VT", "Vermont"),
+    ("US-WA", "Washington"),
+    ("US-WI", "Wisconsin"),
+    ("US-WV", "West Virginia"),
+    ("US-WY", "Wyoming"),
+)
+
 
 def alias_names():
     return " ".join(name for name, _ in ZONE_ALIASES)
@@ -1483,10 +1550,16 @@ def place_key(s):
 
 
 def place_zone(token):
-    """A US state or a common city, and the name to label it with -- the
-    table's own spelling, whatever case the token was typed in. (None, "")
-    when the token is neither."""
+    """A US state, its ISO 3166-2 code, or a common city, and the name to label
+    it with -- the table's own spelling whatever case the token was typed in,
+    and for a code the full name rather than the code. (None, "") when the
+    token is none of them."""
     key = place_key(token)
+    named = ""
+    for code, full in US_CODES:
+        if place_key(code) == key:
+            named, key = full, place_key(full)
+            break
     for table in (US_STATES, COMMON_CITIES):
         for name, target in table:
             if place_key(name) != key:
@@ -1497,13 +1570,17 @@ def place_zone(token):
                 raise ClockError(
                     f"{name} means {target}, which this system's time zone database lacks"
                 ) from None
+    if named:
+        # US-NY, US-PR and US-GU name the three places the tz database answers
+        # to itself, which is why they are not rows above.
+        return suffix_zone(named)
     return None, ""
 
 
 def unknown_zone(token):
     return ClockError(
         f'unknown zone "{token}"; use an IANA name (Europe/Berlin), a city '
-        f"(Berlin, Seattle), a US state (Arizona), an abbreviation "
+        f"(Berlin, Seattle), a US state (Arizona, US-AZ), an abbreviation "
         f"({alias_names()}), a 2-letter country code (JP), or a US ZIP code"
     )
 

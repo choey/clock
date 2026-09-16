@@ -10,9 +10,14 @@ Or it can be out of order or doubled, so the next edit to clock.go's copy puts
 the two out of step in a way difftest reports as the ports disagreeing rather
 than as the table mistake it is.
 
-So every row goes through the real resolve_zone, in three spellings, and has to
-land on its own zone under its own name. difftest holds clock.go's copy of the
+So every row goes through the real resolve_zone in each spelling that has to
+reach it -- as written, with underscores for its spaces, lower-cased and
+upper-cased -- and has to land on its own zone under its own name. difftest holds clock.go's copy of the
 tables to this one, which makes this check cover both ports.
+
+US_CODES is checked the same way: each ISO 3166-2 code has to answer exactly
+as the full name it stands for does, and the bare two letters have to stay
+whatever they already were -- a country, an abbreviation, or nothing.
 
     tools/placecheck.py [-v]
     tools/placecheck.py --geonames DIR [-v]
@@ -157,6 +162,22 @@ def check_tables(report):
                 report(name in CAPITALS or name in TERRITORIES, f"{name} has a capital or country to check against")
             else:
                 report(name in CITY_COUNTRY, f"{name} has a country to check against")
+    codes = [code for code, _ in pyclock.US_CODES]
+    report(codes == sorted(codes), "US_CODES is sorted")
+    report(len(codes) == len(set(codes)), "US_CODES has no code twice")
+    for code, name in pyclock.US_CODES:
+        want = resolves(name, now)
+        report(want[1] == name, f"{code}: {name!r} resolves as itself -- got {want}")
+        for spelling in sorted({code, pyclock.ascii_lower(code), pyclock.ascii_upper(code)}):
+            got = resolves(spelling, now)
+            report(got == want, f"{spelling!r} answers as {name!r} does"
+                   + ("" if got == want else f" -- {got} against {want}"))
+        report(pyclock.place_key(code) not in seen, f"{code} is not also a row name")
+        # The reason the codes carry the US- prefix: the bare two letters are
+        # countries and abbreviations already, and have to stay that way.
+        bare = code[len("US-"):]
+        zone, place = resolves(bare, now)
+        report(place == "" or zone is None, f"{bare} alone is not a place ({zone or place[:40]})")
     for name in LEFT_OUT:
         zone, why = resolves(name, now)
         report(zone is None and why.startswith("unknown zone"), f"{name} stays out: {why[:60]}")
@@ -205,6 +226,9 @@ def check_geonames(report, directory):
         if name in TERRITORIES:
             want = zonetab.get(TERRITORIES[name], ["?"])[0]
             report(clock_of(zone) == clock_of(want), f"{name}: {zone} is zone.tab's {want}")
+            continue
+        if name not in CAPITALS:
+            report(False, f"{name}: no capital recorded, so its zone cannot be checked")
             continue
         capital, a1 = CAPITALS[name]
         hits = [r for r in by_name.get(norm(capital), []) if r["cc"] == "US" and r["a1"] == a1]

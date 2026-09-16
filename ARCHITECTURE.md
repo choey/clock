@@ -350,6 +350,12 @@ to that:
   before the data was looked at, and the sizes are GeoNames' — city limits, not
   metro areas — which is why `St. Louis` fails against Saint-Louis, Senegal,
   and why the same rule counted another way could keep it.
+- **The codes are an alias layer, not a second table of zones.** `US_CODES`
+  maps each ISO 3166-2 code to a full name, and `place_zone` then resolves that
+  name the ordinary way, so a code cannot disagree with the name it stands for:
+  there is only ever one zone written down. Three of them — `US-NY`, `US-PR`,
+  `US-GU` — name places the tz database answers to itself, so they fall through
+  to the city tail rather than to a row.
 - **Nothing here outranks the tz database.** Both tables are consulted after
   every other kind of zone, city tails included, so a row can never take a name
   the database answers to. Ten names that would have been rows — `New York`,

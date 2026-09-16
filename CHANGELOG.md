@@ -19,6 +19,20 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
   are in a table checked against GeoNames, and a name shared with a comparably
   large city on another clock is left out, which is why `San Jose` and
   `St. Louis` are not there.
+- **A state can also be its ISO 3166-2 code**, `US-CA`, labelled with the full
+  name it stands for: `PDT (California)`. The bare two letters are not taken
+  and cannot be -- 32 of the 56 already mean something else here, and 26 of
+  those a different clock, `CA` being Canada -- so a short form that worked for
+  some states and silently drew another country for others is the thing this
+  avoids.
+- difftest's table parity compared only rows whose name and zone fit the
+  character classes it spelled out, so a row holding a hyphen or a space --
+  `America/Port-au-Prince`, or a code's full name -- was dropped from both
+  sides at once and never compared, while the check still said the tables
+  match. It takes every row of two quoted strings now, the key list included.
+- `tools/placecheck.py` checks the codes too, describes what it checks
+  accurately, and reports a state row with no capital recorded rather than
+  crashing on it.
 - **A city off the end of an IANA name is labelled the same way**, so
   `clock Berlin` reads `CEST (Berlin)` where it used to read `CEST`. That
   changes what an existing command line draws, which by this file's own rule

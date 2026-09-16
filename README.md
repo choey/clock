@@ -435,6 +435,7 @@ Resolved in this order, first match winning:
 | `JP` `GB` `DE` | that country's zone | 2-letter ISO code, via `zone.tab` |
 | `Berlin` `Jakarta` `New York` `Indiana/Indianapolis` | the zone that ends in it, labelled `CEST (Berlin)` | the city alone, where only one zone ends that way |
 | `Arizona` `New Mexico` `Washington DC` `American Samoa` | the zone its capital keeps, labelled `MST (Arizona)` | a US state, DC, or a territory |
+| `US-AZ` `US-NY` | the state that code names | ISO 3166-2, labelled with the full name |
 | `Seattle` `Salt Lake City` `Mumbai` `Munich` | that city's zone, labelled `PDT (Seattle)` | a common city the tz database has no zone for |
 
 ### Your system zone
@@ -566,9 +567,23 @@ $ clock "Texas,El Paso"
 
 A ZIP code, or a city, is exact where a state cannot be.
 
-Full names only, with a space or an underscore between words: `New Mexico`,
-`New_Mexico` or `"new mexico"`. The two-letter codes are not taken, because
-`CA`, `IN`, `DE` and `GA` are Canada, India, Germany and Gabon already.
+Full names, with a space or an underscore between words — `New Mexico`,
+`New_Mexico` or `"new mexico"` — or the ISO 3166-2 code, which is labelled with
+the full name all the same:
+
+```
+$ clock US-CA,US-NY
+   PDT (California)      EDT (New York)
+```
+
+The bare two letters are not taken, and cannot be. Of the 56 codes, 32 already
+mean something else to this clock, and 26 of those mean a different clock than
+the state does: `CA` is Canada, `IN` India, `DE` Germany, `GA` Gabon, `VA` the
+Vatican, and `CT` this clock's own Central. Six agree only by accident — `MT` is
+Montana and Mountain alike, and the five territories are their own ISO codes —
+and 24 are unclaimed today. But a short form that worked for `TX` and quietly
+drew Canada for `CA` would be worse than none at all.
+
 `Washington` is the state, and the city is `"Washington DC"` or
 `"District of Columbia"`. `Georgia` is the state, and the country is `GE`. The
 territories are `"US Virgin Islands"`, `"American Samoa"` and

@@ -80,6 +80,8 @@ ZONEISH = (
     # else, folded ASCII only.
     "Arizona", "arizona", "New Mexico", "New_Mexico", "new  mexico", "Washington DC",
     "Washington_D.C.", "St. Louis", "Boise", "Salt Lake City", "New York", "Ｂoise", "İdaho",
+    # The ISO 3166-2 codes, and the bare two letters they exist to avoid.
+    "US-CA", "us-ca", "US-ZZ", "USCA", "US-", "CA", "NY",
 )
 
 FLAGS = ("-n", "--per-row", "--scale", "--cell-ratio", "--hpad", "--vpad",

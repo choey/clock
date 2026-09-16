@@ -279,10 +279,21 @@ for size in "30 20" "40 24" "48 24" "60 24" "80 24" "100 30"; do
 	done
 done
 
+# The ISO 3166-2 codes, the only short form taken, labelled with the full name
+# rather than the code. US-NY, US-PR and US-GU reach names the tz database
+# answers to itself. The bare two letters stay what they were: NY and TX are
+# nothing, CA and IN are countries, MT and CT are this clock's own.
+for zones in US-CA us-ca Us-Ca US-AZ US-NY US-PR US-GU US-VI US-DC US-MP US-TX US-ND \
+	"US-CA,California" "US-NY,New York,ET" "US-AZ,Arizona,Phoenix" US-ZZ USCA "US-" "US- CA" \
+	NY TX MT CT CA IN; do
+	check "$SUMMER" 200 60 "$zones"
+	check "$WINTER" 200 60 "$zones"
+done
+
 # CLOCK_FREEZE takes a place as its zone too, but it splits on spaces, so a
 # place with one in its name is written with underscores there.
 for pin in "10 Arizona" "8/22 09:53 New_Mexico" "8/22 09:53 New Mexico" "10 Washington_DC" \
-	"10 St._Louis" "2026-03-08 02:30:00 Tennessee" "7/22 10 Seattle"; do
+	"10 St._Louis" "2026-03-08 02:30:00 Tennessee" "7/22 10 Seattle" "10 US-AZ"; do
 	check "$pin" 80 24 UTC
 done
 
@@ -906,14 +917,20 @@ else
 fi
 
 echo "== embedded table parity =="
-sed -n 's/^	{"\([A-Za-z][A-Za-z .]*\)", "\([A-Za-z_/]*\)"},$/\1=\2/p' clock.go >"$out/go.tab"
-sed -n 's/^    ("\([A-Za-z][A-Za-z .]*\)", "\([A-Za-z_/]*\)"),$/\1=\2/p' pyclock.py >"$out/py.tab"
+# Every row of two quoted strings in either file, whatever is inside them: the
+# aliases, the states, their codes, the cities, and the key list. The character
+# classes here used to spell out what a name and a zone may hold, which quietly
+# dropped any row they had not anticipated -- a hyphen in America/Port-au-Prince,
+# a space in a code's full name -- from both sides at once, so the two ports
+# could disagree about that row and this would still say the tables match.
+sed -n 's/^	{"\([^"]*\)", "\([^"]*\)"},$/\1=\2/p' clock.go >"$out/go.tab"
+sed -n 's/^    ("\([^"]*\)", "\([^"]*\)"),$/\1=\2/p' pyclock.py >"$out/py.tab"
 if [ -s "$out/go.tab" ] && cmp -s "$out/go.tab" "$out/py.tab"; then
 	pass=$((pass + 1))
-	[ -z "$verbose" ] || printf 'ok   alias, hint, state and city tables match (%s entries)\n' \
+	[ -z "$verbose" ] || printf 'ok   every two-string table matches across the ports (%s rows)\n' \
 		"$(wc -l <"$out/go.tab" | tr -d ' ')"
 else
-	echo 'FAIL alias, hint, state or city tables differ between clock.go and pyclock.py'
+	echo 'FAIL a two-string table differs between clock.go and pyclock.py'
 	diff -u "$out/py.tab" "$out/go.tab" || true
 	fail=$((fail + 1))
 fi

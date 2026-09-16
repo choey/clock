@@ -1498,12 +1498,10 @@ def country_zone(cc, label, at):
         return None  # not a country code we know; caller falls through
     if len(zones) == 1:
         return zones[0]
-    shown, tail = kept, ""
-    if len(shown) > 8:
-        tail = f" (and {len(shown) - 8} more)"
-        shown = shown[:8]
+    # All of them, however many: the list is what the reader has to choose
+    # from, and a count of the ones it withheld helps nobody choose.
     raise ClockError(
-        f"{label} spans {len(kept)} time zones; name one: " + ", ".join(shown) + tail
+        f"{label} spans {len(kept)} time zones; name one: " + ", ".join(kept)
     )
 
 
@@ -1547,14 +1545,8 @@ def suffix_zone(token):
     if not found or not names:
         return None, ""
     if len(names) > 1:
-        shown, tail = names, ""
-        if len(shown) > 8:
-            tail = f" (and {len(shown) - 8} more)"
-            shown = shown[:8]
         raise ClockError(
-            f"{token} names {len(names)} zones; name one in full: "
-            + ", ".join(shown)
-            + tail
+            f"{token} names {len(names)} zones; name one in full: " + ", ".join(names)
         )
     try:
         return ZoneInfo(names[0]), place_name(names[0], token)

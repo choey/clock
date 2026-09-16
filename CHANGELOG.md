@@ -19,6 +19,11 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
   are in a table checked against GeoNames, and a name shared with a comparably
   large city on another clock is left out, which is why `San Jose` and
   `St. Louis` are not there.
+- **A place that spans zones names every one of them.** The message stopped at
+  eight and counted the rest -- `Asia/Chita (and 3 more)` -- which is a list
+  you cannot choose from, since the three it withheld were three of the
+  answers. Russia's eleven and Canada's ten are all there now, and so is every
+  zone behind an ambiguous city name.
 - **A country says where it landed too, by code or by name.** `clock DE` draws
   `CEST (DE)` where it drew `CEST`, and `clock Germany` now works at all, along
   with every other name in the tz database's `iso3166.tab` -- an `&` may be

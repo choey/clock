@@ -230,7 +230,8 @@ done
 
 # Every city in the tz database is unique today, so ambiguity only shows up
 # against a zone.tab written for the purpose: two zones sharing a tail, and
-# ten, which is past the eight the message lists before it starts counting.
+# ten, which is more than anyone would want to read and is listed in full
+# anyway -- a list that stops short is a list you cannot choose from.
 mkdir -p "$out/tz2" "$out/tz10"
 printf 'XX\t+0000\tEurope/Berlin\nYY\t+0000\tAmerica/Berlin\n' >"$out/tz2/zone.tab"
 : >"$out/tz10/zone.tab"

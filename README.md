@@ -536,19 +536,19 @@ A country that genuinely spans zones asks you to pick, by whichever spelling
 you used:
 
 ```
-$ clock US
-clock: US spans 8 time zones; name one: America/New_York, America/Chicago, ...
 $ clock "United States"
-clock: United States spans 8 time zones; name one: America/New_York, ...
-$ clock Canada
-clock: Canada spans 10 time zones; name one: America/St_Johns, ... (and 2 more)
+clock: United States spans 8 time zones; name one: America/New_York,
+America/Chicago, America/Denver, America/Phoenix, America/Los_Angeles,
+America/Anchorage, America/Adak, Pacific/Honolulu
 ```
 
-The count is of clocks rather than of zones: `zone.tab` lists 29 for the US and
-23 for Canada, and the ones reading alike at that instant collapse first. Past
-eight the list says how many more there are. Countries whose zones *all* agree —
-Germany lists both `Europe/Berlin` and the `Europe/Busingen` enclave — collapse
-to a single face and resolve without complaint.
+Every zone it means is named, however many there are — Russia's eleven, Canada's
+ten — since a list you cannot see the end of is a list you cannot choose from.
+The count is of clocks rather than of zones: `zone.tab` holds 29 for the US and
+23 for Canada, and the ones reading alike at that instant collapse first.
+Countries whose zones *all* agree — Germany lists both `Europe/Berlin` and the
+`Europe/Busingen` enclave — collapse to a single face and resolve without
+complaint.
 
 ### States and cities
 
@@ -953,10 +953,10 @@ that does not load, on a row something asked earlier already answers to — a ci
 called `Japan` would be the tz database's, never the table's — and on a table
 out of order. It checks the ISO codes answer exactly as the names they stand for
 do, that the bare two letters never answer as a state, and that the countries
-the tz database supplies come back labelled as they should. What it cannot see offline is a zone that loads and is simply
-wrong: moving Seattle to Denver in both ports passes it. That, and any change to
-a row, is what `--geonames` is for, which checks every zone against a downloaded
-GeoNames city list.
+the tz database supplies come back labelled as they should. What it cannot see
+offline is a zone that loads and is simply wrong: moving Seattle to Denver in
+both ports passes it. That, and any change to a row, is what `--geonames` is
+for, which checks every zone against a downloaded GeoNames city list.
 
 ```sh
 tools/placecheck.py -v

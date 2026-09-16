@@ -1710,14 +1710,10 @@ func countryZone(cc, label string, at time.Time) (*time.Location, error) {
 	case len(locs) == 1:
 		return locs[0], nil
 	}
-	shown := kept
-	tail := ""
-	if len(shown) > 8 {
-		tail = fmt.Sprintf(" (and %d more)", len(shown)-8)
-		shown = shown[:8]
-	}
-	return nil, fmt.Errorf("%s spans %d time zones; name one: %s%s",
-		label, len(kept), strings.Join(shown, ", "), tail)
+	// All of them, however many: the list is what the reader has to choose
+	// from, and a count of the ones it withheld helps nobody choose.
+	return nil, fmt.Errorf("%s spans %d time zones; name one: %s",
+		label, len(kept), strings.Join(kept, ", "))
 }
 
 // suffixZones is the zones whose name ends with the token as a whole path
@@ -1761,13 +1757,8 @@ func suffixZone(token string) (*time.Location, string, error) {
 		return nil, "", nil
 	}
 	if len(names) > 1 {
-		shown, tail := names, ""
-		if len(shown) > 8 {
-			tail = fmt.Sprintf(" (and %d more)", len(shown)-8)
-			shown = shown[:8]
-		}
-		return nil, "", fmt.Errorf("%s names %d zones; name one in full: %s%s",
-			token, len(names), strings.Join(shown, ", "), tail)
+		return nil, "", fmt.Errorf("%s names %d zones; name one in full: %s",
+			token, len(names), strings.Join(names, ", "))
 	}
 	loc, err := time.LoadLocation(names[0])
 	if err != nil {

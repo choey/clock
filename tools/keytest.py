@@ -564,25 +564,32 @@ def shell_job(argv, freeze=FROZEN):
 
     os.close(tell)
     news = os.fdopen(heard, "r")
-    # The shim's first line names the clock. An empty one means it died before
-    # it got that far, which used to surface as an IndexError from splitting
-    # nothing -- a traceback that named neither the shim nor what it had
-    # managed to say, and took the whole run down with it.
-    first = news.readline()
-    fields = first.split()
-    if len(fields) != 2 or fields[0] != "pid":
-        raise RuntimeError(f"the job-control shim never named the clock: {first!r}")
-    pid = int(fields[1])
+    pid = None
+    # Everything from here is inside the try, reading the pid included. It used
+    # to be read first, so when that line was missing or malformed the cleanup
+    # below never ran and the shim -- parked in signal.pause() on purpose --
+    # was left alive with nothing to reap it.
     try:
+        # The shim's first line names the clock. An empty one means it died
+        # before it got that far, which used to surface as an IndexError from
+        # splitting nothing: a traceback that named neither the shim nor what
+        # it had managed to say.
+        first = news.readline()
+        fields = first.split()
+        if len(fields) != 2 or fields[0] != "pid":
+            raise RuntimeError(f"the job-control shim never named the clock: {first!r}")
+        pid = int(fields[1])
         yield master, slave, pid, news
     finally:
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGCONT)
-            os.kill(pid, signal.SIGKILL)
+        if pid is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGCONT)
+                os.kill(pid, signal.SIGKILL)
         news.close()
         os.close(master)
         os.close(slave)
-        os.kill(shim, signal.SIGKILL)
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(shim, signal.SIGKILL)
         os.waitpid(shim, 0)
 
 

@@ -187,11 +187,16 @@ def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None, marks=None, env=No
     for key in keys:
         if proc.poll() is not None:
             break
+        # A key may name its own settle: (bytes, seconds). Only the split
+        # keystroke below wants one, and it wants it shorter than a frame.
+        wait = settle
+        if isinstance(key, tuple):
+            key, wait = key
         try:
             os.write(master, key)
         except OSError:  # it quit between the poll above and this write
             break
-        if not drain(settle):
+        if not drain(wait):
             if marks is not None:
                 marks.append(len(out))
             break
@@ -960,7 +965,7 @@ def main():
         compare_tune("a value it will not have is refused",
                      [b"r", b"zz", b"\r", ESC], [0, 1, 1, 1, 0, 0])
         compare_tune("a scale too large for the window is refused but stays undoable",
-                     [b"r", DOWN, DOWN, DOWN, DOWN, b"99", b"\r", b"auto", b"\r", ESC])
+                     [b"r"] + [DOWN] * 5 + [b"99", b"\r", b"auto", b"\r", ESC])
         compare_tune("esc backs out of what is being typed before the tuner",
                      [b"r", b"left", ESC, ESC], [0, 1, 1, 1, 0, 0])
         # With the tuner up these are letters: a case that quit here would
@@ -969,6 +974,54 @@ def main():
                      [b"r", b"q", b"h", ESC, ESC], [0, 1, 1, 1, 1, 0, 0])
         compare_tune("a lone esc closes the tuner, an arrow does not",
                      [b"r", UP, ESC], [0, 1, 1, 0, 0])
+        # Stepping: the arrows and space move a value without typing one, and
+        # what they land on is what the flag spells the same way.
+        LEFT, RIGHT = b"\x1b[D", b"\x1b[C"
+        compare_tune("left and right step a value", [b"r", RIGHT, LEFT, ESC],
+                     [0, 1, 1, 1, 0, 0])
+        compare_tune("space walks the words round", [b"r", b" ", b" ", b" ", ESC],
+                     [0, 1, 1, 1, 1, 0, 0])
+        # center, right, and then nowhere: an arrow stops where the list does,
+        # where space would have wrapped.
+        compare_tune("an arrow stops at the end of the list",
+                     [b"r", RIGHT, RIGHT, ESC], [0, 1, 1, 0, 0])
+        tuned_layout("six rights on hpad draw what --hpad 5% draws",
+                     [b"r", DOWN, DOWN] + [RIGHT] * 6 + [ESC], ["--hpad", "5%"],
+                     args=("-q", "ET,PT,UTC"))
+        tuned_layout("one space on halign draws what --halign right draws",
+                     [b"r", b" ", ESC], ["--halign", "right"],
+                     args=("-q", "ET,PT,UTC"))
+        tuned_layout("one right on scale leaves auto for the plain size",
+                     [b"r", DOWN, DOWN, DOWN, DOWN, DOWN, RIGHT, ESC], ["--scale", "1"],
+                     args=("-q", "UTC"))
+        # A held arrow: the terminal sends ESC [ C over and over, and a read
+        # can end anywhere in that. An ESC left at the end of a frame used to
+        # be answered as the key, which closed the tuner mid-keypress.
+        # An arrow split across a read boundary is still an arrow: the ESC
+        # goes on its own and the rest of it a few milliseconds later, where a
+        # held-down key puts them, inside the grace the decoder gives a
+        # half-read keystroke. Whole frames of grace rather than a timer, so
+        # both ports answer on the same frame. The ESC alone changes nothing
+        # on screen, so the states either side of it are the pad before the
+        # arrow and the pad after it -- where a decoder that answered the ESC
+        # where it landed would close the tuner instead, and say so loudly.
+        compare_tune("an arrow split across a read is still an arrow",
+                     [b"r", DOWN, DOWN, (b"\x1b", 0.005), b"[C", ESC],
+                     [0, 1, 1, 1, 1, 0, 0])
+        compare_tune("and a lone esc is still an esc, one frame later",
+                     [b"r", b"\x1b", b"r", ESC], [0, 1, 0, 1, 0, 0])
+        # per-row is a knob like the rest, and the only one that changes how
+        # many clocks a row holds rather than how big they are.
+        tuned_layout("stepping per-row draws what -n draws",
+                     [b"r", DOWN, DOWN, DOWN, DOWN, RIGHT, LEFT, ESC],
+                     ["-n", "2"], args=("-q", "ET,PT,UTC,JP"))
+        tuned_layout("a typed per-row draws what --per-row draws",
+                     [b"r", DOWN, DOWN, DOWN, DOWN, b"2", b"\r", ESC],
+                     ["--per-row", "2"], args=("-q", "ET,PT,UTC,JP"))
+        tuned_layout("a tenth off the cell ratio draws what --cell-ratio draws",
+                     [b"r"] + [DOWN] * 6 + [LEFT, ESC],
+                     ["--cell-ratio", "2"], args=("-q", "UTC"))
+
         # What the tuner is for: the same layout the flag would have drawn.
         tuned_layout("a tuned hpad draws what --hpad draws",
                      [b"r", DOWN, DOWN, b"5%", b"\r", ESC], ["--hpad", "5%"],
@@ -977,7 +1030,7 @@ def main():
                      [b"r", b"left", b"\r", ESC], ["--halign", "left"],
                      args=("-q", "ET,PT,UTC"))
         tuned_layout("a tuned scale draws what --scale draws",
-                     [b"r", DOWN, DOWN, DOWN, DOWN, b"1", b"\r", ESC], ["--scale", "1"],
+                     [b"r"] + [DOWN] * 5 + [b"1", b"\r", ESC], ["--scale", "1"],
                      args=("-q", "UTC"))
         # And what it leaves behind: the flags, in the note and again on the
         # way out, where the screen the clock was tuned on has gone.

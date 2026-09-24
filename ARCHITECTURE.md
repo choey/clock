@@ -158,26 +158,37 @@ and the face is padded into its cell when drawn. The weekday is the same
 problem solved the other way: below `DAY_COLS` it is dropped rather than
 widening every cell to hold it.
 
-**The tuner.** `r` puts up the six layout knobs and reads a value into any of
+**The tuner.** `r` puts up the seven layout knobs and reads a value into any of
 them. It keeps them as the *text* they were given in, not as parsed values:
 that text is what the flags were spelled with, what the box shows, what a
 parting line hands back -- and it means no number is ever formatted back out,
 which matters because Go's `%g` and Python's `:g` part company past six
 significant digits. Every value goes through `checkTune`/`check_tune`, which
 is the flag's own parser, so the tuner cannot accept a spelling the command
-line refuses; `readTunes`/`read_tunes` then reads the six back into the
+line refuses; `readTunes`/`read_tunes` then reads the seven back into the
 settings the frame loop lays out with, and cannot fail, because nothing
 unchecked is ever stored.
 
-Two things about it are not the obvious choice. It is the one modal that shows
-over a window too small for the clocks -- every other one is hidden there --
-because a `--scale` typed too large is undone from inside it, and hiding it
-would leave nothing to undo it with. And it is not laid *over* the grid at
-all where there is room: the grid is laid out in `lines - tuneHeight` and the
-box takes the rest, since the whole point is watching the faces change while
-they are adjusted. That is also why the box's height is a constant rather than
-something measured after it is built -- the layout needs it before there is a
-box.
+One thing about it is not the obvious choice: it is the modal that shows over
+a window too small for the clocks, where every other one is hidden. That is
+exactly the window a `--scale` typed too large leaves behind, and hiding the
+way out of it there would be hiding it when it is needed most.
+
+Arrows and space step a value rather than typing one, and what they step
+through is the same gate: `tuneStep` hands back the text it started from
+whenever `checkTune` refuses what it landed on, so stepping cannot reach a
+value typing would be refused for. The arithmetic is in integers -- whole
+percents, whole faces, and *tenths* for the two decimals -- and the text is
+assembled by hand, because the moment a float is formatted back into a string
+the two ports are one `%g` away from disagreeing. `canonTune` is the other
+half of that: a pad typed as `5` and one typed as `5%` are one value, so both
+are written down as `5%`, and the box, the saved file and the printed command
+all say the same thing. The decimals are left exactly as typed, since
+rewriting `2.15` as `2.2` would be rounding a value nobody asked to round.
+
+`--per-row` is a knob like the rest, held as text next to them, which is why
+`-n 2` and a `2` stepped into the box are the same thing to everything
+downstream -- including the saved file, which writes `--per-row`.
 
 **Arrow keys, and a lone Esc.** The tuner is the first thing here to read a
 key that is more than one byte: an arrow arrives as `ESC [ A`, or `ESC O A`
@@ -189,6 +200,16 @@ about the machine's speed, and `tools/keytest.py` compares the frames. Both
 ports hold the ESC instead and decide it at the end of the batch of keys a
 frame reads, which is the same point in both loops -- a channel drained until
 the tick in Go, one `os.read` in Python.
+
+One batch of grace is not enough, though, and a held-down arrow is what shows
+it: the terminal sends `ESC [ C` fifty times a second and a read can end
+anywhere inside that, so an ESC left over at the end of a frame is as likely
+to be half an arrow as a whole Esc. Answering it there closed the tuner
+mid-keypress. A pending sequence therefore has to survive `escGrace` frames
+with nothing following it before it is called -- two, or 38ms, which is
+nothing to wait for an Esc and far longer than bytes the terminal has already
+written need to arrive. Frames rather than a timer, again, so both ports
+answer on the same frame and keytest can compare them.
 
 **The preferences file.** `S` writes the clock on screen to
 `~/.config/clock/config` and startup reads it back. It is not a configuration

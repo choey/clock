@@ -22,7 +22,7 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
   what it would have taken to start the clock that way, and prints it again
   once the screen has gone back to the shell.
 - **`S` saves the clock, and the next one starts that way.** The layout the
-  tuner left, the `-n`, and the zones on screen, written to
+  tuner left, the per-row count, and the zones on screen, written to
   `~/.config/clock/config` and read at startup. The file is an argument list
   rather than a format of its own -- one token per line, read by the same
   parser the command line goes through, before the command line goes through

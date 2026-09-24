@@ -147,6 +147,7 @@ TUNABLES = (
     ("valign", "top, center or bottom"),
     ("hpad", "even, or a share like 10%"),
     ("vpad", "even, or a share like 5%"),
+    ("per-row", "auto, or a count like 3"),
     ("scale", "auto, or a number like 1.5"),
     ("cell-ratio", "a number like 2.1"),
 )
@@ -157,15 +158,18 @@ TUNABLES = (
 # and no number is ever formatted back out -- Go's %g and Python's :g do not
 # agree past six significant digits, and a value the reader typed is not ours
 # to round anyway.
-TUNE_HALIGN, TUNE_VALIGN, TUNE_HPAD, TUNE_VPAD, TUNE_SCALE, TUNE_CELL_RATIO = range(6)
+(
+    TUNE_HALIGN,
+    TUNE_VALIGN,
+    TUNE_HPAD,
+    TUNE_VPAD,
+    TUNE_PER_ROW,
+    TUNE_SCALE,
+    TUNE_CELL_RATIO,
+) = range(7)
 NUM_TUNES = len(TUNABLES)
 
 TUNE_COL = 12  # where the values start, past the longest name plus a gutter
-
-# How tall the tuner's box is, known before it is built so the grid can be
-# laid out in what is left of the window: a row per knob, then a blank, what
-# the knob takes, the footer, and the border.
-TUNE_HEIGHT = NUM_TUNES + 5
 
 # Said once, in the same modal the key list uses, and then dropped: a clock
 # that has taken the whole screen owes the reader a way back out, but only
@@ -266,7 +270,7 @@ def default_tunes():
     bad value there is not a user error -- it is simply ignored, the same way
     an unset one is.
     """
-    vals = ["center", "center", "even", "even", "auto", DEFAULT_CELL_RATIO_TEXT]
+    vals = ["center", "center", "even", "even", "auto", "auto", DEFAULT_CELL_RATIO_TEXT]
     env = os.environ.get("CLOCK_CELL_RATIO", "")
     if env and positive_number(env) is not None:
         vals[TUNE_CELL_RATIO] = env
@@ -1018,7 +1022,7 @@ def parse_pad(flag, val):
 # back from the text with read_tunes whenever the text changes -- at startup,
 # and after every value the tuner takes.
 Settings = collections.namedtuple(
-    "Settings", "halign valign hpad vpad cell_ratio scale_auto rows"
+    "Settings", "halign valign hpad vpad cell_ratio scale_auto rows per_row per_row_auto"
 )
 
 
@@ -1052,11 +1056,39 @@ def check_tune(i, val):
         parse_choice("valign", val, VALIGNS)
     elif i in (TUNE_HPAD, TUNE_VPAD):
         parse_pad(TUNABLES[i][0], val)
+    elif i == TUNE_PER_ROW:
+        if val != "auto":
+            parse_count(val, "--per-row", MAX_PER_ROW)
     elif i == TUNE_SCALE:
         if val != "auto":
             rows_for_scale(parse_scale(val))
     else:
         parse_ratio(val)
+
+
+def canon_tune(i, val):
+    """How a value is written down once it has been accepted.
+
+    A pad typed as "5" and one typed as "5%" are the same share, and a count
+    typed as "007" is three faces a row, so the tuner, the saved file and the
+    line it prints all say the one spelling. The decimals are left exactly as
+    typed -- rewriting 2.15 as 2.2 would be rounding a value nobody asked to
+    round.
+    """
+    if i in (TUNE_HPAD, TUNE_VPAD):
+        try:
+            n = parse_pad(TUNABLES[i][0], val)
+        except ClockError:
+            return val
+        return val if n is None else f"{n}%"
+    if i == TUNE_PER_ROW:
+        if val == "auto":
+            return val
+        try:
+            return str(parse_count(val, "--per-row", MAX_PER_ROW))
+        except ClockError:
+            return val
+    return val
 
 
 def read_tunes(vals):
@@ -1071,6 +1103,10 @@ def read_tunes(vals):
     if vals[TUNE_SCALE] != "auto":
         scale_auto = False
         rows = rows_for_scale(positive_number(vals[TUNE_SCALE]))
+    per_row, per_row_auto = DEFAULT_PER_ROW, True
+    if vals[TUNE_PER_ROW] != "auto":
+        per_row = parse_count(vals[TUNE_PER_ROW], "--per-row", MAX_PER_ROW)
+        per_row_auto = False
     return Settings(
         vals[TUNE_HALIGN],
         vals[TUNE_VALIGN],
@@ -1079,6 +1115,8 @@ def read_tunes(vals):
         DEFAULT_CELL_RATIO if cell_ratio is None else cell_ratio,
         scale_auto,
         rows,
+        per_row,
+        per_row_auto,
     )
 
 
@@ -1105,8 +1143,6 @@ class Options:
     """
 
     def __init__(self):
-        self.per_row = DEFAULT_PER_ROW  # only used when an explicit -n/--per-row overrides per_row_auto
-        self.per_row_auto = True  # the default: run() also searches per-row counts, to maximise ROWS
         self.zone_list = ""
         self.color_when = "auto"
         self.day_when = ""  # unset: run() picks it, since a pinned clock differs
@@ -1224,11 +1260,12 @@ def parse_args(argv, opt):
                     if i >= len(argv):
                         raise ClockError("--per-row needs a number, e.g. --per-row 2")
                     val = argv[i]
-                if val == "auto":
-                    opt.per_row_auto = True
-                else:
-                    opt.per_row = parse_count(val, "--per-row", MAX_PER_ROW)
-                    opt.per_row_auto = False
+                # Kept as text alongside the layout knobs, which is where the
+                # tuner reads it from; the count is parsed here all the same,
+                # so the complaint is --per-row's own.
+                if val != "auto":
+                    parse_count(val, "--per-row", MAX_PER_ROW)
+                opt.vals[TUNE_PER_ROW] = canon_tune(TUNE_PER_ROW, val)
             elif name == "color":
                 # Bare --color means always, and takes no separate argument:
                 # "clock --color ET" names a zone list, exactly as ls and git
@@ -1267,7 +1304,7 @@ def parse_args(argv, opt):
                 # the tuner and a saved command line say what was typed.
                 k = tune_index(name)
                 check_tune(k, val)
-                opt.vals[k] = val
+                opt.vals[k] = canon_tune(k, val)
             else:
                 raise ClockError(f"unknown option: --{name}")
         elif a == "-q":
@@ -1283,11 +1320,9 @@ def parse_args(argv, opt):
                 rest = argv[i]
             elif rest[0] == "=":
                 raise ClockError('-n takes its value as "-n N" or "-nN", not "-n=N"')
-            if rest == "auto":
-                opt.per_row_auto = True
-            else:
-                opt.per_row = parse_count(rest, "-n", MAX_PER_ROW)
-                opt.per_row_auto = False
+            if rest != "auto":
+                parse_count(rest, "-n", MAX_PER_ROW)
+            opt.vals[TUNE_PER_ROW] = canon_tune(TUNE_PER_ROW, rest)
         else:
             positional.append(a)
         i += 1
@@ -2252,6 +2287,135 @@ class Tuner:
         self.err = ""  # the last refusal, in the flag's own words
 
 
+def tune_options(i):
+    """The words a knob takes, for the two that take words rather than numbers.
+
+    The lists the flags themselves are checked against, so the tuner offers
+    exactly what --halign and --valign accept.
+    """
+    if i == TUNE_HALIGN:
+        return HALIGNS
+    if i == TUNE_VALIGN:
+        return VALIGNS
+    return None
+
+
+def tune_word(i):
+    """The word a numeric knob takes instead of a number.
+
+    It sits one step below the knob's smallest value: even for a pad, auto for
+    the scale. The cell ratio has none -- there is no "work it out for me" for
+    a font.
+    """
+    if i in (TUNE_HPAD, TUNE_VPAD):
+        return "even"
+    if i in (TUNE_SCALE, TUNE_PER_ROW):
+        return "auto"
+    return ""
+
+
+def tenths_text(tenths):
+    """A count of tenths as a decimal, written by hand: 21 is "2.1", 20 is "2".
+
+    Every number the tuner steps to is built this way rather than formatted
+    from a float, which is what keeps the two ports spelling the same value
+    the same -- see the note on TUNABLES.
+    """
+    if tenths % 10 == 0:
+        return str(tenths // 10)
+    return f"{tenths // 10}.{tenths % 10}"
+
+
+def tune_step(i, val, delta, wrap):
+    """Move a knob one step, returning the text it lands on.
+
+    Or the text it started from, where there is nowhere to go. A word list
+    walks, and wraps if asked (which is what space does, and the arrows do
+    not). A pad moves a whole percent, since that is what it counts; the scale
+    and the cell ratio move a tenth, counted as integer tenths so no float is
+    formatted back into text. Below the smallest number is the knob's word,
+    where it has one, and above the largest is nothing at all.
+
+    Anything it lands on goes through check_tune before it is handed back, so
+    stepping cannot reach a value typing would be refused for -- a scale one
+    step past what the face may be simply does not move.
+    """
+    options = tune_options(i)
+    if options is not None:
+        at = options.index(val) if val in options else 0
+        following = at + delta
+        if wrap:
+            following %= len(options)
+        if not 0 <= following < len(options):
+            return val
+        return options[following]
+
+    word = tune_word(i)
+    if val == word:
+        if delta < 0:
+            return val  # already below the smallest number there is
+        # Back into numbers at the plain default, which is the size, the
+        # spacing and the row an untouched clock has.
+        if i == TUNE_SCALE:
+            return "1"
+        if i == TUNE_PER_ROW:
+            return str(DEFAULT_PER_ROW)
+        return "0%"
+
+    if i == TUNE_PER_ROW:
+        try:
+            n = parse_count(val, "--per-row", MAX_PER_ROW)
+        except ClockError:
+            return val
+        if n + delta < 1:
+            return word
+        following = str(n + delta)
+    elif i in (TUNE_HPAD, TUNE_VPAD):
+        try:
+            n = parse_pad(TUNABLES[i][0], val)
+        except ClockError:
+            return val
+        n = 0 if n is None else n
+        if n + delta < 0:
+            return word
+        following = f"{n + delta}%"
+    else:
+        value = positive_number(val)
+        if value is None:
+            return val
+        tenths = math.floor(value * 10 + 0.5) + delta
+        if tenths <= 0:
+            return word or val
+        following = tenths_text(tenths)
+    try:
+        check_tune(i, following)
+    except ClockError:
+        # Off the end of what this knob may be. The scale has somewhere to go
+        # at the bottom -- auto -- and nowhere at the top.
+        return word if delta < 0 and word else val
+    return following
+
+
+def tune_show(i, val):
+    """A knob's value as the box says it.
+
+    The words it takes with the one it holds in brackets, or -- for a number
+    -- the steps either side of it, so the size of a step is on screen rather
+    than something to find out by pressing a key.
+    """
+    options = tune_options(i)
+    if options is not None:
+        return " ".join(f"[{o}]" if o == val else o for o in options)
+    out = f"[{val}]"
+    previous = tune_step(i, val, -1, False)
+    if previous != val:
+        out = f"{previous} {out}"
+    following = tune_step(i, val, 1, False)
+    if following != val:
+        out = f"{out} {following}"
+    return out
+
+
 def tune_rows(tune, vals):
     """The tuner's modal, one row per knob and a footer.
 
@@ -2265,12 +2429,17 @@ def tune_rows(tune, vals):
     rows = []
     for i, (name, _) in enumerate(TUNABLES):
         mark = "> " if i == tune.sel else "  "
-        val = tune.edit + "_" if i == tune.sel and tune.editing else vals[i]
+        val = tune.edit + "_" if i == tune.sel and tune.editing else tune_show(i, vals[i])
         if i == TUNE_SCALE:
-            val = f"{val:<6}({ROWS} rows)"
+            val += f"   ({ROWS} rows)"
         rows.append(f"{mark}{name:<{TUNE_COL}}{val}")
     say = tune.err or TUNABLES[tune.sel][1]
-    return rows + ["", say, "up down pick   type a value   enter set   esc done"]
+    return rows + [
+        "",
+        say,
+        "up down pick   left right or space change",
+        "or type a value and enter   esc done",
+    ]
 
 
 def tune_flags(vals):
@@ -2287,22 +2456,20 @@ def tune_flags(vals):
     return out
 
 
-def config_tokens(vals, zone_list, per_row, per_row_auto):
+def config_tokens(vals, zone_list):
     """The clock on screen written as an argument list.
 
-    The knobs that differ from an untouched clock's, the -n if one was given,
-    and the zone list as it was typed. What S saves, one token per line, and
+    The knobs that differ from an untouched clock's -- the per-row count among
+    them -- and the zone list as it was typed. What S saves, one token per line, and
     what the line the tuner leaves behind is made of.
     """
     tokens = tune_flags(vals)
-    if not per_row_auto:
-        tokens += ["-n", str(per_row)]
     if zone_list:
         tokens.append(zone_list)
     return tokens
 
 
-def tune_command(vals, zone_list, per_row, per_row_auto):
+def tune_command(vals, zone_list):
     """The same list said out loud: quoted for a shell.
 
     Empty unless some knob was actually moved -- a clock still at its defaults
@@ -2312,9 +2479,7 @@ def tune_command(vals, zone_list, per_row, per_row_auto):
     """
     if not tune_flags(vals):
         return ""
-    return " ".join(
-        shell_quote(t) for t in config_tokens(vals, zone_list, per_row, per_row_auto)
-    )
+    return " ".join(shell_quote(t) for t in config_tokens(vals, zone_list))
 
 
 # What a shell reads as one word, and so needs no quoting.
@@ -2738,10 +2903,17 @@ def pending_keys():
     return os.read(sys.stdin.fileno(), 64)
 
 
+# How many frames a half-read keystroke is given to finish -- 38ms, which is
+# nothing to wait for an Esc and more than enough for bytes the terminal has
+# already written.
+ESC_GRACE = 2
+
 # Keys the tuner reads that are not one character: what KeyDecoder hands back
 # instead of a byte.
 KEY_UP = "\x01up"
 KEY_DOWN = "\x01down"
+KEY_LEFT = "\x01left"
+KEY_RIGHT = "\x01right"
 KEY_ENTER = "\x01enter"
 KEY_BACK = "\x01back"
 KEY_ESC = "\x01esc"
@@ -2753,21 +2925,32 @@ class KeyDecoder:
     Arrows arrive as an escape sequence -- ESC [ A, or ESC O A from a terminal
     in application cursor mode -- so ESC cannot be answered the moment it
     lands: it is either a key of its own or the first byte of one. It is held
-    until the byte after it says which, and flush() is what decides a lone
-    one, at the end of the batch of keys a frame reads. Both ports flush at
+    until the byte after it says which, and settle() is what decides a lone
+    one, at the end of the batch of keys a frame reads. Both ports settle at
     that same point rather than on a timeout: a timer would make which frame
     an Esc lands in a question about the machine's speed, and keytest compares
     the frames.
+
+    A batch boundary is not the end of a keystroke, though, which is what a
+    held-down arrow shows: the terminal sends ESC [ C fifty times a second and
+    a read can end anywhere in that, so an ESC left over at the end of one
+    frame is as likely to be half an arrow as it is a whole Esc. Answering it
+    there closed the tuner mid-keypress. So a pending sequence has to sit out
+    a whole frame with nothing following it before it is called: `waited`
+    counts the frames it has survived, and one is enough, since the rest of a
+    sequence the terminal has already sent is never more than a read away.
     """
 
     def __init__(self):
         self.state = 0  # 0 nothing pending, 1 an ESC, 2 inside a sequence
+        self.waited = 0  # frames the pending thing has sat through
 
     def feed(self, b):
         """Read one byte, returning the keys it completes.
 
         None, one, or -- an ESC followed by an ordinary key -- two.
         """
+        self.waited = 0
         if self.state == 1:
             if b in (0x5B, 0x4F):  # [ or O
                 self.state = 2
@@ -2786,6 +2969,10 @@ class KeyDecoder:
                 return [KEY_UP]
             if b == 0x42:  # B
                 return [KEY_DOWN]
+            if b == 0x43:  # C
+                return [KEY_RIGHT]
+            if b == 0x44:  # D
+                return [KEY_LEFT]
             return []
         if b == 0x1B:
             self.state = 1
@@ -2798,13 +2985,22 @@ class KeyDecoder:
             return [chr(b)]
         return []
 
-    def flush(self):
-        """End the batch.
+    def settle(self):
+        """End a frame's batch of keys.
 
-        An ESC still waiting to be told what it was is the key itself, and a
-        sequence cut off part way through is dropped.
+        Nothing pending, nothing to do; and anything pending gets one frame's
+        grace, in case it is a keystroke the read cut in half. What is still
+        there after that was all there was: a bare ESC is the key, and a
+        sequence that never finished is dropped rather than left to swallow
+        the next key that arrives.
         """
-        state, self.state = self.state, 0
+        if self.state == 0:
+            return []
+        if self.waited < ESC_GRACE:
+            self.waited += 1
+            return []
+        state = self.state
+        self.state, self.waited = 0, 0
         return [KEY_ESC] if state == 1 else []
 
 
@@ -2907,7 +3103,6 @@ def run(argv):
     opt = parse_args(argv, opt)
 
     vals = opt.vals
-    asked_per_row, per_row_auto = opt.per_row, opt.per_row_auto
     zone_list, quiet = opt.zone_list, opt.quiet
     zones = resolve_zones(zone_list, frozen or datetime.now(timezone.utc))
 
@@ -2949,9 +3144,7 @@ def run(argv):
         could not be.
         """
         try:
-            save_config(
-                conf, config_tokens(vals, zone_list, asked_per_row, per_row_auto)
-            )
+            save_config(conf, config_tokens(vals, zone_list))
         except ClockError as exc:
             return str(exc)
         return f"saved to {conf}"
@@ -2977,6 +3170,18 @@ def run(argv):
                 step = NUM_TUNES - 1 if key == KEY_UP else 1
                 tune.sel = (tune.sel + step) % NUM_TUNES
                 tune.edit, tune.editing, tune.err = "", False, ""
+            elif key in (KEY_LEFT, KEY_RIGHT, " "):
+                # Straight onto the clocks: every value stepping can reach has
+                # already been through check_tune, so there is nothing to
+                # confirm and nothing that can be refused. Space walks the
+                # words round their list, where the arrows stop at the ends.
+                delta = -1 if key == KEY_LEFT else 1
+                following = tune_step(tune.sel, vals[tune.sel], delta, key == " ")
+                if following != vals[tune.sel]:
+                    vals[tune.sel] = following
+                    settings = read_tunes(vals)
+                    apply_settings(settings)
+                tune.edit, tune.editing, tune.err = "", False, ""
             elif key == KEY_ENTER:
                 if tune.editing:
                     try:
@@ -2988,7 +3193,7 @@ def run(argv):
                         # make the next character typed land on the end of it.
                         tune.edit, tune.editing, tune.err = "", False, str(exc)
                     else:
-                        vals[tune.sel] = tune.edit
+                        vals[tune.sel] = canon_tune(tune.sel, tune.edit)
                         settings = read_tunes(vals)
                         apply_settings(settings)
                         tune.edit, tune.editing, tune.err = "", False, ""
@@ -3087,32 +3292,22 @@ def run(argv):
                     face_second = second
                     faces = order_faces(merge_zones(zones, now), now)
 
-                # The tuner sits under the clocks rather than over them: the
-                # whole point of it is watching the faces change, so the grid
-                # is laid out in what is left of the window and the box takes
-                # the rest. A window too short to share falls back to a modal
-                # over the top, which is still better than no way to undo
-                # what put it there.
-                lay_lines = lines
-                tune_room = False
-                if full_screen and tune.open and lines - TUNE_HEIGHT >= MIN_ROWS_N + 2:
-                    lay_lines = lines - TUNE_HEIGHT
-                    tune_room = True
-
                 # -n auto's whole point is choosing whatever per-row count
                 # lets --scale auto grow the face furthest; with a fixed
                 # --scale there is no face size left for it to affect, so it
                 # falls back to the plain default cap. Settled per frame
                 # rather than once, since the tuner can move the scale
                 # between auto and fixed while the clock runs.
-                want_per_row = DEFAULT_PER_ROW if per_row_auto else asked_per_row
+                want_per_row = (
+                    DEFAULT_PER_ROW if settings.per_row_auto else settings.per_row
+                )
 
                 if settings.scale_auto:
-                    if cols > 0 and lay_lines > 0:
-                        if per_row_auto:
+                    if cols > 0 and lines > 0:
+                        if settings.per_row_auto:
                             want_per_row = len(faces)  # no real cap: see auto_scale's own comment
                         auto_scale(
-                            want_per_row, len(faces), cols, lay_lines,
+                            want_per_row, len(faces), cols, lines,
                             settings.hpad, settings.vpad,
                         )
                     else:
@@ -3134,7 +3329,7 @@ def run(argv):
                     )
                     chunks = chunk_count(len(faces), per_row)
                     fit_height(
-                        chunks, lay_lines, gap_floor(lay_lines, settings.vpad, VGAP)
+                        chunks, lines, gap_floor(lines, settings.vpad, VGAP)
                     )
                 except ClockError as exc:
                     # A window dragged smaller than the clocks need is
@@ -3144,7 +3339,7 @@ def run(argv):
                     # fails outright, which is what the diff harness compares.
                     if not full_screen:
                         raise
-                    rows = complaint(str(exc), cols, lay_lines, settings.halign)
+                    rows = complaint(str(exc), cols, lines, settings.halign)
                 else:
                     fits = True
 
@@ -3169,8 +3364,6 @@ def run(argv):
                 if content is not None:
                     modal = modal_box(content)
                     modal_top, modal_left, show_modal = center_modal(modal, cols, lines)
-                    if tune_room and show_modal:
-                        modal_top = lay_lines  # the room set aside for it above
 
                 if fits:
                     # Any lean left over from the grid is answered by the
@@ -3181,7 +3374,7 @@ def run(argv):
                         per_row, cell_cols(), cols, GAP, settings.hpad, settings.halign
                     )
                     vgap, vextra, top, _ = spread(
-                        chunks, ROWS + 2, lay_lines, VGAP, settings.vpad, settings.valign
+                        chunks, ROWS + 2, lines, VGAP, settings.vpad, settings.valign
                     )
                     lay = Layout(gap_n, extra, left, vgap, vextra, top, leaned)
                     rows = frame(faces, now, per_row, color, day_when, lay)
@@ -3216,18 +3409,17 @@ def run(argv):
                     keys = []
                     for byte in pending_keys():
                         keys += decoder.feed(byte)
-                    # The batch of keys this frame read is over, so an ESC
-                    # still waiting to be told what it was is the key itself.
-                    # Decided here rather than on a timer: see KeyDecoder.
-                    keys += decoder.flush()
+                    # The batch of keys this frame read is over; a keystroke
+                    # left half-read waits a frame to be finished before it is
+                    # taken for something else. Decided here rather than on a
+                    # timer: see KeyDecoder.
+                    keys += decoder.settle()
                     quitting = False
                     for key in keys:
                         if pressed(key, now):
                             quitting = True
                     if vals != prev_vals:
-                        LEFT_WITH = tune_command(
-                            vals, zone_list, asked_per_row, per_row_auto
-                        )
+                        LEFT_WITH = tune_command(vals, zone_list)
                     if was_tuning and not tune.open:
                         # Closing the tuner says what it would take to start
                         # the clock this way, since the screen it was tuned on

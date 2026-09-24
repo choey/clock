@@ -17,3 +17,13 @@ const (
 	tcSet      = syscall.TCSETS
 	tcSetFlush = syscall.TCSETS + 2
 )
+
+// selectRead asks whether a descriptor has anything to read, without waiting;
+// see term_bsd.go for why it is written twice.
+func selectRead(fds *syscall.FdSet, tv *syscall.Timeval) (bool, error) {
+	n, err := syscall.Select(1, fds, nil, nil, tv)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}

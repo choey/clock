@@ -3596,28 +3596,30 @@ func suspend(restore, requiet func(), fullScreen bool) {
 	fmt.Print(hideCursor)
 }
 
-// readKeys pumps stdin into a channel. Reads block, so this needs its own
-// goroutine; it ends at EOF, which is immediate when stdin isn't a terminal.
-func readKeys() <-chan []byte {
-	keys := make(chan []byte, 16)
-	go func() {
-		for {
-			// One read per send, up to keysPerFrame bytes, which is what
-			// pyclock.py's own read takes: a frame answers one read's worth
-			// of keys and then draws, in both, so a burst of typing or a held
-			// arrow is spread over the same frames either side.
-			buf := make([]byte, keysPerFrame)
-			n, err := os.Stdin.Read(buf)
-			if err != nil {
-				return
-			}
-			select {
-			case keys <- buf[:n]:
-			default: // sixteen reads behind: a clock is not a text editor
-			}
-		}
-	}()
-	return keys
+// pendingKeys is whatever is waiting on stdin, or nothing at all. Never
+// blocks, and assumes cbreak mode, where a key arrives without a Return
+// behind it.
+//
+// Asked once a frame rather than read from continuously, which is not a
+// detail: a reader sitting in read(2) is handed the first byte of a keystroke
+// the instant the terminal has it, so an arrow can arrive split in two and a
+// two-character value can arrive a character at a time -- and then this port
+// paints frames pyclock.py, which reads once a frame and takes whatever has
+// gathered, never paints. That difference cost a release. This is the same
+// select-then-read pyclock.py does, in the same place in the loop.
+func pendingKeys(buf []byte) []byte {
+	var fds syscall.FdSet
+	fds.Bits[0] = 1 // fd 0 is the only one asked about
+	tv := syscall.Timeval{}
+	ready, err := selectRead(&fds, &tv)
+	if err != nil || !ready {
+		return nil
+	}
+	n, err := syscall.Read(0, buf)
+	if err != nil || n <= 0 {
+		return nil
+	}
+	return buf[:n]
 }
 
 // leftWith is the command line the clock ended up reading as, once the tuner
@@ -3709,7 +3711,12 @@ func run() error {
 
 	restoreTerm, requietTerm := quietTerminal()
 	defer restoreTerm()
-	keys := readKeys()
+	// Keys are read from stdin, so there are only keys to read when stdin is
+	// a terminal. Redirected, reading it would eat whatever it is -- and
+	// pyclock.py asks the same question, of the same descriptor, for the same
+	// reason.
+	interactive := isTerminal(os.Stdin)
+	keyBuf := make([]byte, keysPerFrame)
 
 	// On a terminal, take the alternate screen and paint from its top corner.
 	// Relative rewind cannot survive a resize: the terminal rewraps the frame
@@ -3933,16 +3940,30 @@ func run() error {
 			continue
 		}
 
-		// wait out the tick, consuming keys without repainting for each one
+		// The keys this frame answers, read once and all at once -- the same
+		// place in the loop pyclock.py reads them, so a burst is spread over
+		// the same frames in both. Then the tick is waited out, with nothing
+		// left to answer but signals.
 		wasTuning := tune.open
 		prevVals := vals
-		// One read of keys per frame, which is what pyclock.py's single
-		// os.read is. Taking every read that has arrived would answer a
-		// burst -- a held arrow, a pasted value -- in one frame where the
-		// other port takes two, and these are compared frame for frame. A
-		// nil channel is how a select drops a case: it blocks forever, so
-		// the tick is all that is left to wait for.
-		unread := keys
+		if interactive {
+			for _, b := range pendingKeys(keyBuf) {
+				for _, key := range dec.feed(b) {
+					if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now, save) {
+						return nil
+					}
+				}
+			}
+			// A keystroke left half-read waits a frame to be finished before
+			// it is taken for something else. Decided here rather than on a
+			// timer: see keyDecoder.
+			for _, key := range dec.settle() {
+				if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now, save) {
+					return nil
+				}
+			}
+		}
+
 		for waiting := true; waiting; {
 			select {
 			case <-t.C:
@@ -3961,32 +3982,6 @@ func run() error {
 					waiting = false
 				default:
 					return nil
-				}
-			case batch := <-unread:
-				unread = nil
-				// A whole read at a time, the way pyclock.py takes one. A
-				// keystroke is more than one byte -- an arrow, or characters
-				// typed together -- and answering them one at a time let a
-				// tick land in the middle of one, so this port painted frames
-				// pyclock.py never painted. Frame for frame is the thing
-				// being kept here, and a loaded machine is where it broke.
-				for _, b := range batch {
-					for _, key := range dec.feed(b) {
-						if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now, save) {
-							return nil
-						}
-					}
-				}
-			}
-			if !waiting {
-				// The batch of keys this frame read is over; a keystroke left
-				// half-read waits a frame to be finished before it is taken
-				// for something else. Decided here rather than on a timer:
-				// see keyDecoder.
-				for _, key := range dec.settle() {
-					if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now, save) {
-						return nil
-					}
 				}
 			}
 		}

@@ -19,15 +19,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Messages no test on a working machine can produce, with why. Both need a
-# system whose time zone database is broken or absent, and any machine that
-# can run this suite has one -- Go will not even give its up, falling back to
-# the copy built into the binary when ZONEINFO points nowhere.
+# Messages difftest cannot reach, with why. The first two need a system whose
+# time zone database is broken or absent, and any machine that can run this
+# suite has one -- Go will not even give its up, falling back to the copy
+# built into the binary when ZONEINFO points nowhere. The last two need a key
+# pressed, which only happens on a terminal: tools/keytest.py covers those,
+# and this log is difftest's alone.
 EXEMPT = {
     "no zone.tab under /usr/share/zoneinfo":
         "needs a machine with no tz database at all",
     "which this system's time zone database lacks":
         "needs a database holding some zones but not one the tables name",
+    "CLOCK_CONFIG is empty":
+        "only S raises it, and only on a terminal: keytest covers it",
+    "cannot write":
+        "only S raises it, and only on a terminal: keytest covers it",
 }
 
 

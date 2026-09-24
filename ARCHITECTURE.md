@@ -158,6 +158,89 @@ and the face is padded into its cell when drawn. The weekday is the same
 problem solved the other way: below `DAY_COLS` it is dropped rather than
 widening every cell to hold it.
 
+**The tuner.** `r` puts up the seven layout knobs and reads a value into any of
+them. It keeps them as the *text* they were given in, not as parsed values:
+that text is what the flags were spelled with, what the box shows, what a
+parting line hands back -- and it means no number is ever formatted back out,
+which matters because Go's `%g` and Python's `:g` part company past six
+significant digits. Every value goes through `checkTune`/`check_tune`, which
+is the flag's own parser, so the tuner cannot accept a spelling the command
+line refuses; `readTunes`/`read_tunes` then reads the seven back into the
+settings the frame loop lays out with, and cannot fail, because nothing
+unchecked is ever stored.
+
+One thing about it is not the obvious choice: it is the modal that shows over
+a window too small for the clocks, where every other one is hidden. That is
+exactly the window a `--scale` typed too large leaves behind, and hiding the
+way out of it there would be hiding it when it is needed most.
+
+Arrows and space step a value rather than typing one, and what they step
+through is the same gate: `tuneStep` hands back the text it started from
+whenever `checkTune` refuses what it landed on, so stepping cannot reach a
+value typing would be refused for. The arithmetic is in integers -- whole
+percents, whole faces, and *tenths* for the two decimals -- and the text is
+assembled by hand, because the moment a float is formatted back into a string
+the two ports are one `%g` away from disagreeing. `canonTune` is the other
+half of that: a pad typed as `5` and one typed as `5%` are one value, so both
+are written down as `5%`, and the box, the saved file and the printed command
+all say the same thing. The decimals are left exactly as typed, since
+rewriting `2.15` as `2.2` would be rounding a value nobody asked to round.
+
+`--per-row` is a knob like the rest, held as text next to them, which is why
+`-n 2` and a `2` stepped into the box are the same thing to everything
+downstream -- including the saved file, which writes `--per-row`.
+
+**Arrow keys, and a lone Esc.** The tuner is the first thing here to read a
+key that is more than one byte: an arrow arrives as `ESC [ A`, or `ESC O A`
+from a terminal in application cursor mode. So `ESC` cannot be answered when
+it lands -- it is either a key of its own or the first byte of one -- and the
+usual answer, a few milliseconds' wait, is not available to a pair of ports
+compared frame for frame: which frame an Esc landed in would become a question
+about the machine's speed, and `tools/keytest.py` compares the frames. Both
+ports hold the ESC instead and decide it at the end of the batch of keys a
+frame reads, which is the same point in both loops -- a channel drained until
+the tick in Go, one `os.read` in Python.
+
+One batch of grace is not enough, though, and a held-down arrow is what shows
+it: the terminal sends `ESC [ C` fifty times a second and a read can end
+anywhere inside that, so an ESC left over at the end of a frame is as likely
+to be half an arrow as a whole Esc. Answering it there closed the tuner
+mid-keypress. A pending sequence therefore has to survive `escGrace` frames
+with nothing following it before it is called -- two, or 38ms, which is
+nothing to wait for an Esc and far longer than bytes the terminal has already
+written need to arrive. Frames rather than a timer, again, so both ports
+answer on the same frame and keytest can compare them.
+
+**The preferences file.** `S` writes the clock on screen to
+`~/.config/clock/config` and startup reads it back. It is not a configuration
+format: it is an argument list, one token per line, run through the same
+`parseArgs`/`parse_args` the command line goes through -- into the same
+`options` struct, before the command line is read into it on top. Everything
+follows from that. A flag typed beats the same flag saved because it is read
+second, and nothing had to be written to make that true. A value in the file
+is refused in the words its flag refuses it in. A setting added to the flags
+is a setting the file takes, with nothing to add anywhere. And a zone list
+with a space in it -- `Salt Lake City` -- needs no quoting rules that the two
+ports would then have to agree about, because a token is a whole line.
+
+Two things are read differently from how either language would do it by
+itself. A file that cannot be read says `cannot read <path>` rather than the
+error the standard library hands over: Go says `open x: permission denied`
+where Python says `[Errno 13] Permission denied: 'x'`, and difftest compares
+those. And `-h`/`--help`/`--version` inside the file are refused by name --
+they are reached through the same parser as everywhere else, so what comes
+back is `errHelp`/`HelpRequested`, and the config pass turns that into a
+complaint rather than printing the usage and stopping.
+
+`CLOCK_CONFIG` names the file, and set-but-empty means there is none.
+That is not only an escape hatch for scripts: every harness in `tools/` sets
+it, because without it the suite would be reading whatever the machine running
+it has saved. A preferences file in a developer's home directory would change
+what difftest compares, what the goldens are measured against and what fitfuzz
+generates -- silently, and only on that machine. `tools/argfuzz.py` also keeps
+`CLOCK_CONFIG` off its list of variables to mutate, for the same reason one
+step further along.
+
 **Modals.** The key list and the startup quit hint are stamped onto the
 finished, already-coloured frame after the grid is drawn — never mixed into a
 face's own rows. The splice is ANSI-aware: it walks each row it touches,
@@ -237,7 +320,7 @@ nothing to fail.
 | `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share | anything wrong in both, which is how they are always changed |
 | `tools/golden/` | what the clock actually draws, at eighteen sizes | the size nobody thought to keep |
 | `tools/fitfuzz.py` | invariants at arbitrary sizes: nothing overflows the window, every line ends at the default colour, no escape outside the eight it may write | whether the picture is *right*, only that it is well formed |
-| `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations frame for frame; Ctrl+C and Ctrl+Z under job control, down to what the terminal is left in while a clock is stopped; that a character device is not therefore a terminal, and what a reader walking away leaves behind | a real terminal emulator; and signal timing, where it compares loosely on purpose |
+| `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations frame for frame; the tuner, and a tuned frame against a clock started with the same flags; that `S` writes the same bytes from either port and that both read them back; Ctrl+C and Ctrl+Z under job control, down to what the terminal is left in while a clock is stopped; that a character device is not therefore a terminal, and what a reader walking away leaves behind | a real terminal emulator; and signal timing, where it compares loosely on purpose |
 | `tools/argfuzz.py` | that the two agree on badly spelt arguments and environments — generated by mutating good ones, rather than listed | whether either answer is right, and anything the mutations do not reach |
 | `tools/errcover.py` | every error message the clock can print is printed by some case | three that need a machine whose tz database is missing or incomplete, exempted with the reason why |
 | `tools/docnums.py` | the figures in the prose match the tables, and every flag and variable is documented | prose that is wrong in a way no number captures |

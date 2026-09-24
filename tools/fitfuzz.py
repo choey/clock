@@ -100,7 +100,9 @@ def render(binary, cols, lines, zones, extra):
     proc = subprocess.run(
         [*binary, *extra, zones],
         cwd=ROOT,
-        env={"PATH": "/usr/bin:/bin", "CLOCK_FREEZE": FROZEN,
+        # CLOCK_CONFIG empty: no preferences file, whatever the machine
+        # running this has saved.
+        env={"PATH": "/usr/bin:/bin", "CLOCK_FREEZE": FROZEN, "CLOCK_CONFIG": "",
              "COLUMNS": str(cols), "LINES": str(lines)},
         capture_output=True,
         text=True,

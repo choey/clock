@@ -39,6 +39,7 @@ def timed(argv, zones, frames):
     """The best wall time of RUNS runs drawing `frames` frames, in seconds."""
     env = dict(
         os.environ,
+        CLOCK_CONFIG="",  # no preferences file: measure the clock, not a machine
         CLOCK_FREEZE=FROZEN,
         CLOCK_FRAMES=str(frames),
         CLOCK_STEP=str(TICK_MS),

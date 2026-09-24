@@ -12,6 +12,7 @@ import math
 import os
 import signal
 import sys
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -110,7 +111,10 @@ the window, and then the alignment decides where the grid sits. CLOCK_CELL_RATIO
 sets the same thing as --cell-ratio, for when it wants to be set once per
 terminal rather than typed every time; the flag wins if both are given.
 
-Space holds the frame still, for a screenshot, and h or ? opens the key list.
+Space holds the frame still, for a screenshot, h or ? opens the key list, and
+r resizes and aligns the clocks while they run. S saves those sizes and the
+zones on screen to ~/.config/clock/config, which every clock reads at startup;
+CLOCK_CONFIG points somewhere else, and set but empty means no file at all.
 Press q or Ctrl+C to quit.
 
 examples:
@@ -128,9 +132,44 @@ examples:
 HOTKEYS = (
     ("space", "hold the frame"),
     ("h ?", "toggle this list"),
+    ("r", "resize and align the clocks"),
+    ("S", "save these sizes and zones"),
     ("q", "quit, or Ctrl+C"),
 )
 HOTKEY_COL = 8  # where the descriptions start, so the keys get a gutter
+
+# What r puts up: the knobs that can be changed while the clock runs, in the
+# order they are listed, and what each one takes -- the same words its flag's
+# own error message offers, since a value typed here is read by exactly the
+# parser that flag uses. Same order and wording as clock.go's table.
+TUNABLES = (
+    ("halign", "left, center or right"),
+    ("valign", "top, center or bottom"),
+    ("hpad", "even, or a share like 10%"),
+    ("vpad", "even, or a share like 5%"),
+    ("per-row", "auto, or a count like 3"),
+    ("scale", "auto, or a number like 1.5"),
+    ("cell-ratio", "a number like 2.1"),
+)
+
+# Which tunable is which. The frame loop holds the six as the text they were
+# given in rather than as parsed values: what the tuner shows, what the
+# parsers read and what a saved command line would say are then one string,
+# and no number is ever formatted back out -- Go's %g and Python's :g do not
+# agree past six significant digits, and a value the reader typed is not ours
+# to round anyway.
+(
+    TUNE_HALIGN,
+    TUNE_VALIGN,
+    TUNE_HPAD,
+    TUNE_VPAD,
+    TUNE_PER_ROW,
+    TUNE_SCALE,
+    TUNE_CELL_RATIO,
+) = range(7)
+NUM_TUNES = len(TUNABLES)
+
+TUNE_COL = 12  # where the values start, past the longest name plus a gutter
 
 # Said once, in the same modal the key list uses, and then dropped: a clock
 # that has taken the whole screen owes the reader a way back out, but only
@@ -147,6 +186,10 @@ TICK = 0.019
 
 DEFAULT_ROWS_N = 11  # face height, in terminal rows, at --scale 1
 DEFAULT_CELL_RATIO = 2.1  # cell height / width; braille dots are square at 2
+# DEFAULT_CELL_RATIO written out, for the tuner and for the flags it hands
+# back. Written rather than formatted, so the two ports cannot disagree about
+# how a float prints.
+DEFAULT_CELL_RATIO_TEXT = "2.1"
 
 # ROWS keeps a face big enough for the hour numerals to have somewhere to
 # sit; MAX_ROWS_N is just a guard against a typo asking for a giant canvas.
@@ -216,19 +259,31 @@ def positive_number(val):
     return value
 
 
-def env_cell_ratio():
-    """How tall a terminal cell is relative to its width, from CLOCK_CELL_RATIO.
+def default_tunes():
+    """The six knobs as an untouched clock has them.
 
-    This is the only knob that decides whether the face is round, and it varies
-    by font and line spacing. Override without editing: CLOCK_CELL_RATIO=2.7
-    Raise it if the face looks squished, lower it if it bulges sideways.
-
-    Unlike --cell-ratio, an environment variable might be stale or set for
-    some other program, so a bad value is not a user error -- it is simply
-    ignored, the same way an unset one is.
+    The flag defaults, with CLOCK_CELL_RATIO standing in for the ratio where
+    it is usable. That ratio is the only knob that decides whether the face is
+    round, and it varies by font and line spacing; raise it if the face looks
+    squished, lower it if it bulges sideways. Unlike --cell-ratio, an
+    environment variable might be stale or set for some other program, so a
+    bad value there is not a user error -- it is simply ignored, the same way
+    an unset one is.
     """
-    value = positive_number(os.environ.get("CLOCK_CELL_RATIO", ""))
-    return DEFAULT_CELL_RATIO if value is None else value
+    vals = ["center", "center", "even", "even", "auto", "auto", DEFAULT_CELL_RATIO_TEXT]
+    env = os.environ.get("CLOCK_CELL_RATIO", "")
+    if env and positive_number(env) is not None:
+        vals[TUNE_CELL_RATIO] = env
+    return vals
+
+
+def tune_index(name):
+    """Which of the six a flag name is.
+
+    Only ever asked about the six names TUNABLES holds, so there is no
+    not-found to answer.
+    """
+    return [t[0] for t in TUNABLES].index(name)
 
 
 def parse_ratio(val):
@@ -963,23 +1018,228 @@ def parse_pad(flag, val):
     return n
 
 
-def parse_args(argv):
+# The six tunables parsed: what the frame loop actually lays out with. Read
+# back from the text with read_tunes whenever the text changes -- at startup,
+# and after every value the tuner takes.
+Settings = collections.namedtuple(
+    "Settings", "halign valign hpad vpad cell_ratio scale_auto rows per_row per_row_auto"
+)
+
+
+def rows_for_scale(scale):
+    """Turn a --scale into a face height, refusing one nothing can draw.
+
+    Too small and the numerals have nowhere to sit, too large and it is a
+    canvas the size of a wall. The same answer at startup and under the
+    tuner: a scale typed into the tuner is refused in the words the flag
+    would have used.
+    """
+    rows = math.floor(DEFAULT_ROWS_N * scale + 0.5)
+    if rows < MIN_ROWS_N or rows > MAX_ROWS_N:
+        raise ClockError(
+            f"--scale {scale:g} makes each face {rows} rows tall; want "
+            f"{MIN_ROWS_N} to {MAX_ROWS_N} rows, roughly --scale "
+            f"{MIN_ROWS_N / DEFAULT_ROWS_N:.2f} to --scale {MAX_ROWS_N / DEFAULT_ROWS_N:.2f}"
+        )
+    return rows
+
+
+def check_tune(i, val):
+    """Read one tunable's text exactly as its flag reads it.
+
+    The only gate the tuner has: what survives this is stored as text and read
+    back by read_tunes, which therefore cannot fail.
+    """
+    if i == TUNE_HALIGN:
+        parse_choice("halign", val, HALIGNS)
+    elif i == TUNE_VALIGN:
+        parse_choice("valign", val, VALIGNS)
+    elif i in (TUNE_HPAD, TUNE_VPAD):
+        parse_pad(TUNABLES[i][0], val)
+    elif i == TUNE_PER_ROW:
+        if val != "auto":
+            parse_count(val, "--per-row", MAX_PER_ROW)
+    elif i == TUNE_SCALE:
+        if val != "auto":
+            rows_for_scale(parse_scale(val))
+    else:
+        parse_ratio(val)
+
+
+def canon_tune(i, val):
+    """How a value is written down once it has been accepted.
+
+    A pad typed as "5" and one typed as "5%" are the same share, and a count
+    typed as "007" is three faces a row, so the tuner, the saved file and the
+    line it prints all say the one spelling. The decimals are left exactly as
+    typed -- rewriting 2.15 as 2.2 would be rounding a value nobody asked to
+    round.
+    """
+    if i in (TUNE_HPAD, TUNE_VPAD):
+        try:
+            n = parse_pad(TUNABLES[i][0], val)
+        except ClockError:
+            return val
+        return val if n is None else f"{n}%"
+    if i == TUNE_PER_ROW:
+        if val == "auto":
+            return val
+        try:
+            return str(parse_count(val, "--per-row", MAX_PER_ROW))
+        except ClockError:
+            return val
+    return val
+
+
+def read_tunes(vals):
+    """Parse the six back into a Settings.
+
+    Every value has been through check_tune, so nothing here can fail;
+    anything that did would be a value stored without being checked, which is
+    a bug rather than a bad input.
+    """
+    cell_ratio = positive_number(vals[TUNE_CELL_RATIO])
+    scale_auto, rows = True, 0
+    if vals[TUNE_SCALE] != "auto":
+        scale_auto = False
+        rows = rows_for_scale(positive_number(vals[TUNE_SCALE]))
+    per_row, per_row_auto = DEFAULT_PER_ROW, True
+    if vals[TUNE_PER_ROW] != "auto":
+        per_row = parse_count(vals[TUNE_PER_ROW], "--per-row", MAX_PER_ROW)
+        per_row_auto = False
+    return Settings(
+        vals[TUNE_HALIGN],
+        vals[TUNE_VALIGN],
+        parse_pad("hpad", vals[TUNE_HPAD]),
+        parse_pad("vpad", vals[TUNE_VPAD]),
+        DEFAULT_CELL_RATIO if cell_ratio is None else cell_ratio,
+        scale_auto,
+        rows,
+        per_row,
+        per_row_auto,
+    )
+
+
+def apply_settings(settings):
+    """Put a Settings into the globals the drawing code reads.
+
+    A fixed scale sizes the face here and for good; --scale auto leaves ROWS
+    to the per-frame search, which reads CELL_RATIO itself.
+    """
+    global ROWS, COLS, CELL_RATIO
+    CELL_RATIO = settings.cell_ratio
+    if not settings.scale_auto:
+        ROWS = settings.rows
+        COLS = math.floor(ROWS * CELL_RATIO + 0.5)
+
+
+class Options:
+    """Everything a command line sets, and so everything the file can set too.
+
+    The preferences file is read by the same parser, into the same object,
+    before the command line is read into it on top. That is the whole of "the
+    file is the front of your command line" -- last wins, with no second set
+    of rules to keep in step with the first.
+    """
+
+    def __init__(self):
+        self.zone_list = ""
+        self.color_when = "auto"
+        self.day_when = ""  # unset: run() picks it, since a pinned clock differs
+        self.quiet = False
+        self.vals = default_tunes()  # the six knobs, as text
+
+
+def config_path():
+    """Where S saves and startup reads.
+
+    CLOCK_CONFIG names it outright -- set but empty means no preferences file
+    at all, which is what every harness here runs with and what a script
+    wanting the plain defaults can set. Otherwise the usual place, and nowhere
+    at all if even HOME is unset.
+    """
+    if "CLOCK_CONFIG" in os.environ:
+        return os.environ["CLOCK_CONFIG"]
+    xdg = os.environ.get("XDG_CONFIG_HOME", "")
+    if xdg:
+        return os.path.join(xdg, "clock", "config")
+    home = os.environ.get("HOME", "")
+    if home:
+        return os.path.join(home, ".config", "clock", "config")
+    return ""
+
+
+# What the file says about itself to whoever opens it, and that editing it is
+# allowed -- it is a command line, and everything the command line takes it
+# takes.
+CONFIG_HEADER = (
+    "# clock: written by S, read at startup. One argument per line.\n"
+    "# Delete this file to forget it; CLOCK_CONFIG= ignores it.\n"
+)
+
+
+def load_config(path):
+    """Read the file into the argument list it is.
+
+    One token per line, blank lines and # lines skipped. One token per line
+    rather than a line of arguments is what keeps a zone list with a space in
+    it -- Salt Lake City -- from needing quoting rules that the two ports
+    would then have to agree about.
+
+    A file that is not there is not an error: it is a clock that has never
+    been asked to save. One that cannot be read is, and says so in words of
+    its own rather than the language's, since Go and Python spell that
+    complaint differently and difftest compares the two.
+    """
+    if not path:
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = fh.read()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        raise ClockError(f"cannot read {path}")
+    except UnicodeDecodeError:
+        raise ClockError(f"cannot read {path}")
+    return [line for line in data.split("\n") if line and not line.startswith("#")]
+
+
+def save_config(path, tokens):
+    """Write the tokens back, through a temporary file in the same directory.
+
+    So a save that fails part way leaves the old file rather than half of a
+    new one.
+    """
+    if not path:
+        raise ClockError("CLOCK_CONFIG is empty: nowhere to save")
+    fail = ClockError(f"cannot write {path}")
+    directory = os.path.dirname(path) or "."
+    body = CONFIG_HEADER + "".join(token + "\n" for token in tokens)
+    tmp = None
+    try:
+        os.makedirs(directory, exist_ok=True)
+        handle, tmp = tempfile.mkstemp(prefix="config-", dir=directory)
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        os.replace(tmp, path)
+    except OSError:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+        raise fail from None
+
+
+def parse_args(argv, opt):
     """Read the command line: one optional zone list, and the flags anywhere.
 
     Hand-rolled rather than argparse, which prints its own usage block, exits
     with status 2, and abbreviates long options -- none of which the Go port
     can reproduce. Both implementations run this algorithm verbatim.
+
+    Reads into `opt` and hands it back, so the preferences file and then the
+    command line can go through it in turn, the second writing over the first.
     """
-    per_row = DEFAULT_PER_ROW  # only used when an explicit -n/--per-row overrides per_row_auto below
-    color_when = "auto"
-    day_when = ""  # unset: run() picks it, since a pinned clock differs
-    halign, valign = "center", "center"
-    hpad, vpad = None, None  # None is the even fill
-    quiet = False
-    cell_ratio_flag = None  # None: run() falls back to CLOCK_CELL_RATIO, then the default
-    scale_flag = None  # unset unless a specific --scale overrides scale_auto below
-    scale_auto = True  # the default: run() re-solves ROWS every frame to fill the window
-    per_row_auto = True  # the default: run() also searches per-row counts, to maximise ROWS
     positional = []
     end_of_flags = False
 
@@ -1000,20 +1260,21 @@ def parse_args(argv):
                     if i >= len(argv):
                         raise ClockError("--per-row needs a number, e.g. --per-row 2")
                     val = argv[i]
-                if val == "auto":
-                    per_row_auto = True
-                else:
-                    per_row = parse_count(val, "--per-row", MAX_PER_ROW)
-                    per_row_auto = False
+                # Kept as text alongside the layout knobs, which is where the
+                # tuner reads it from; the count is parsed here all the same,
+                # so the complaint is --per-row's own.
+                if val != "auto":
+                    parse_count(val, "--per-row", MAX_PER_ROW)
+                opt.vals[TUNE_PER_ROW] = canon_tune(TUNE_PER_ROW, val)
             elif name == "color":
                 # Bare --color means always, and takes no separate argument:
                 # "clock --color ET" names a zone list, exactly as ls and git
                 # read the same flag. The value only ever follows an "=".
-                color_when = parse_choice("color", val, COLOR_WHENS) if sep else "always"
+                opt.color_when = parse_choice("color", val, COLOR_WHENS) if sep else "always"
             elif name == "no-color":
                 if sep:
                     raise ClockError("--no-color takes no value")
-                color_when = "never"
+                opt.color_when = "never"
             elif name == "version":
                 # Read where it is found, like --help: everything before it on
                 # the command line still has to parse, everything after it is
@@ -1022,15 +1283,15 @@ def parse_args(argv):
                     raise ClockError("--version takes no value")
                 raise VersionRequested
             elif name == "day":
-                day_when = parse_choice("day", val, WHENS) if sep else "always"
+                opt.day_when = parse_choice("day", val, WHENS) if sep else "always"
             elif name == "no-day":
                 if sep:
                     raise ClockError("--no-day takes no value")
-                day_when = "never"
+                opt.day_when = "never"
             elif name == "quiet":
                 if sep:
                     raise ClockError("--quiet takes no value")
-                quiet = True
+                opt.quiet = True
             elif name in ("halign", "valign", "hpad", "vpad", "cell-ratio", "scale"):
                 # These six want a value, and take it either way round, as
                 # --per-row does: there is no bare form to be ambiguous with.
@@ -1039,25 +1300,15 @@ def parse_args(argv):
                     if i >= len(argv):
                         raise ClockError(f"--{name} needs a value, e.g. {NEEDS[name]}")
                     val = argv[i]
-                if name == "halign":
-                    halign = parse_choice(name, val, HALIGNS)
-                elif name == "valign":
-                    valign = parse_choice(name, val, VALIGNS)
-                elif name == "hpad":
-                    hpad = parse_pad(name, val)
-                elif name == "vpad":
-                    vpad = parse_pad(name, val)
-                elif name == "cell-ratio":
-                    cell_ratio_flag = parse_ratio(val)
-                elif val == "auto":
-                    scale_auto = True
-                else:
-                    scale_flag = parse_scale(val)
-                    scale_auto = False
+                # Checked by the flag's own parser and then kept as text, so
+                # the tuner and a saved command line say what was typed.
+                k = tune_index(name)
+                check_tune(k, val)
+                opt.vals[k] = canon_tune(k, val)
             else:
                 raise ClockError(f"unknown option: --{name}")
         elif a == "-q":
-            quiet = True
+            opt.quiet = True
         elif len(a) > 1 and a.startswith("-"):
             if a[1] != "n":
                 raise ClockError(f"unknown option: {a}")
@@ -1069,11 +1320,9 @@ def parse_args(argv):
                 rest = argv[i]
             elif rest[0] == "=":
                 raise ClockError('-n takes its value as "-n N" or "-nN", not "-n=N"')
-            if rest == "auto":
-                per_row_auto = True
-            else:
-                per_row = parse_count(rest, "-n", MAX_PER_ROW)
-                per_row_auto = False
+            if rest != "auto":
+                parse_count(rest, "-n", MAX_PER_ROW)
+            opt.vals[TUNE_PER_ROW] = canon_tune(TUNE_PER_ROW, rest)
         else:
             positional.append(a)
         i += 1
@@ -1083,18 +1332,9 @@ def parse_args(argv):
             f"expected one comma-separated zone list, got {len(positional)}: "
             + " ".join(positional)
         )
-    return (
-        per_row,
-        positional[0] if positional else "",
-        color_when,
-        day_when,
-        (halign, valign, hpad, vpad),
-        quiet,
-        cell_ratio_flag,
-        scale_flag,
-        scale_auto,
-        per_row_auto,
-    )
+    if positional:
+        opt.zone_list = positional[0]
+    return opt
 
 
 # Fills the gaps the tz database leaves, and only those gaps. EST, MST, HST,
@@ -2031,6 +2271,234 @@ def help_rows():
     return [f"{key:<{HOTKEY_COL}}{what}" for key, what in HOTKEYS]
 
 
+class Tuner:
+    """What r puts up: the six knobs, one picked, and what is being typed.
+
+    It holds no values of its own -- the text it shows is the same text the
+    frame loop lays out from, so what is on screen is always what is in
+    effect.
+    """
+
+    def __init__(self):
+        self.open = False
+        self.sel = 0  # which of the six is picked
+        self.edit = ""  # what has been typed into it, once typing has started
+        self.editing = False
+        self.err = ""  # the last refusal, in the flag's own words
+
+
+def tune_options(i):
+    """The words a knob takes, for the two that take words rather than numbers.
+
+    The lists the flags themselves are checked against, so the tuner offers
+    exactly what --halign and --valign accept.
+    """
+    if i == TUNE_HALIGN:
+        return HALIGNS
+    if i == TUNE_VALIGN:
+        return VALIGNS
+    return None
+
+
+def tune_word(i):
+    """The word a numeric knob takes instead of a number.
+
+    It sits one step below the knob's smallest value: even for a pad, auto for
+    the scale. The cell ratio has none -- there is no "work it out for me" for
+    a font.
+    """
+    if i in (TUNE_HPAD, TUNE_VPAD):
+        return "even"
+    if i in (TUNE_SCALE, TUNE_PER_ROW):
+        return "auto"
+    return ""
+
+
+def tenths_text(tenths):
+    """A count of tenths as a decimal, written by hand: 21 is "2.1", 20 is "2".
+
+    Every number the tuner steps to is built this way rather than formatted
+    from a float, which is what keeps the two ports spelling the same value
+    the same -- see the note on TUNABLES.
+    """
+    if tenths % 10 == 0:
+        return str(tenths // 10)
+    return f"{tenths // 10}.{tenths % 10}"
+
+
+def tune_step(i, val, delta, wrap):
+    """Move a knob one step, returning the text it lands on.
+
+    Or the text it started from, where there is nowhere to go. A word list
+    walks, and wraps if asked (which is what space does, and the arrows do
+    not). A pad moves a whole percent, since that is what it counts; the scale
+    and the cell ratio move a tenth, counted as integer tenths so no float is
+    formatted back into text. Below the smallest number is the knob's word,
+    where it has one, and above the largest is nothing at all.
+
+    Anything it lands on goes through check_tune before it is handed back, so
+    stepping cannot reach a value typing would be refused for -- a scale one
+    step past what the face may be simply does not move.
+    """
+    options = tune_options(i)
+    if options is not None:
+        at = options.index(val) if val in options else 0
+        following = at + delta
+        if wrap:
+            following %= len(options)
+        if not 0 <= following < len(options):
+            return val
+        return options[following]
+
+    word = tune_word(i)
+    if val == word:
+        if delta < 0:
+            return val  # already below the smallest number there is
+        # Back into numbers at the plain default, which is the size, the
+        # spacing and the row an untouched clock has.
+        if i == TUNE_SCALE:
+            return "1"
+        if i == TUNE_PER_ROW:
+            return str(DEFAULT_PER_ROW)
+        return "0%"
+
+    if i == TUNE_PER_ROW:
+        try:
+            n = parse_count(val, "--per-row", MAX_PER_ROW)
+        except ClockError:
+            return val
+        if n + delta < 1:
+            return word
+        following = str(n + delta)
+    elif i in (TUNE_HPAD, TUNE_VPAD):
+        try:
+            n = parse_pad(TUNABLES[i][0], val)
+        except ClockError:
+            return val
+        n = 0 if n is None else n
+        if n + delta < 0:
+            return word
+        following = f"{n + delta}%"
+    else:
+        value = positive_number(val)
+        if value is None:
+            return val
+        tenths = math.floor(value * 10 + 0.5) + delta
+        if tenths <= 0:
+            return word or val
+        following = tenths_text(tenths)
+    try:
+        check_tune(i, following)
+    except ClockError:
+        # Off the end of what this knob may be. The scale has somewhere to go
+        # at the bottom -- auto -- and nowhere at the top.
+        return word if delta < 0 and word else val
+    return following
+
+
+def tune_show(i, val):
+    """A knob's value as the box says it.
+
+    The words it takes with the one it holds in brackets, or -- for a number
+    -- the steps either side of it, so the size of a step is on screen rather
+    than something to find out by pressing a key.
+    """
+    options = tune_options(i)
+    if options is not None:
+        return " ".join(f"[{o}]" if o == val else o for o in options)
+    out = f"[{val}]"
+    previous = tune_step(i, val, -1, False)
+    if previous != val:
+        out = f"{previous} {out}"
+    following = tune_step(i, val, 1, False)
+    if following != val:
+        out = f"{out} {following}"
+    return out
+
+
+def tune_rows(tune, vals):
+    """The tuner's modal, one row per knob and a footer.
+
+    The value column is the text each knob holds, except the one being typed
+    into, which shows the buffer and a cursor -- so an empty buffer still
+    reads as a field waiting for something rather than as a value of nothing.
+
+    The face height goes beside the scale, since that is the number --scale
+    auto is choosing and the one a reader wanting to pin it down needs.
+    """
+    rows = []
+    for i, (name, _) in enumerate(TUNABLES):
+        mark = "> " if i == tune.sel else "  "
+        val = tune.edit + "_" if i == tune.sel and tune.editing else tune_show(i, vals[i])
+        if i == TUNE_SCALE:
+            val += f"   ({ROWS} rows)"
+        rows.append(f"{mark}{name:<{TUNE_COL}}{val}")
+    say = tune.err or TUNABLES[tune.sel][1]
+    return rows + [
+        "",
+        say,
+        "up down pick   left right or space change",
+        "or type a value and enter   esc done",
+    ]
+
+
+def tune_flags(vals):
+    """What the tuned layout would take on a command line.
+
+    The knobs that differ from an untouched clock's, in the tuner's own order.
+    Nothing is formatted here -- these are the strings that were typed.
+    """
+    default = default_tunes()
+    out = []
+    for i, (name, _) in enumerate(TUNABLES):
+        if vals[i] != default[i]:
+            out += [f"--{name}", vals[i]]
+    return out
+
+
+def config_tokens(vals, zone_list):
+    """The clock on screen written as an argument list.
+
+    The knobs that differ from an untouched clock's -- the per-row count among
+    them -- and the zone list as it was typed. What S saves, one token per line, and
+    what the line the tuner leaves behind is made of.
+    """
+    tokens = tune_flags(vals)
+    if zone_list:
+        tokens.append(zone_list)
+    return tokens
+
+
+def tune_command(vals, zone_list):
+    """The same list said out loud: quoted for a shell.
+
+    Empty unless some knob was actually moved -- a clock still at its defaults
+    has nothing to tell anyone. No program name in front of it, since the two
+    ports are installed under different ones and the flags are the part worth
+    copying either way.
+    """
+    if not tune_flags(vals):
+        return ""
+    return " ".join(shell_quote(t) for t in config_tokens(vals, zone_list))
+
+
+# What a shell reads as one word, and so needs no quoting.
+SHELL_SAFE = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_,./:+-%="
+)
+
+
+def shell_quote(s):
+    """Wrap a zone list a shell would read as more than one word.
+
+    Single quotes, and a name holding one of those is quoted the long way
+    round, which is the one spelling every POSIX shell agrees on.
+    """
+    if s and SHELL_SAFE.issuperset(s):
+        return s
+    return "'" + s.replace("'", "'\"'\"'") + "'"
+
+
 # One frame's spacing, both axes: the blank columns between faces and rows
 # between rows of faces, the one gutter each axis widens to swallow an odd
 # column, the margins before the first of each, and which way to lean a label
@@ -2435,6 +2903,107 @@ def pending_keys():
     return os.read(sys.stdin.fileno(), 64)
 
 
+# How many frames a half-read keystroke is given to finish -- 38ms, which is
+# nothing to wait for an Esc and more than enough for bytes the terminal has
+# already written.
+ESC_GRACE = 2
+
+# Keys the tuner reads that are not one character: what KeyDecoder hands back
+# instead of a byte.
+KEY_UP = "\x01up"
+KEY_DOWN = "\x01down"
+KEY_LEFT = "\x01left"
+KEY_RIGHT = "\x01right"
+KEY_ENTER = "\x01enter"
+KEY_BACK = "\x01back"
+KEY_ESC = "\x01esc"
+
+
+class KeyDecoder:
+    """Turn the byte stream into keys.
+
+    Arrows arrive as an escape sequence -- ESC [ A, or ESC O A from a terminal
+    in application cursor mode -- so ESC cannot be answered the moment it
+    lands: it is either a key of its own or the first byte of one. It is held
+    until the byte after it says which, and settle() is what decides a lone
+    one, at the end of the batch of keys a frame reads. Both ports settle at
+    that same point rather than on a timeout: a timer would make which frame
+    an Esc lands in a question about the machine's speed, and keytest compares
+    the frames.
+
+    A batch boundary is not the end of a keystroke, though, which is what a
+    held-down arrow shows: the terminal sends ESC [ C fifty times a second and
+    a read can end anywhere in that, so an ESC left over at the end of one
+    frame is as likely to be half an arrow as it is a whole Esc. Answering it
+    there closed the tuner mid-keypress. So a pending sequence has to sit out
+    a whole frame with nothing following it before it is called: `waited`
+    counts the frames it has survived, and one is enough, since the rest of a
+    sequence the terminal has already sent is never more than a read away.
+    """
+
+    def __init__(self):
+        self.state = 0  # 0 nothing pending, 1 an ESC, 2 inside a sequence
+        self.waited = 0  # frames the pending thing has sat through
+
+    def feed(self, b):
+        """Read one byte, returning the keys it completes.
+
+        None, one, or -- an ESC followed by an ordinary key -- two.
+        """
+        self.waited = 0
+        if self.state == 1:
+            if b in (0x5B, 0x4F):  # [ or O
+                self.state = 2
+                return []
+            self.state = 0
+            return [KEY_ESC] + self.feed(b)
+        if self.state == 2:
+            # Parameter bytes first, then one final byte in @ to ~: a modified
+            # arrow is ESC [ 1 ; 5 A, and anything else in that shape is read
+            # to its end and dropped rather than leaking its letters into a
+            # value.
+            if not 0x40 <= b <= 0x7E:
+                return []
+            self.state = 0
+            if b == 0x41:  # A
+                return [KEY_UP]
+            if b == 0x42:  # B
+                return [KEY_DOWN]
+            if b == 0x43:  # C
+                return [KEY_RIGHT]
+            if b == 0x44:  # D
+                return [KEY_LEFT]
+            return []
+        if b == 0x1B:
+            self.state = 1
+            return []
+        if b in (0x0D, 0x0A):
+            return [KEY_ENTER]
+        if b in (0x7F, 0x08):
+            return [KEY_BACK]
+        if 0x20 <= b < 0x7F:
+            return [chr(b)]
+        return []
+
+    def settle(self):
+        """End a frame's batch of keys.
+
+        Nothing pending, nothing to do; and anything pending gets one frame's
+        grace, in case it is a keystroke the read cut in half. What is still
+        there after that was all there was: a bare ESC is the key, and a
+        sequence that never finished is dropped rather than left to swallow
+        the next key that arrives.
+        """
+        if self.state == 0:
+            return []
+        if self.waited < ESC_GRACE:
+            self.waited += 1
+            return []
+        state = self.state
+        self.state, self.waited = 0, 0
+        return [KEY_ESC] if state == 1 else []
+
+
 def _terminate(_signum, _frame):
     """Turn SIGTERM into an ordinary unwind, so the cursor comes back.
 
@@ -2504,55 +3073,53 @@ def suspend(full_screen, restore, requiet):
     sys.stdout.flush()
 
 
+# The command line the clock ended up reading as, once the tuner has been at
+# it: printed by main after the screen has gone back to the shell, since a
+# layout worked out inside the alternate screen is lost with it. Empty when
+# nothing was changed, which is every redirected run.
+LEFT_WITH = ""
+
+
 def run(argv):
     """Everything that can fail happens before the terminal is touched."""
-    global ROWS, CELL_RATIO, COLS
+    global ROWS, CELL_RATIO, COLS, LEFT_WITH
     frozen = freeze()
-    (
-        want_per_row,
-        zone_list,
-        color_when,
-        day_when,
-        geometry,
-        quiet,
-        cell_ratio_flag,
-        scale_flag,
-        scale_auto,
-        per_row_auto,
-    ) = parse_args(argv)
-    halign, valign, hpad, vpad = geometry
+    # The preferences file first, then the command line on top of it, both
+    # through the same parser: a flag typed here beats the same flag saved
+    # there because it is read second, which is the only rule either of them
+    # needs. -h and --version are refused in a file, where a clock that
+    # printed its usage and stopped would be a bad afternoon.
+    conf = config_path()
+    opt = Options()
+    tokens = load_config(conf)  # its own complaint names the file already
+    try:
+        opt = parse_args(tokens, opt)
+    except (HelpRequested, VersionRequested):
+        raise ClockError(
+            f"{conf}: -h and --version are not settings; delete that line"
+        ) from None
+    except ClockError as exc:
+        raise ClockError(f"{conf}: {exc}") from None
+    opt = parse_args(argv, opt)
+
+    vals = opt.vals
+    zone_list, quiet = opt.zone_list, opt.quiet
     zones = resolve_zones(zone_list, frozen or datetime.now(timezone.utc))
 
-    color = use_color(color_when)
+    color = use_color(opt.color_when)
 
-    # --cell-ratio wins over CLOCK_CELL_RATIO, which wins over the default.
-    CELL_RATIO = cell_ratio_flag if cell_ratio_flag is not None else env_cell_ratio()
-
-    # --scale resizes the whole face, keeping the same shape: ROWS moves and
-    # COLS follows it, through the cell-ratio arithmetic above. --scale auto
-    # instead re-solves both every frame, in the main loop, against whatever
-    # the terminal measures to.
-    if not scale_auto:
-        scale = scale_flag if scale_flag is not None else 1.0
-        ROWS = math.floor(DEFAULT_ROWS_N * scale + 0.5)
-        if ROWS < MIN_ROWS_N or ROWS > MAX_ROWS_N:
-            raise ClockError(
-                f"--scale {scale:g} makes each face {ROWS} rows tall; want "
-                f"{MIN_ROWS_N} to {MAX_ROWS_N} rows, roughly --scale "
-                f"{MIN_ROWS_N / DEFAULT_ROWS_N:.2f} to --scale {MAX_ROWS_N / DEFAULT_ROWS_N:.2f}"
-            )
-        COLS = math.floor(ROWS * CELL_RATIO + 0.5)
-
-    # -n auto's whole point is choosing whatever per-row count lets --scale
-    # auto grow the face furthest; with a fixed --scale there is no face size
-    # left for it to affect, so it falls back to the plain default cap.
-    if per_row_auto and not scale_auto:
-        want_per_row = DEFAULT_PER_ROW
-        per_row_auto = False
+    # The six knobs, as text, are the whole of the layout state: --cell-ratio
+    # has already beaten CLOCK_CELL_RATIO in default_tunes, and a fixed
+    # --scale sizes the face here and for good, where --scale auto leaves ROWS
+    # to the per-frame search. r re-runs exactly this, which is why it can
+    # change any of them without the loop knowing where a value came from.
+    settings = read_tunes(vals)
+    apply_settings(settings)
 
     # A pinned clock is a still of one instant, and an undated still records
     # half of it, so the weekday goes under every face unless --day says
     # otherwise. Live, auto keeps it for the clocks that actually disagree.
+    day_when = opt.day_when
     if not day_when:
         day_when = "always" if frozen is not None else "auto"
     # The instant the display is holding, or None when it runs live. Holding
@@ -2560,9 +3127,108 @@ def run(argv):
     # -- it is the clock that stops, not the drawing.
     held = None
     help_on = False
+    # The tuner, and the keys feeding it.
+    tune = Tuner()
+    decoder = KeyDecoder()
+    # Said once the tuner closes, in the same modal it used, and dropped at
+    # the next key: the flags the layout on screen would need.
+    note = ""
     # Off the wall clock, not the frame's: a clock pinned with CLOCK_FREEZE
     # never advances, and the hint still has to give up after three seconds.
     flash_until = time.monotonic() + FLASH_SECONDS
+
+    def save():
+        """What S does, and what it says afterwards.
+
+        The clock on screen written back to the preferences file, or why it
+        could not be.
+        """
+        try:
+            save_config(conf, config_tokens(vals, zone_list))
+        except ClockError as exc:
+            return str(exc)
+        return f"saved to {conf}"
+
+    def pressed(key, now):
+        """Answer one key, and say whether it was the one that quits.
+
+        With the tuner open every key belongs to it -- the values it takes are
+        words like "left", "even" and "auto", so q, space and h are letters
+        there rather than the keys they are everywhere else. Ctrl+C still
+        quits, being the terminal driver's rather than the clock's.
+
+        Nested for the state it changes, which clock.go passes in as pointers
+        and this reaches through nonlocal; the two run the same algorithm.
+        """
+        nonlocal held, help_on, note, settings
+        if note:
+            # Any key clears the note the tuner left behind; the key still
+            # counts, so a reader who went straight for q gets it.
+            note = ""
+        if tune.open:
+            if key in (KEY_UP, KEY_DOWN):
+                step = NUM_TUNES - 1 if key == KEY_UP else 1
+                tune.sel = (tune.sel + step) % NUM_TUNES
+                tune.edit, tune.editing, tune.err = "", False, ""
+            elif key in (KEY_LEFT, KEY_RIGHT, " "):
+                # Straight onto the clocks: every value stepping can reach has
+                # already been through check_tune, so there is nothing to
+                # confirm and nothing that can be refused. Space walks the
+                # words round their list, where the arrows stop at the ends.
+                delta = -1 if key == KEY_LEFT else 1
+                following = tune_step(tune.sel, vals[tune.sel], delta, key == " ")
+                if following != vals[tune.sel]:
+                    vals[tune.sel] = following
+                    settings = read_tunes(vals)
+                    apply_settings(settings)
+                tune.edit, tune.editing, tune.err = "", False, ""
+            elif key == KEY_ENTER:
+                if tune.editing:
+                    try:
+                        check_tune(tune.sel, tune.edit)
+                    except ClockError as exc:
+                        # The value is gone along with the refusal: what is
+                        # left of a value the clock will not have is not a
+                        # head start on the next one, and leaving it would
+                        # make the next character typed land on the end of it.
+                        tune.edit, tune.editing, tune.err = "", False, str(exc)
+                    else:
+                        vals[tune.sel] = canon_tune(tune.sel, tune.edit)
+                        settings = read_tunes(vals)
+                        apply_settings(settings)
+                        tune.edit, tune.editing, tune.err = "", False, ""
+            elif key == KEY_BACK:
+                if tune.editing:
+                    tune.edit = tune.edit[:-1]
+                    if not tune.edit:
+                        tune.editing = False
+            elif key == KEY_ESC:
+                # Two things to back out of, innermost first: whatever is
+                # being typed, and then the tuner itself.
+                if tune.editing:
+                    tune.edit, tune.editing, tune.err = "", False, ""
+                else:
+                    tune.open = False
+            elif len(key) == 1:
+                tune.edit, tune.editing, tune.err = tune.edit + key, True, ""
+            return False
+        if key in ("q", "Q"):
+            return True
+        if key == " ":
+            held = None if held is not None else now
+        elif key in ("h", "H", "?"):
+            help_on = not help_on
+        elif key in ("r", "R"):
+            tune.open, tune.sel = True, 0
+            tune.edit, tune.editing, tune.err = "", False, ""
+            help_on = False
+        elif key == "S":
+            # Capitalised on purpose: it overwrites a file, and a shift is
+            # enough to keep an elbow from doing it. Lowercase s is not taken,
+            # so a miss does nothing at all.
+            note = save()
+            help_on = False
+        return False
 
     signal.signal(signal.SIGTERM, _terminate)
     signal.signal(signal.SIGTSTP, _suspend)
@@ -2626,13 +3292,24 @@ def run(argv):
                     face_second = second
                     faces = order_faces(merge_zones(zones, now), now)
 
-                if scale_auto:
-                    if per_row_auto:
-                        want_per_row = DEFAULT_PER_ROW  # overridden below whenever there is a window to measure
+                # -n auto's whole point is choosing whatever per-row count
+                # lets --scale auto grow the face furthest; with a fixed
+                # --scale there is no face size left for it to affect, so it
+                # falls back to the plain default cap. Settled per frame
+                # rather than once, since the tuner can move the scale
+                # between auto and fixed while the clock runs.
+                want_per_row = (
+                    DEFAULT_PER_ROW if settings.per_row_auto else settings.per_row
+                )
+
+                if settings.scale_auto:
                     if cols > 0 and lines > 0:
-                        if per_row_auto:
+                        if settings.per_row_auto:
                             want_per_row = len(faces)  # no real cap: see auto_scale's own comment
-                        auto_scale(want_per_row, len(faces), cols, lines, hpad, vpad)
+                        auto_scale(
+                            want_per_row, len(faces), cols, lines,
+                            settings.hpad, settings.vpad,
+                        )
                     else:
                         # Nothing measurable to fill, so there is nothing to
                         # solve -- same as any other window that cannot be
@@ -2647,10 +3324,13 @@ def run(argv):
                 fits = False
                 try:
                     per_row = fit_per_row(
-                        want_per_row, len(faces), cols, gap_floor(cols, hpad, GAP)
+                        want_per_row, len(faces), cols,
+                        gap_floor(cols, settings.hpad, GAP),
                     )
                     chunks = chunk_count(len(faces), per_row)
-                    fit_height(chunks, lines, gap_floor(lines, vpad, VGAP))
+                    fit_height(
+                        chunks, lines, gap_floor(lines, settings.vpad, VGAP)
+                    )
                 except ClockError as exc:
                     # A window dragged smaller than the clocks need is
                     # something the reader can undo, so say what is wrong and
@@ -2659,12 +3339,24 @@ def run(argv):
                     # fails outright, which is what the diff harness compares.
                     if not full_screen:
                         raise
-                    rows = complaint(str(exc), cols, lines, halign)
+                    rows = complaint(str(exc), cols, lines, settings.halign)
                 else:
                     fits = True
 
                 content = None
-                if fits and full_screen and help_on:
+                if full_screen and tune.open:
+                    # The one modal that shows over a window too small for
+                    # the clocks: a scale typed too large is undone from
+                    # here, and hiding it would leave nothing to undo it
+                    # with.
+                    content = tune_rows(tune, vals)
+                elif full_screen and note:
+                    # Folded, not one line: a note names a file, and a path is
+                    # easily longer than a window -- where a modal that does
+                    # not fit is a modal not shown at all, which for "cannot
+                    # write" would mean a failed save that said nothing.
+                    content = fold(note, cols - 4)
+                elif fits and full_screen and help_on:
                     content = help_rows()
                 elif not quiet and full_screen and time.monotonic() < flash_until:
                     content = [FLASH]
@@ -2679,10 +3371,10 @@ def run(argv):
                     # more than a column off centre -- and with a gutter to
                     # swallow the odd column, dead centre.
                     gap_n, extra, left, leaned = spread(
-                        per_row, cell_cols(), cols, GAP, hpad, halign
+                        per_row, cell_cols(), cols, GAP, settings.hpad, settings.halign
                     )
                     vgap, vextra, top, _ = spread(
-                        chunks, ROWS + 2, lines, VGAP, vpad, valign
+                        chunks, ROWS + 2, lines, VGAP, settings.vpad, settings.valign
                     )
                     lay = Layout(gap_n, extra, left, vgap, vextra, top, leaned)
                     rows = frame(faces, now, per_row, color, day_when, lay)
@@ -2713,14 +3405,27 @@ def run(argv):
                         break
                     continue
                 if interactive:
+                    was_tuning, prev_vals = tune.open, list(vals)
+                    keys = []
+                    for byte in pending_keys():
+                        keys += decoder.feed(byte)
+                    # The batch of keys this frame read is over; a keystroke
+                    # left half-read waits a frame to be finished before it is
+                    # taken for something else. Decided here rather than on a
+                    # timer: see KeyDecoder.
+                    keys += decoder.settle()
                     quitting = False
-                    for key in pending_keys():
-                        if key in b"qQ":
+                    for key in keys:
+                        if pressed(key, now):
                             quitting = True
-                        elif key == b" "[0]:
-                            held = None if held is not None else now
-                        elif key in b"hH?":
-                            help_on = not help_on
+                    if vals != prev_vals:
+                        LEFT_WITH = tune_command(vals, zone_list)
+                    if was_tuning and not tune.open:
+                        # Closing the tuner says what it would take to start
+                        # the clock this way, since the screen it was tuned on
+                        # is about to be given back to the shell and take the
+                        # answer with it.
+                        note = LEFT_WITH
                     if quitting:
                         break
                 if _suspend_asked:
@@ -2745,6 +3450,10 @@ def run(argv):
 def main():
     try:
         run(sys.argv[1:])
+        # After run's finally: the alternate screen is gone, and this lands in
+        # the shell's own scrollback where it can be copied.
+        if LEFT_WITH:
+            sys.stdout.write(LEFT_WITH + "\n")
     except HelpRequested:
         sys.stdout.write(USAGE)
     except VersionRequested:

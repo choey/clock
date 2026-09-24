@@ -326,6 +326,8 @@ than the alignment, whatever `--day` says.
 |---|---|
 | space | hold the frame still, and again to carry on |
 | `h` or `?` | show or hide the key list |
+| `r` | resize and align the clocks, while they run |
+| `S` | save those sizes and the zones on screen, for next time |
 | `q` | quit, as does Ctrl+C |
 
 Ctrl+Z suspends it, like any other job. The clock hands the terminal back for
@@ -344,6 +346,111 @@ this hint from the start, for a launch that doesn't blink; the key list is
 still there on `h` or `?` regardless. Pressing `h`/`?` before the three
 seconds are up shows the key list in its place, since the list already says
 everything the hint does.
+
+### Tuning the layout as it runs
+
+`r` opens a box holding the seven knobs that shape the grid — `--halign`,
+`--valign`, `--hpad`, `--vpad`, `--per-row`, `--scale` and `--cell-ratio` —
+and lets you work them against the clocks themselves rather than against a
+guess:
+
+```
+  halign      left [center] right
+  valign      top [center] bottom
+> hpad        4% [5%] 6%
+  vpad        [even] 0%
+  per-row     [auto] 3
+  scale       [auto] 1   (11 rows)
+  cell-ratio  2 [2.1] 2.2
+
+even, or a share like 10%
+up down pick   left right or space change
+or type a value and enter   esc done
+```
+
+Up and down pick a knob. Each one shows what it holds in brackets, with what
+is either side of it: the words a `--halign` takes, or the steps a number
+moves in — a whole percent for the pads, a whole face for `--per-row`, a tenth
+for `--scale` and `--cell-ratio`.
+
+**Left and right move a value**, and the clocks redraw with it on the next
+frame, a nineteenth of a second later. **Space** does the same and wraps round
+the end of a list, so a knob with three words can be cycled with one key. Left
+from the smallest number reaches the word below it — `even` for a pad, `auto`
+for the scale and the per-row count — and stepping stops where the flag's own
+limits are: `--scale` will not step past the face the window can hold.
+
+**Or type a value and press Return**, which is the way to reach one no number
+of steps would get to. A value the flag would not have is refused here in the
+same words, and the old one stays — so `--scale` cannot be typed up past what
+the window holds without a way back.
+
+The box sits over the clocks, the way the key list does, and unlike the key
+list it stays up in a window too small for the grid — that being exactly the
+window a scale typed too large leaves behind, and no place to hide the only
+way out of it.
+
+Escape closes the box — once to abandon a half-typed value, again to leave —
+and the clock then says what it would have taken to start this way:
+
+```
+--hpad 5% --scale 1.5 ET,PT,UTC
+```
+
+That line is shown in the box's place for a moment, and printed again on the
+way out, where the shell keeps it: the alternate screen goes back to what it
+held before, and takes anything left on it. `clock` (or `pyclock`) in front of
+it is the whole command. Nothing is printed if nothing was changed — and `S`,
+below, saves it instead of printing it.
+
+`--cell-ratio` is the one worth tuning this way. It depends on your font and
+line spacing, and the difference between right and wrong is a face that reads
+as round or as an egg; see [Round faces](#round-faces).
+
+### Saving what you tuned
+
+`S` writes the clock on screen — the layout knobs that differ from the
+defaults, the per-row count among them, and the zones themselves — to
+`~/.config/clock/config`, and says where it put it. Every clock started
+afterwards reads that file, so the tuning survives the terminal it was done
+in:
+
+```
+# clock: written by S, read at startup. One argument per line.
+# Delete this file to forget it; CLOCK_CONFIG= ignores it.
+--hpad
+5%
+ET,PT,UTC
+```
+
+The file is an argument list, one token per line — a token to a line so that a
+zone list with a space in it needs no quoting rules. Blank lines and lines
+starting with `#` are skipped. It is read by the same parser the command line
+goes through, before the command line, which gives the whole of the rule for
+how the two fit together:
+
+**the file is the front of your command line.** Anything you type beats the
+same thing saved, because it is read second. `clock UTC` on a file holding
+`ET,PT,UTC` draws UTC alone; `clock --scale 1` on a file holding `--scale 2`
+gets 1. Everything in the file you did not override still applies. A setting
+the file may not hold is one that stops the clock rather than configuring it:
+`-h`, `--help` and `--version` are refused, by name.
+
+Edit it, or delete it to forget the whole thing — a missing file is not an
+error, it is a clock that has never been asked to save. `S` writes it through
+a temporary file in the same directory, so a save that fails part way leaves
+the old one rather than half of a new one, and says what went wrong instead of
+taking the clock down with it.
+
+| where | |
+|---|---|
+| `$CLOCK_CONFIG` | this file, wherever you point it |
+| `$XDG_CONFIG_HOME/clock/config` | if that variable is set |
+| `~/.config/clock/config` | otherwise |
+
+`CLOCK_CONFIG=` — set, but empty — means no preferences file at all, for a
+script that wants the defaults whatever the machine has saved. It is what
+every harness in `tools/` runs with, for that reason.
 
 ### Holding a frame
 

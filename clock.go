@@ -10,9 +10,11 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -110,7 +112,10 @@ the window, and then the alignment decides where the grid sits. CLOCK_CELL_RATIO
 sets the same thing as --cell-ratio, for when it wants to be set once per
 terminal rather than typed every time; the flag wins if both are given.
 
-Space holds the frame still, for a screenshot, and h or ? opens the key list.
+Space holds the frame still, for a screenshot, h or ? opens the key list, and
+r resizes and aligns the clocks while they run. S saves those sizes and the
+zones on screen to ~/.config/clock/config, which every clock reads at startup;
+CLOCK_CONFIG points somewhere else, and set but empty means no file at all.
 Press q or Ctrl+C to quit.
 
 examples:
@@ -151,11 +156,53 @@ var needs = map[string]string{
 var hotkeys = []struct{ key, what string }{
 	{"space", "hold the frame"},
 	{"h ?", "toggle this list"},
+	{"r", "resize and align the clocks"},
+	{"S", "save these sizes and zones"},
 	{"q", "quit, or Ctrl+C"},
 }
 
 // hotkeyCol is where the descriptions start, so the keys get a gutter.
 const hotkeyCol = 8
+
+// tunables is what r puts up: the knobs that can be changed while the clock
+// runs, in the order they are listed, and what each one takes -- the same
+// words its flag's own error message offers, since a value typed here is read
+// by exactly the parser that flag uses. Same order and wording as
+// pyclock.py's table.
+var tunables = []struct{ name, takes string }{
+	{"halign", "left, center or right"},
+	{"valign", "top, center or bottom"},
+	{"hpad", "even, or a share like 10%"},
+	{"vpad", "even, or a share like 5%"},
+	{"per-row", "auto, or a count like 3"},
+	{"scale", "auto, or a number like 1.5"},
+	{"cell-ratio", "a number like 2.1"},
+}
+
+// Which tunable is which, and how many there are. The frame loop holds the
+// six as the text they were given in rather than as parsed values: what the
+// tuner shows, what the parsers read and what a saved command line would say
+// are then one string, and no number is ever formatted back out -- Go's %g
+// and Python's :g do not agree past six significant digits, and a value the
+// reader typed is not ours to round anyway.
+const (
+	tuneHalign = iota
+	tuneValign
+	tuneHpad
+	tuneVpad
+	tunePerRow
+	tuneScale
+	tuneCellRatio
+	numTunes
+)
+
+// tuneCol is where the values start, past the longest name plus a gutter.
+const tuneCol = 12
+
+// defaultCellRatioText is defaultCellRatio written out, for the tuner and for
+// the flags it hands back. Written rather than formatted, so the two ports
+// cannot disagree about how a float prints.
+const defaultCellRatioText = "2.1"
 
 // flashText is said once, in the same modal the key list uses, and then
 // dropped: a clock that has taken the whole screen owes the reader a way back
@@ -179,16 +226,38 @@ var rowsN = defaultRowsN
 // colsN is the face width in terminal columns, set alongside rowsN and cellRatio.
 var colsN = int(math.Floor(defaultRowsN*defaultCellRatio + 0.5))
 
-// envCellRatio reads CLOCK_CELL_RATIO, falling back to the default on
-// anything unusable. Unlike --cell-ratio, an environment variable might be
-// stale or set for some other program, so a bad value is not a user error --
-// it is simply ignored, the same way an unset one is.
-func envCellRatio() float64 {
-	v, ok := positiveFloat(os.Getenv("CLOCK_CELL_RATIO"))
-	if !ok {
-		return defaultCellRatio
+// defaultTunes is the six knobs as an untouched clock has them: the flag
+// defaults, with CLOCK_CELL_RATIO standing in for the ratio where it is
+// usable. Unlike --cell-ratio, an environment variable might be stale or set
+// for some other program, so a bad value there is not a user error -- it is
+// simply ignored, the same way an unset one is.
+func defaultTunes() [numTunes]string {
+	vals := [numTunes]string{
+		tuneHalign:    "center",
+		tuneValign:    "center",
+		tuneHpad:      "even",
+		tuneVpad:      "even",
+		tunePerRow:    "auto",
+		tuneScale:     "auto",
+		tuneCellRatio: defaultCellRatioText,
 	}
-	return v
+	if v := os.Getenv("CLOCK_CELL_RATIO"); v != "" {
+		if _, ok := positiveFloat(v); ok {
+			vals[tuneCellRatio] = v
+		}
+	}
+	return vals
+}
+
+// tuneIndex is which of the six a flag name is. Only ever asked about the six
+// names tunables holds, so there is no not-found to answer.
+func tuneIndex(name string) int {
+	for i, t := range tunables {
+		if t.name == name {
+			return i
+		}
+	}
+	return -1
 }
 
 // A day inside Python's datetime range at each end. The pinned instant is
@@ -1105,20 +1174,265 @@ type geometry struct {
 	hpad, vpad     int
 }
 
+// settings is the six tunables parsed: what the frame loop actually lays out
+// with. Read back from the text with readTunes whenever the text changes --
+// at startup, and after every value the tuner takes.
+type settings struct {
+	geo        geometry
+	cellRatio  float64
+	scaleAuto  bool
+	rows       int // the face height a fixed --scale asks for; unused when scaleAuto
+	perRow     int // the cap an explicit -n asks for; unused when perRowAuto
+	perRowAuto bool
+}
+
+// rowsForScale turns a --scale into a face height, and refuses one that would
+// leave the numerals nowhere to sit or ask for a canvas the size of a wall.
+// The same answer at startup and under the tuner: a scale typed into the
+// tuner is refused in the words the flag would have used.
+func rowsForScale(scale float64) (int, error) {
+	rows := int(math.Floor(defaultRowsN*scale + 0.5))
+	if rows < minRowsN || rows > maxRowsN {
+		return 0, fmt.Errorf(
+			"--scale %s makes each face %d rows tall; want %d to %d rows, roughly --scale %.2f to --scale %.2f",
+			trimFloat(scale), rows, minRowsN, maxRowsN,
+			float64(minRowsN)/defaultRowsN, float64(maxRowsN)/defaultRowsN)
+	}
+	return rows, nil
+}
+
+// checkTune reads one tunable's text exactly as its flag reads it, and is the
+// only gate the tuner has: what survives this is stored as text and read back
+// by readTunes, which therefore cannot fail.
+func checkTune(i int, val string) error {
+	switch i {
+	case tuneHalign:
+		_, err := parseChoice("halign", val, haligns)
+		return err
+	case tuneValign:
+		_, err := parseChoice("valign", val, valigns)
+		return err
+	case tuneHpad, tuneVpad:
+		_, err := parsePad(tunables[i].name, val)
+		return err
+	case tunePerRow:
+		if val == "auto" {
+			return nil
+		}
+		_, err := parseCount(val, "--per-row", maxPerRow)
+		return err
+	case tuneScale:
+		if val == "auto" {
+			return nil
+		}
+		s, err := parseScale(val)
+		if err != nil {
+			return err
+		}
+		_, err = rowsForScale(s)
+		return err
+	default:
+		_, err := parseRatio(val)
+		return err
+	}
+}
+
+// canonTune is how a value is written down once it has been accepted: a pad
+// typed as "5" and one typed as "5%" are the same share, and a count typed as
+// "007" is three faces a row, so the tuner, the saved file and the line it
+// prints all say the one spelling. The decimals are left exactly as typed --
+// rewriting 2.15 as 2.2 would be rounding a value nobody asked to round.
+func canonTune(i int, val string) string {
+	switch i {
+	case tuneHpad, tuneVpad:
+		n, err := parsePad(tunables[i].name, val)
+		if err != nil || n < 0 {
+			return val
+		}
+		return strconv.Itoa(n) + "%"
+	case tunePerRow:
+		if val == "auto" {
+			return val
+		}
+		n, err := parseCount(val, "--per-row", maxPerRow)
+		if err != nil {
+			return val
+		}
+		return strconv.Itoa(n)
+	}
+	return val
+}
+
+// readTunes parses the six back into a settings. Every value has been through
+// checkTune, so nothing here can fail; anything that did would be a value
+// stored without being checked, which is a bug rather than a bad input.
+func readTunes(vals [numTunes]string) settings {
+	set := settings{
+		geo:        geometry{hpad: -1, vpad: -1},
+		cellRatio:  defaultCellRatio,
+		scaleAuto:  true,
+		perRow:     defaultPerRow,
+		perRowAuto: true,
+	}
+	set.geo.halign = vals[tuneHalign]
+	set.geo.valign = vals[tuneValign]
+	set.geo.hpad, _ = parsePad("hpad", vals[tuneHpad])
+	set.geo.vpad, _ = parsePad("vpad", vals[tuneVpad])
+	if r, ok := positiveFloat(vals[tuneCellRatio]); ok {
+		set.cellRatio = r
+	}
+	if vals[tunePerRow] != "auto" {
+		if n, err := parseCount(vals[tunePerRow], "--per-row", maxPerRow); err == nil {
+			set.perRow, set.perRowAuto = n, false
+		}
+	}
+	if vals[tuneScale] != "auto" {
+		if s, ok := positiveFloat(vals[tuneScale]); ok {
+			set.scaleAuto = false
+			set.rows, _ = rowsForScale(s)
+		}
+	}
+	return set
+}
+
+// apply puts a settings into the globals the drawing code reads. A fixed
+// scale sizes the face here and for good; --scale auto leaves rowsN to the
+// per-frame search, which reads cellRatio itself.
+func (set settings) apply() {
+	cellRatio = set.cellRatio
+	if !set.scaleAuto {
+		rowsN = set.rows
+		colsN = int(math.Floor(float64(rowsN)*cellRatio + 0.5))
+	}
+}
+
+// trimFloat writes a float the way both ports write it, which is not what
+// either language's shortest form does: %g and :g part company past six
+// significant digits. Only the scale error needs it -- everything else the
+// reader sees is the text they typed.
+func trimFloat(v float64) string {
+	s := strconv.FormatFloat(v, 'g', 6, 64)
+	return s
+}
+
+// options is everything a command line sets, and so everything the
+// preferences file can set too: the file is read by the same parser, into the
+// same struct, before the command line is read into it on top. That is the
+// whole of "the file is the front of your command line" -- last wins, with no
+// second set of rules to keep in step with the first.
+type options struct {
+	zoneList  string
+	colorWhen string
+	dayWhen   string
+	quiet     bool
+	vals      [numTunes]string
+}
+
+// defaultOptions is a clock nobody has told anything: the flag defaults, and
+// the six knobs as defaultTunes has them.
+func defaultOptions() options {
+	return options{
+		colorWhen: "auto",
+		dayWhen:   "", // unset: run() picks it, since a pinned clock differs
+		vals:      defaultTunes(),
+	}
+}
+
+// configPath is where S saves and startup reads. CLOCK_CONFIG names it
+// outright -- set but empty means no preferences file at all, which is what
+// every harness here runs with and what a script wanting the plain defaults
+// can set. Otherwise the usual place, and nowhere at all if even HOME is
+// unset.
+func configPath() string {
+	if v, ok := os.LookupEnv("CLOCK_CONFIG"); ok {
+		return v
+	}
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, "clock", "config")
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		return filepath.Join(home, ".config", "clock", "config")
+	}
+	return ""
+}
+
+// loadConfig reads the file into the argument list it is: one token per line,
+// blank lines and # lines skipped. One token per line rather than a line of
+// arguments is what keeps a zone list with a space in it -- Salt Lake City --
+// from needing quoting rules that the two ports would then have to agree
+// about.
+//
+// A file that is not there is not an error: it is a clock that has never been
+// asked to save. One that cannot be read is, and says so in words of its own
+// rather than the language's, since Go and Python spell that complaint
+// differently and difftest compares the two.
+func loadConfig(path string) ([]string, error) {
+	if path == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("cannot read %s", path)
+	}
+	var tokens []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		tokens = append(tokens, line)
+	}
+	return tokens, nil
+}
+
+// saveConfig writes the tokens back, through a temporary file in the same
+// directory so a save that fails part way leaves the old file rather than
+// half of a new one.
+func saveConfig(path string, tokens []string) error {
+	if path == "" {
+		return errors.New("CLOCK_CONFIG is empty: nowhere to save")
+	}
+	fail := fmt.Errorf("cannot write %s", path)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fail
+	}
+	tmp, err := os.CreateTemp(dir, "config-")
+	if err != nil {
+		return fail
+	}
+	body := configHeader + strings.Join(tokens, "\n")
+	if len(tokens) > 0 {
+		body += "\n"
+	}
+	_, err = tmp.WriteString(body)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+		return fail
+	}
+	return nil
+}
+
+// configHeader says what the file is to whoever opens it, and that editing it
+// is allowed -- it is a command line, and everything the command line takes it
+// takes.
+const configHeader = "# clock: written by S, read at startup. One argument per line.\n" +
+	"# Delete this file to forget it; CLOCK_CONFIG= ignores it.\n"
+
 // parseArgs reads the command line: one optional zone list, and the flags in
 // any position. Hand-rolled rather than package flag, which insists every
 // flag precede the first positional -- "clock ET,PT -n 2" would silently
 // ignore the -n. pyclock.py runs the same algorithm for the same reason.
-func parseArgs(argv []string) (int, string, string, string, geometry, bool, float64, float64, bool, bool, error) {
-	perRow := defaultPerRow // only used when an explicit -n/--per-row overrides perRowAuto below
-	colorWhen := "auto"
-	dayWhen := "" // unset: run() picks it, since a pinned clock differs
-	geo := geometry{halign: "center", valign: "center", hpad: -1, vpad: -1}
-	quiet := false
-	cellRatioFlag := 0.0 // unset: run() falls back to CLOCK_CELL_RATIO, then the default
-	scaleFlag := 0.0     // unset unless a specific --scale overrides scaleAuto below
-	scaleAuto := true    // the default: run() re-solves rowsN every frame to fill the window
-	perRowAuto := true   // the default: run() also searches per-row counts, to maximise rowsN
+func parseArgs(argv []string, opt options) (out options, err error) {
+	out = opt
 	var positional []string
 	endOfFlags := false
 
@@ -1130,7 +1444,8 @@ func parseArgs(argv []string) (int, string, string, string, geometry, bool, floa
 		case a == "--":
 			endOfFlags = true
 		case a == "-h" || a == "--help":
-			return 0, "", "", "", geo, false, 0, 0, false, false, errHelp
+			err = errHelp
+			return
 		case strings.HasPrefix(a, "--"):
 			name, val, haveVal := strings.Cut(a[2:], "=")
 			switch name {
@@ -1138,159 +1453,128 @@ func parseArgs(argv []string) (int, string, string, string, geometry, bool, floa
 				if !haveVal {
 					i++
 					if i >= len(argv) {
-						return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("--per-row needs a number, e.g. --per-row 2")
+						err = errors.New("--per-row needs a number, e.g. --per-row 2")
+						return
 					}
 					val = argv[i]
 				}
-				if val == "auto" {
-					perRowAuto = true
-					break
+				// Kept as text alongside the layout knobs, which is where
+				// the tuner reads it from; the count is parsed here all the
+				// same, so the complaint is --per-row's own.
+				if val != "auto" {
+					if _, err = parseCount(val, "--per-row", maxPerRow); err != nil {
+						return
+					}
 				}
-				n, err := parseCount(val, "--per-row", maxPerRow)
-				if err != nil {
-					return 0, "", "", "", geo, false, 0, 0, false, false, err
-				}
-				perRow = n
-				perRowAuto = false
+				out.vals[tunePerRow] = canonTune(tunePerRow, val)
 			case "color":
 				// Bare --color means always, and takes no separate argument:
 				// "clock --color ET" names a zone list, exactly as ls and git
 				// read the same flag. The value only ever follows an "=".
-				colorWhen = "always"
+				out.colorWhen = "always"
 				if haveVal {
-					w, err := parseChoice("color", val, colorWhens)
-					if err != nil {
-						return 0, "", "", "", geo, false, 0, 0, false, false, err
+					if out.colorWhen, err = parseChoice("color", val, colorWhens); err != nil {
+						return
 					}
-					colorWhen = w
 				}
 			case "no-color":
 				if haveVal {
-					return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("--no-color takes no value")
+					err = errors.New("--no-color takes no value")
+					return
 				}
-				colorWhen = "never"
+				out.colorWhen = "never"
 			case "version":
 				// Read where it is found, like --help: everything before it on
 				// the command line still has to parse, everything after it is
 				// never looked at.
 				if haveVal {
-					return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("--version takes no value")
+					err = errors.New("--version takes no value")
+					return
 				}
-				return 0, "", "", "", geo, false, 0, 0, false, false, errVersion
+				err = errVersion
+				return
 			case "day":
-				dayWhen = "always"
+				out.dayWhen = "always"
 				if haveVal {
-					w, err := parseChoice("day", val, whens)
-					if err != nil {
-						return 0, "", "", "", geo, false, 0, 0, false, false, err
+					if out.dayWhen, err = parseChoice("day", val, whens); err != nil {
+						return
 					}
-					dayWhen = w
 				}
 			case "no-day":
 				if haveVal {
-					return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("--no-day takes no value")
+					err = errors.New("--no-day takes no value")
+					return
 				}
-				dayWhen = "never"
+				out.dayWhen = "never"
 			case "quiet":
 				if haveVal {
-					return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("--quiet takes no value")
+					err = errors.New("--quiet takes no value")
+					return
 				}
-				quiet = true
+				out.quiet = true
 			case "halign", "valign", "hpad", "vpad", "cell-ratio", "scale":
 				// These six want a value, and take it either way round, as
 				// --per-row does: there is no bare form to be ambiguous with.
 				if !haveVal {
 					i++
 					if i >= len(argv) {
-						return 0, "", "", "", geo, false, 0, 0, false, false, fmt.Errorf(
+						err = fmt.Errorf(
 							"--%s needs a value, e.g. %s", name, needs[name])
+						return
 					}
 					val = argv[i]
 				}
-				switch name {
-				case "halign":
-					w, err := parseChoice(name, val, haligns)
-					if err != nil {
-						return 0, "", "", "", geo, false, 0, 0, false, false, err
-					}
-					geo.halign = w
-				case "valign":
-					w, err := parseChoice(name, val, valigns)
-					if err != nil {
-						return 0, "", "", "", geo, false, 0, 0, false, false, err
-					}
-					geo.valign = w
-				case "cell-ratio":
-					r, err := parseRatio(val)
-					if err != nil {
-						return 0, "", "", "", geo, false, 0, 0, false, false, err
-					}
-					cellRatioFlag = r
-				case "scale":
-					if val == "auto" {
-						scaleAuto = true
-						break
-					}
-					s, err := parseScale(val)
-					if err != nil {
-						return 0, "", "", "", geo, false, 0, 0, false, false, err
-					}
-					scaleFlag = s
-					scaleAuto = false
-				default:
-					n, err := parsePad(name, val)
-					if err != nil {
-						return 0, "", "", "", geo, false, 0, 0, false, false, err
-					}
-					if name == "hpad" {
-						geo.hpad = n
-					} else {
-						geo.vpad = n
-					}
+				// Checked by the flag's own parser and then kept as text, so
+				// the tuner and a saved command line say what was typed.
+				k := tuneIndex(name)
+				if err = checkTune(k, val); err != nil {
+					return
 				}
+				out.vals[k] = canonTune(k, val)
 			default:
-				return 0, "", "", "", geo, false, 0, 0, false, false, fmt.Errorf("unknown option: --%s", name)
+				err = fmt.Errorf("unknown option: --%s", name)
+				return
 			}
 		case a == "-q":
-			quiet = true
+			out.quiet = true
 		case len(a) > 1 && strings.HasPrefix(a, "-"):
 			if a[1] != 'n' {
-				return 0, "", "", "", geo, false, 0, 0, false, false, fmt.Errorf("unknown option: %s", a)
+				err = fmt.Errorf("unknown option: %s", a)
+				return
 			}
 			rest := a[2:]
 			switch {
 			case rest == "":
 				i++
 				if i >= len(argv) {
-					return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("-n needs a number, e.g. -n 2")
+					err = errors.New("-n needs a number, e.g. -n 2")
+					return
 				}
 				rest = argv[i]
 			case rest[0] == '=':
-				return 0, "", "", "", geo, false, 0, 0, false, false, errors.New("-n takes its value as \"-n N\" or \"-nN\", not \"-n=N\"")
+				err = errors.New("-n takes its value as \"-n N\" or \"-nN\", not \"-n=N\"")
+				return
 			}
-			if rest == "auto" {
-				perRowAuto = true
-				continue
+			if rest != "auto" {
+				if _, err = parseCount(rest, "-n", maxPerRow); err != nil {
+					return
+				}
 			}
-			n, err := parseCount(rest, "-n", maxPerRow)
-			if err != nil {
-				return 0, "", "", "", geo, false, 0, 0, false, false, err
-			}
-			perRow = n
-			perRowAuto = false
+			out.vals[tunePerRow] = canonTune(tunePerRow, rest)
 		default:
 			positional = append(positional, a)
 		}
 	}
 
 	if len(positional) > 1 {
-		return 0, "", "", "", geo, false, 0, 0, false, false, fmt.Errorf("expected one comma-separated zone list, got %d: %s",
+		err = fmt.Errorf("expected one comma-separated zone list, got %d: %s",
 			len(positional), strings.Join(positional, " "))
+		return
 	}
-	if len(positional) == 0 {
-		return perRow, "", colorWhen, dayWhen, geo, quiet, cellRatioFlag, scaleFlag, scaleAuto, perRowAuto, nil
+	if len(positional) == 1 {
+		out.zoneList = positional[0]
 	}
-	return perRow, positional[0], colorWhen, dayWhen, geo, quiet, cellRatioFlag, scaleFlag, scaleAuto, perRowAuto, nil
+	return
 }
 
 // A resolved clock face is just its location. No label is stored: it comes off
@@ -2405,6 +2689,373 @@ func helpRows() []string {
 	return rows
 }
 
+// tuner is what r puts up: the six knobs, one of them picked, and whatever is
+// being typed into it. It holds no values of its own -- the text it shows is
+// the same text the frame loop lays out from, so what is on screen is always
+// what is in effect.
+type tuner struct {
+	open    bool
+	sel     int    // which of the six is picked
+	edit    string // what has been typed into it, once typing has started
+	editing bool
+	err     string // the last refusal, in the flag's own words
+}
+
+// tuneOptions is the words a knob takes, for the two that take words rather
+// than numbers. The lists the flags themselves are checked against, so the
+// tuner offers exactly what --halign and --valign accept.
+func tuneOptions(i int) []string {
+	switch i {
+	case tuneHalign:
+		return haligns
+	case tuneValign:
+		return valigns
+	}
+	return nil
+}
+
+// tuneWord is the word a numeric knob takes instead of a number, and which
+// sits one step below its smallest value: even for a pad, auto for the scale.
+// The cell ratio has none -- there is no "work it out for me" for a font.
+func tuneWord(i int) string {
+	switch i {
+	case tuneHpad, tuneVpad:
+		return "even"
+	case tuneScale, tunePerRow:
+		return "auto"
+	}
+	return ""
+}
+
+// tenthsText writes a count of tenths as a decimal, by hand: 21 is "2.1" and
+// 20 is "2". Every number the tuner steps to is built this way rather than
+// formatted from a float, which is what keeps the two ports spelling the same
+// value the same -- see the note on tunables.
+func tenthsText(tenths int) string {
+	if tenths%10 == 0 {
+		return strconv.Itoa(tenths / 10)
+	}
+	return strconv.Itoa(tenths/10) + "." + strconv.Itoa(tenths%10)
+}
+
+// tuneStep moves a knob one step and returns the text it lands on -- or the
+// text it started from, where there is nowhere to go. A word list walks, and
+// wraps if asked (which is what space does, and the arrows do not). A pad
+// moves a whole percent, since that is what it counts; the scale and the cell
+// ratio move a tenth, counted as integer tenths so no float is formatted back
+// into text. Below the smallest number is the knob's word, where it has one,
+// and above the largest is nothing at all.
+//
+// Anything it lands on goes through checkTune before it is handed back, so
+// stepping cannot reach a value typing would be refused for -- a scale one
+// step past what the face may be simply does not move.
+func tuneStep(i int, val string, delta int, wrap bool) string {
+	if opts := tuneOptions(i); opts != nil {
+		at := 0
+		for n, o := range opts {
+			if o == val {
+				at = n
+			}
+		}
+		next := at + delta
+		if wrap {
+			next = (next + len(opts)) % len(opts)
+		}
+		if next < 0 || next >= len(opts) {
+			return val
+		}
+		return opts[next]
+	}
+
+	word := tuneWord(i)
+	if val == word {
+		if delta < 0 {
+			return val // already below the smallest number there is
+		}
+		// Back into numbers at the plain default, which is the size, the
+		// spacing and the row an untouched clock has.
+		switch i {
+		case tuneScale:
+			return "1"
+		case tunePerRow:
+			return strconv.Itoa(defaultPerRow)
+		}
+		return "0%"
+	}
+
+	var next string
+	if i == tunePerRow {
+		n, err := parseCount(val, "--per-row", maxPerRow)
+		if err != nil {
+			return val
+		}
+		if n+delta < 1 {
+			return word
+		}
+		next = strconv.Itoa(n + delta)
+	} else if i == tuneHpad || i == tuneVpad {
+		n, err := parsePad(tunables[i].name, val)
+		if err != nil {
+			return val
+		}
+		if n+delta < 0 {
+			return word
+		}
+		next = strconv.Itoa(n+delta) + "%"
+	} else {
+		v, ok := positiveFloat(val)
+		if !ok {
+			return val
+		}
+		tenths := int(math.Floor(v*10+0.5)) + delta
+		if tenths <= 0 {
+			if word != "" {
+				return word
+			}
+			return val
+		}
+		next = tenthsText(tenths)
+	}
+	if checkTune(i, next) != nil {
+		// Off the end of what this knob may be. The scale has somewhere to
+		// go at the bottom -- auto -- and nowhere at the top.
+		if delta < 0 && word != "" {
+			return word
+		}
+		return val
+	}
+	return next
+}
+
+// tuneShow is a knob's value as the box says it: the words it takes with the
+// one it holds in brackets, or -- for a number -- the steps either side of it,
+// so the size of a step is on screen rather than something to find out by
+// pressing a key.
+func tuneShow(i int, val string) string {
+	if opts := tuneOptions(i); opts != nil {
+		out := ""
+		for _, o := range opts {
+			if out != "" {
+				out += " "
+			}
+			if o == val {
+				out += "[" + o + "]"
+			} else {
+				out += o
+			}
+		}
+		return out
+	}
+	out := "[" + val + "]"
+	if prev := tuneStep(i, val, -1, false); prev != val {
+		out = prev + " " + out
+	}
+	if next := tuneStep(i, val, 1, false); next != val {
+		out += " " + next
+	}
+	return out
+}
+
+// tuneRows is the tuner's modal, one row per knob and a footer. The value
+// column is the text each knob holds, except the one being typed into, which
+// shows the buffer and a cursor -- so an empty buffer still reads as a field
+// waiting for something rather than as a value of nothing.
+//
+// The face height goes beside the scale, since that is the number --scale
+// auto is choosing and the one a reader wanting to pin it down needs.
+func tuneRows(t tuner, vals [numTunes]string) []string {
+	rows := make([]string, 0, len(tunables)+3)
+	for i, k := range tunables {
+		mark := "  "
+		if i == t.sel {
+			mark = "> "
+		}
+		val := tuneShow(i, vals[i])
+		if i == t.sel && t.editing {
+			val = t.edit + "_"
+		}
+		if i == tuneScale {
+			val += fmt.Sprintf("   (%d rows)", rowsN)
+		}
+		rows = append(rows, mark+ljust(k.name, tuneCol)+val)
+	}
+	say := tunables[t.sel].takes
+	if t.err != "" {
+		say = t.err
+	}
+	return append(rows, "", say,
+		"up down pick   left right or space change",
+		"or type a value and enter   esc done")
+}
+
+// tuneFlags is what the tuned layout would take on a command line: the knobs
+// that differ from an untouched clock's, in the tuner's own order. Nothing is
+// formatted here -- these are the strings that were typed.
+func tuneFlags(vals [numTunes]string) []string {
+	def := defaultTunes()
+	var out []string
+	for i, k := range tunables {
+		if vals[i] != def[i] {
+			out = append(out, "--"+k.name, vals[i])
+		}
+	}
+	return out
+}
+
+// configTokens is the clock on screen written as an argument list: the knobs
+// that differ from an untouched clock's, the -n if one was given, and the zone
+// list as it was typed. What S saves, one token per line, and what the line
+// the tuner leaves behind is made of.
+func configTokens(vals [numTunes]string, zoneList string) []string {
+	tokens := tuneFlags(vals)
+	if zoneList != "" {
+		tokens = append(tokens, zoneList)
+	}
+	return tokens
+}
+
+// tuneCommand is the same list said out loud: quoted for a shell, and empty
+// unless some knob was actually moved -- a clock still at its defaults has
+// nothing to tell anyone. No program name in front of it, since the two ports
+// are installed under different ones and the flags are the part worth copying
+// either way.
+func tuneCommand(vals [numTunes]string, zoneList string) string {
+	if len(tuneFlags(vals)) == 0 {
+		return ""
+	}
+	tokens := configTokens(vals, zoneList)
+	quoted := make([]string, len(tokens))
+	for i, t := range tokens {
+		quoted[i] = shellQuote(t)
+	}
+	return strings.Join(quoted, " ")
+}
+
+// shellQuote wraps a zone list a shell would read as more than one word.
+// Single quotes, and a name holding one of those is quoted the long way
+// round, which is the one spelling every POSIX shell agrees on.
+func shellQuote(s string) string {
+	safe := true
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+			strings.IndexByte("_,./:+-%=", c) >= 0) {
+			safe = false
+			break
+		}
+	}
+	if safe && s != "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+// Keys the tuner reads that are not one character: what keyDecoder hands back
+// instead of a byte.
+const (
+	keyUp    = "\x01up"
+	keyDown  = "\x01down"
+	keyLeft  = "\x01left"
+	keyRight = "\x01right"
+	keyEnter = "\x01enter"
+	keyBack  = "\x01back"
+	keyEsc   = "\x01esc"
+)
+
+// keyDecoder turns the byte stream into keys. Arrows arrive as an escape
+// sequence -- ESC [ A, or ESC O A from a terminal in application cursor mode
+// -- so ESC cannot be answered the moment it lands: it is either a key of its
+// own or the first byte of one. It is held until the byte after it says
+// which, and settle() is what decides a lone one, at the end of a batch of
+// keys a frame reads. Both ports settle at that same point rather than on a
+// timeout: a timer would make which frame an Esc lands in a question about
+// the machine's speed, and keytest compares the frames.
+//
+// A batch boundary is not the end of a keystroke, though, which is what a
+// held-down arrow shows: the terminal sends ESC [ C fifty times a second and
+// a read can end anywhere in that, so an ESC left over at the end of one
+// frame is as likely to be half an arrow as it is a whole Esc. Answering it
+// there closed the tuner mid-keypress. So a pending sequence has to sit out a
+// whole frame with nothing following it before it is called: waited counts
+// the frames it has survived, and one is enough, since the rest of a sequence
+// the terminal has already sent is never more than a read away.
+type keyDecoder struct {
+	state  int // 0 nothing pending, 1 an ESC, 2 inside a sequence
+	waited int // frames the pending thing has sat through
+}
+
+// escGrace is how many frames a half-read keystroke is given to finish --
+// 38ms, which is nothing to wait for an Esc and more than enough for bytes
+// the terminal has already written.
+const escGrace = 2
+
+// feed reads one byte, returning the keys it completes -- none, one, or (an
+// ESC followed by an ordinary key) two.
+func (d *keyDecoder) feed(b byte) []string {
+	d.waited = 0
+	switch d.state {
+	case 1:
+		if b == '[' || b == 'O' {
+			d.state = 2
+			return nil
+		}
+		d.state = 0
+		return append([]string{keyEsc}, d.feed(b)...)
+	case 2:
+		// Parameter bytes first, then one final byte in @ to ~: a modified
+		// arrow is ESC [ 1 ; 5 A, and anything else in that shape is read to
+		// its end and dropped rather than leaking its letters into a value.
+		if b < 0x40 || b > 0x7e {
+			return nil
+		}
+		d.state = 0
+		switch b {
+		case 'A':
+			return []string{keyUp}
+		case 'B':
+			return []string{keyDown}
+		case 'C':
+			return []string{keyRight}
+		case 'D':
+			return []string{keyLeft}
+		}
+		return nil
+	}
+	switch {
+	case b == 0x1b:
+		d.state = 1
+		return nil
+	case b == '\r' || b == '\n':
+		return []string{keyEnter}
+	case b == 0x7f || b == 0x08:
+		return []string{keyBack}
+	case b >= 0x20 && b < 0x7f:
+		return []string{string(rune(b))}
+	}
+	return nil
+}
+
+// settle ends a frame's batch of keys. Nothing pending, nothing to do; and
+// anything pending gets one frame's grace, in case it is a keystroke the read
+// cut in half. What is still there after that was all there was: a bare ESC
+// is the key, and a sequence that never finished is dropped rather than left
+// to swallow the next key that arrives.
+func (d *keyDecoder) settle() []string {
+	if d.state == 0 {
+		return nil
+	}
+	if d.waited < escGrace {
+		d.waited++
+		return nil
+	}
+	state := d.state
+	d.state, d.waited = 0, 0
+	if state == 1 {
+		return []string{keyEsc}
+	}
+	return nil
+}
+
 // frame draws the whole grid: faces left to right, wrapping every perRow. A
 // short last row is left-aligned so the column gutters stay lined up.
 func frame(faces []dial, now time.Time, perRow int, color bool, dayWhen string, lay layout) []string {
@@ -2960,6 +3611,12 @@ func readKeys() <-chan byte {
 	return keys
 }
 
+// leftWith is the command line the clock ended up reading as, once the tuner
+// has been at it: printed by main after the screen has gone back to the
+// shell, since a layout worked out inside the alternate screen is lost with
+// it. Empty when nothing was changed, which is every redirected run.
+var leftWith string
+
 // run does everything that can fail up front, before the terminal is touched:
 // os.Exit skips deferred restores, so nothing may return an error once the
 // cursor is hidden or cbreak mode is on.
@@ -2968,7 +3625,24 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	wantPerRow, zoneList, colorWhen, dayWhen, geo, quiet, cellRatioFlag, scaleFlag, scaleAuto, perRowAuto, err := parseArgs(os.Args[1:])
+	// The preferences file first, then the command line on top of it, both
+	// through the same parser: a flag typed here beats the same flag saved
+	// there because it is read second, which is the only rule either of them
+	// needs. -h and --version are refused in a file, where a clock that
+	// printed its usage and stopped would be a bad afternoon.
+	conf := configPath()
+	opt := defaultOptions()
+	tokens, err := loadConfig(conf)
+	if err != nil {
+		return err
+	}
+	if opt, err = parseArgs(tokens, opt); err != nil {
+		if errors.Is(err, errHelp) || errors.Is(err, errVersion) {
+			return fmt.Errorf("%s: -h and --version are not settings; delete that line", conf)
+		}
+		return fmt.Errorf("%s: %v", conf, err)
+	}
+	opt, err = parseArgs(os.Args[1:], opt)
 	if errors.Is(err, errHelp) {
 		fmt.Print(usage)
 		return nil
@@ -2980,45 +3654,23 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	color := useColor(colorWhen)
+	vals := opt.vals
+	zoneList, quiet := opt.zoneList, opt.quiet
+	color := useColor(opt.colorWhen)
 
-	// --cell-ratio wins over CLOCK_CELL_RATIO, which wins over the default.
-	if cellRatioFlag > 0 {
-		cellRatio = cellRatioFlag
-	} else {
-		cellRatio = envCellRatio()
-	}
-
-	// --scale resizes the whole face, keeping the same shape: rowsN moves and
-	// colsN follows it, through the cell-ratio arithmetic above. --scale auto
-	// instead re-solves both every frame, in the main loop, against whatever
-	// the terminal measures to.
-	if !scaleAuto {
-		scale := 1.0
-		if scaleFlag > 0 {
-			scale = scaleFlag
-		}
-		rowsN = int(math.Floor(defaultRowsN*scale + 0.5))
-		if rowsN < minRowsN || rowsN > maxRowsN {
-			return fmt.Errorf(
-				"--scale %g makes each face %d rows tall; want %d to %d rows, roughly --scale %.2f to --scale %.2f",
-				scale, rowsN, minRowsN, maxRowsN,
-				float64(minRowsN)/defaultRowsN, float64(maxRowsN)/defaultRowsN)
-		}
-		colsN = int(math.Floor(float64(rowsN)*cellRatio + 0.5))
-	}
-
-	// -n auto's whole point is choosing whatever per-row count lets --scale
-	// auto grow the face furthest; with a fixed --scale there is no face
-	// size left for it to affect, so it falls back to the plain default cap.
-	if perRowAuto && !scaleAuto {
-		wantPerRow = defaultPerRow
-		perRowAuto = false
-	}
+	// The six knobs, as text, are the whole of the layout state: --cell-ratio
+	// has already beaten CLOCK_CELL_RATIO in defaultTunes, and a fixed
+	// --scale sizes the face here and for good, where --scale auto leaves
+	// rowsN to the per-frame search. r re-runs exactly this, which is why it
+	// can change any of them without the loop knowing where a value came
+	// from.
+	set := readTunes(vals)
+	set.apply()
 
 	// A pinned clock is a still of one instant, and an undated still records
 	// half of it, so the weekday goes under every face unless --day says
 	// otherwise. Live, auto keeps it for the clocks that actually disagree.
+	dayWhen := opt.dayWhen
 	if dayWhen == "" {
 		dayWhen = "auto"
 		if pinned {
@@ -3090,6 +3742,20 @@ func run() error {
 	var held time.Time
 	holding := false
 	helpOn := false
+	// The tuner, and the keys feeding it.
+	tune := tuner{}
+	var dec keyDecoder
+	// What S does, and what it says afterwards: the clock on screen written
+	// back to the preferences file, or why it could not be.
+	save := func() string {
+		if err := saveConfig(conf, configTokens(vals, zoneList)); err != nil {
+			return err.Error()
+		}
+		return "saved to " + conf
+	}
+	// Said once the tuner closes, in the same modal it used, and dropped at
+	// the next key: the flags the layout on screen would need.
+	note := ""
 	// Off the wall clock, not the frame's: a clock pinned with CLOCK_FREEZE
 	// never advances, and the hint still has to give up after three seconds.
 	flashUntil := time.Now().Add(flashFor)
@@ -3131,15 +3797,22 @@ func run() error {
 			faces = orderFaces(mergeZones(zones, now), now)
 		}
 
-		if scaleAuto {
-			if perRowAuto {
-				wantPerRow = defaultPerRow // overridden below whenever there is a window to measure
-			}
+		// -n auto's whole point is choosing whatever per-row count lets
+		// --scale auto grow the face furthest; with a fixed --scale there is
+		// no face size left for it to affect, so it falls back to the plain
+		// default cap. Settled per frame rather than once, since the tuner
+		// can move the scale between auto and fixed while the clock runs.
+		wantPerRow := set.perRow
+		if set.perRowAuto {
+			wantPerRow = defaultPerRow
+		}
+
+		if set.scaleAuto {
 			if cols > 0 && lines > 0 {
-				if perRowAuto {
+				if set.perRowAuto {
 					wantPerRow = len(faces) // no real cap: see autoScale's own comment
 				}
-				autoScale(wantPerRow, len(faces), cols, lines, geo.hpad, geo.vpad)
+				autoScale(wantPerRow, len(faces), cols, lines, set.geo.hpad, set.geo.vpad)
 			} else {
 				// Nothing measurable to fill, so there is nothing to solve --
 				// same as any other window that cannot be measured.
@@ -3149,11 +3822,11 @@ func run() error {
 		}
 
 		var rows []string
-		perRow, err := fitPerRow(wantPerRow, len(faces), cols, gapFloor(cols, geo.hpad, gap))
+		perRow, err := fitPerRow(wantPerRow, len(faces), cols, gapFloor(cols, set.geo.hpad, gap))
 		chunks := 0
 		if err == nil {
 			chunks = chunkCount(len(faces), perRow)
-			err = fitHeight(chunks, lines, gapFloor(lines, geo.vpad, vgap))
+			err = fitHeight(chunks, lines, gapFloor(lines, set.geo.vpad, vgap))
 		}
 		// The key list and the startup hint are the same kind of thing --
 		// a modal laid over the clocks -- so only one shows at a time, and
@@ -3161,6 +3834,17 @@ func run() error {
 		// redundant with the "q" line in it.
 		var content []string
 		switch {
+		case fullScreen && tune.open:
+			// The one modal that shows over a window too small for the
+			// clocks: a scale typed too large is undone from here, and
+			// hiding it would leave nothing to undo it with.
+			content = tuneRows(tune, vals)
+		case fullScreen && note != "":
+			// Folded, not one line: a note names a file, and a path is
+			// easily longer than a window -- where a modal that does not fit
+			// is a modal not shown at all, which for "cannot write" would
+			// mean a failed save that said nothing.
+			content = fold(note, cols-4)
 		case err == nil && fullScreen && helpOn:
 			content = helpRows()
 		case !quiet && fullScreen && time.Now().Before(flashUntil):
@@ -3183,15 +3867,15 @@ func run() error {
 			if !fullScreen {
 				return err
 			}
-			rows = complaint(err.Error(), cols, lines, geo.halign)
+			rows = complaint(err.Error(), cols, lines, set.geo.halign)
 		} else {
 			// Any lean left over from the grid is answered by the labels
 			// leaning the other way, so the frame comes out no more than a
 			// column off centre -- and with a gutter to swallow the odd
 			// column, dead centre.
 			var lay layout
-			lay.gap, lay.extra, lay.left, lay.extraLeft = spread(perRow, cellCols(), cols, gap, geo.hpad, geo.halign)
-			lay.vgap, lay.vextra, lay.top, _ = spread(chunks, rowsN+2, lines, vgap, geo.vpad, geo.valign)
+			lay.gap, lay.extra, lay.left, lay.extraLeft = spread(perRow, cellCols(), cols, gap, set.geo.hpad, set.geo.halign)
+			lay.vgap, lay.vextra, lay.top, _ = spread(chunks, rowsN+2, lines, vgap, set.geo.vpad, set.geo.valign)
 			rows = frame(faces, now, perRow, color, dayWhen, lay)
 		}
 		if showModal {
@@ -3241,6 +3925,8 @@ func run() error {
 		}
 
 		// wait out the tick, consuming keys without repainting for each one
+		wasTuning := tune.open
+		prevVals := vals
 		for waiting := true; waiting; {
 			select {
 			case <-t.C:
@@ -3261,21 +3947,148 @@ func run() error {
 					return nil
 				}
 			case k := <-keys:
-				switch k {
-				case 'q', 'Q':
-					return nil
-				case ' ':
-					holding, held = !holding, now
-				case 'h', 'H', '?':
-					helpOn = !helpOn
+				for _, key := range dec.feed(k) {
+					if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now, save) {
+						return nil
+					}
 				}
 			}
+			if !waiting {
+				// The batch of keys this frame read is over; a keystroke left
+				// half-read waits a frame to be finished before it is taken
+				// for something else. Decided here rather than on a timer:
+				// see keyDecoder.
+				for _, key := range dec.settle() {
+					if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now, save) {
+						return nil
+					}
+				}
+			}
+		}
+		if vals != prevVals {
+			leftWith = tuneCommand(vals, zoneList)
+		}
+		if wasTuning && !tune.open {
+			// Closing the tuner says what it would take to start the clock
+			// this way, since the screen it was tuned on is about to be given
+			// back to the shell and take the answer with it.
+			note = leftWith
 		}
 	}
 }
 
+// pressed answers one key, and says whether it was the one that quits.
+//
+// With the tuner open every key belongs to it -- the values it takes are
+// words like "left", "even" and "auto", so q, space and h are letters there
+// rather than the keys they are everywhere else. Ctrl+C still quits, being
+// the terminal driver's rather than the clock's.
+func pressed(key string, tune *tuner, vals *[numTunes]string, set *settings,
+	holding *bool, held *time.Time, helpOn *bool, note *string, now time.Time,
+	save func() string) bool {
+	if *note != "" {
+		// Any key clears the note the tuner left behind; the key still
+		// counts, so a reader who went straight for q gets it.
+		*note = ""
+	}
+	if tune.open {
+		switch key {
+		case keyUp, keyDown:
+			step := 1
+			if key == keyUp {
+				step = len(tunables) - 1
+			}
+			tune.sel = (tune.sel + step) % len(tunables)
+			tune.edit, tune.editing, tune.err = "", false, ""
+		case keyLeft, keyRight, " ":
+			// Straight onto the clocks: every value stepping can reach has
+			// already been through checkTune, so there is nothing to confirm
+			// and nothing that can be refused. Space walks the words round
+			// their list, where the arrows stop at the ends.
+			delta := 1
+			if key == keyLeft {
+				delta = -1
+			}
+			if next := tuneStep(tune.sel, vals[tune.sel], delta, key == " "); next != vals[tune.sel] {
+				vals[tune.sel] = next
+				*set = readTunes(*vals)
+				set.apply()
+			}
+			tune.edit, tune.editing, tune.err = "", false, ""
+		case keyEnter:
+			if !tune.editing {
+				break
+			}
+			if err := checkTune(tune.sel, tune.edit); err != nil {
+				// The value is gone along with the refusal: what is left of a
+				// value the clock will not have is not a head start on the
+				// next one, and leaving it would make the next character
+				// typed land on the end of it.
+				tune.edit, tune.editing, tune.err = "", false, err.Error()
+				break
+			}
+			vals[tune.sel] = canonTune(tune.sel, tune.edit)
+			*set = readTunes(*vals)
+			set.apply()
+			tune.edit, tune.editing, tune.err = "", false, ""
+		case keyBack:
+			if tune.editing {
+				if tune.edit = trimRune(tune.edit); tune.edit == "" {
+					tune.editing = false
+				}
+			}
+		case keyEsc:
+			// Two things to back out of, innermost first: whatever is being
+			// typed, and then the tuner itself.
+			if tune.editing {
+				tune.edit, tune.editing, tune.err = "", false, ""
+				break
+			}
+			tune.open = false
+		default:
+			if len(key) == 1 {
+				tune.edit, tune.editing, tune.err = tune.edit+key, true, ""
+			}
+		}
+		return false
+	}
+	switch key {
+	case "q", "Q":
+		return true
+	case " ":
+		*holding, *held = !*holding, now
+	case "h", "H", "?":
+		*helpOn = !*helpOn
+	case "r", "R":
+		*tune = tuner{open: true}
+		*helpOn = false
+	case "S":
+		// Capitalised on purpose: it overwrites a file, and a shift is enough
+		// to keep an elbow from doing it. Lowercase s is not taken, so a miss
+		// does nothing at all.
+		*note = save()
+		*helpOn = false
+	}
+	return false
+}
+
+// trimRune drops the last character of a string, which is the last byte here:
+// everything the tuner takes is ASCII, and keyDecoder passes nothing else on.
+func trimRune(s string) string {
+	if s == "" {
+		return s
+	}
+	return s[:len(s)-1]
+}
+
 func main() {
-	if err := run(); err != nil {
+	err := run()
+	// After run's defers: the alternate screen is gone, and this lands in the
+	// shell's own scrollback where it can be copied.
+	if err == nil && leftWith != "" {
+		fmt.Println(leftWith)
+	}
+	if err != nil {
 		// `clock | head`: the reader went away, which is not news and not an
 		// error message. Exit with the status a shell reports for a filter
 		// killed by SIGPIPE, now that run's defers have put the cursor and the

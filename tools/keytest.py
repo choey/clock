@@ -31,12 +31,19 @@ import select
 import signal
 import struct
 import subprocess
+import tempfile
 import sys
 import termios
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# No preferences file, ever: S writes one and the clock reads it at startup,
+# so a file in the home directory of whoever runs this would change what every
+# case below compares. Empty means none at all. The cases that do want one
+# point CLOCK_CONFIG at a temporary file of their own.
+os.environ["CLOCK_CONFIG"] = ""
 
 # Pinned, so every repaint between two keystrokes is the same bytes and the
 # collapse below leaves one frame per state rather than however many ticks fit.
@@ -116,7 +123,7 @@ def open_pty(echo=False):
     return master, slave
 
 
-def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None, marks=None):
+def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None, marks=None, env=None):
     """One clock under a pty, fed `keys`, returning everything it painted.
 
     Each key is written after the frames from the previous one have had time to
@@ -127,13 +134,18 @@ def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None, marks=None):
     a resize run -- otherwise it would keep drawing the old size at a window
     that had changed, which is the bug this would be trying to find.
 
+    `env` adds to the environment the clock is started with, for the one thing
+    the keys can change outside the screen: where CLOCK_CONFIG points.
+
     `marks`, when a list is passed in, is filled with the offset into the
     output at the end of each phase: after the settle, then after each key. A
     caller that has to tell what one keystroke painted from what the next one
     did slices on those rather than reading the whole run as one stream.
     """
     master, slave = open_pty()
+    extra = env or {}
     env = dict(os.environ, COLUMNS=str(COLS), LINES=str(LINES), TERM="xterm-256color")
+    env.update(extra)  # a case that wants its own preferences file, say
     if sizes is not None:
         env.pop("COLUMNS", None)
         env.pop("LINES", None)
@@ -175,11 +187,16 @@ def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None, marks=None):
     for key in keys:
         if proc.poll() is not None:
             break
+        # A key may name its own settle: (bytes, seconds). Only the split
+        # keystroke below wants one, and it wants it shorter than a frame.
+        wait = settle
+        if isinstance(key, tuple):
+            key, wait = key
         try:
             os.write(master, key)
         except OSError:  # it quit between the poll above and this write
             break
-        if not drain(settle):
+        if not drain(wait):
             if marks is not None:
                 marks.append(len(out))
             break
@@ -231,6 +248,21 @@ FLASH_MARK = b"Press q or Ctrl+C to quit"
 def helped(state_list):
     """Which of the painted states had the key list up."""
     return [HELP_MARK in s for s in state_list[1:]]
+
+
+# A line only the tuner carries, and one only its parting note does. The note
+# is the flags the tuner was left at, so the second is also how a case reads
+# what the clock says it would take to start this way.
+TUNE_MARK = b"up down pick"
+# A modal's top left corner, so a frame carrying one -- the tuner, its note,
+# the key list -- can be told from a frame of clocks alone.
+BOX_MARK = "\u250c".encode()
+NOTE_MARK = b"--hpad"
+
+
+def tuned(state_list):
+    """Which of the painted states had the tuner up."""
+    return [TUNE_MARK in s for s in state_list[1:]]
 
 
 def readouts(painted):
@@ -315,6 +347,162 @@ def compare(name, keys, expect=None, freeze=FROZEN, loose=False, args=("-q", "UT
 # to the window, and at twelve columns "widen the window" is spread over three
 # lines with nothing to match against.
 BRAILLE = (b"\xe2\xa0", b"\xe2\xa1", b"\xe2\xa2", b"\xe2\xa3")
+
+
+def compare_tune(name, keys, expect=None, args=("-q", "UTC")):
+    """Both implementations, same keys: same frames, and the tuner in step.
+
+    The same comparison compare() makes, read through the tuner's own marker
+    rather than the key list's. Every case here has to leave the tuner closed:
+    with it open q is a letter like any other, and run() ends by pressing q.
+    """
+    seen = {}
+    for impl, argv in IMPLS:
+        painted, status = run(argv + list(args), keys)
+        seen[impl] = (states(painted), status, painted)
+
+    (go_states, go_status, go_painted) = seen["go"]
+    (py_states, py_status, py_painted) = seen["py"]
+    if go_status != py_status:
+        report(False, name, f"exit status go={go_status} py={py_status}")
+        return
+    if go_status == "hung":
+        report(False, name, "the clock never quit: the tuner swallowed the q")
+        return
+    if len(go_states) != len(py_states):
+        report(False, name, f"{len(go_states)} states from go, {len(py_states)} from py")
+        return
+    for i, (g, p) in enumerate(zip(go_states, py_states)):
+        if g != p:
+            report(False, name, f"state {i} differs\n  go: {g[:160]!r}\n  py: {p[:160]!r}")
+            return
+    if expect is not None:
+        got = tuned(go_states)
+        if got != [bool(f) for f in expect]:
+            report(False, name, f"tuner went {got}, expected {expect}")
+            return
+    for impl, (_, _, painted) in seen.items():
+        if ENTER_ALT in painted and LEAVE_ALT not in painted:
+            report(False, name, f"{impl} kept the alternate screen")
+            return
+    report(True, name)
+
+
+def tuned_layout(name, keys, flags, args=("-q", "UTC")):
+    """A value typed into the tuner draws what the same flag would draw.
+
+    The point of the whole feature, and the one thing frame-for-frame
+    comparison between the ports cannot see: both could tune alike and both
+    lay out wrongly. So the tuned frame is compared against a clock *started*
+    with those flags -- the tuner's own box and the note it leaves cut off
+    first, since the flagged clock has neither.
+    """
+    for impl, argv in IMPLS:
+        # One more key after the caller's: the note the tuner leaves is a
+        # modal like any other, and it sits there until something clears it,
+        # so without this there is no frame of clocks alone left to compare.
+        tuned_painted, status = run(argv + list(args), list(keys) + [b"x"])
+        if status == "hung":
+            report(False, name, f"{impl}: the clock never quit")
+            return
+        flagged, _ = run(argv + list(flags) + list(args), [])
+        # The last full frame each painted, which for the tuned run is the one
+        # after the tuner closed and its note was cleared.
+        # Up to the point the screen goes back, so the line a tuned clock
+        # prints on its way out is not read as part of its last frame.
+        drawn = lambda f: (BRAILLE[0] in f or BRAILLE[1] in f) and BOX_MARK not in f
+        want = [f for f in states(flagged.split(LEAVE_ALT)[0]) if drawn(f)]
+        got = [f for f in states(tuned_painted.split(LEAVE_ALT)[0]) if drawn(f)]
+        if not want or not got:
+            report(False, name, f"{impl}: nothing drawn to compare")
+            return
+        if got[-1] != want[-1]:
+            report(False, name, f"{impl}: tuned frame differs from {' '.join(flags)}"
+                                f"\n  tuned: {got[-1][:160]!r}\n  flagged: {want[-1][:160]!r}")
+            return
+    report(True, name)
+
+
+def saves(name):
+    """S writes the clock down, and a clock started with the file matches it.
+
+    Written by one implementation and read by both: the file is a command
+    line, so a save from `clock` is a file `pyclock` runs from, and the bytes
+    each writes for the same screen have to be the same bytes.
+    """
+    keys = [b"r", b"\x1b[B", b"\x1b[B", b"5%", b"\r", b"\x1b", b"S"]
+    written = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for impl, argv in IMPLS:
+            path = Path(tmp) / f"config-{impl}"
+            painted, status = run(argv + ["-q", "ET,PT,UTC"], keys,
+                                  env={"CLOCK_CONFIG": str(path)})
+            if status == "hung":
+                report(False, name, f"{impl}: the clock never quit")
+                return
+            # A path can be longer than the window, so the note is folded
+            # onto as many lines as it takes; the words are what to look for.
+            if b"saved to" not in painted or str(path).encode() not in painted:
+                report(False, name, f"{impl}: never said it had saved to {path}")
+                return
+            if not path.exists():
+                report(False, name, f"{impl}: saved nothing to {path}")
+                return
+            written[impl] = path.read_bytes()
+
+        if written["go"] != written["py"]:
+            report(False, name, f"the two wrote different files\n"
+                                f"  go: {written['go']!r}\n  py: {written['py']!r}")
+            return
+
+        # And read back: the saved file draws what the flags it was saved from
+        # draw, in both, which is the whole promise of the thing.
+        saved = Path(tmp) / "config-go"
+        for impl, argv in IMPLS:
+            from_file, _ = run(argv + ["-q"], [], env={"CLOCK_CONFIG": str(saved)})
+            from_flags, _ = run(argv + ["-q", "--hpad", "5%", "ET,PT,UTC"], [])
+            drawn = lambda f: (BRAILLE[0] in f or BRAILLE[1] in f) and BOX_MARK not in f
+            got = [f for f in states(from_file.split(LEAVE_ALT)[0]) if drawn(f)]
+            want = [f for f in states(from_flags.split(LEAVE_ALT)[0]) if drawn(f)]
+            if not got or not want or got[-1] != want[-1]:
+                report(False, name, f"{impl}: the saved file draws something else")
+                return
+    report(True, name)
+
+
+def cannot_save(name):
+    """A save that cannot happen says so, and the clock carries on.
+
+    Both ways it can fail: nowhere to write, and nowhere that will have it.
+    The words are the clock's own rather than the language's, since Go and
+    Python spell a write error differently and both have to say this.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        shut = Path(tmp) / "shut"
+        shut.mkdir(mode=0o500)
+        cases = (
+            ("", (b"CLOCK_CONFIG is empty: nowhere to save",)),
+            (str(shut / "config"), (b"cannot write", str(shut / "config").encode())),
+        )
+        try:
+            for where, said in cases:
+                for impl, argv in IMPLS:
+                    painted, status = run(argv + ["-q", "UTC"], [b"S", b"h"],
+                                          env={"CLOCK_CONFIG": where})
+                    if status != 0:
+                        report(False, name, f"{impl}: exit status {status}")
+                        return
+                    missing = [w for w in said if w not in painted]
+                    if missing:
+                        report(False, name, f"{impl}: never said {missing[0]!r}")
+                        return
+                    # Still a clock afterwards: h still opens the key list.
+                    if HELP_MARK not in painted:
+                        report(False, name, f"{impl}: stopped answering keys after S")
+                        return
+        finally:
+            shut.chmod(0o700)
+    report(True, name)
 
 
 def complaining(frame):
@@ -764,6 +952,102 @@ def main():
         compare("q quits", [b"q"], [0, 0])
         compare("Q quits too", [b"Q"], [0, 0])
         compare("space on a pinned clock has nothing to hold", [b" ", b" "], [0, 0])
+
+        print("== the tuner ==")
+        UP, DOWN, ESC = b"\x1b[A", b"\x1b[B", b"\x1b"
+        compare_tune("r opens the tuner, esc closes it", [b"r", ESC], [0, 1, 0, 0])
+        compare_tune("the tuner replaces the key list", [b"h", b"r", ESC],
+                     [0, 0, 1, 0, 0])
+        compare_tune("down and up walk the knobs", [b"r", DOWN, DOWN, UP, ESC],
+                     [0, 1, 1, 1, 1, 0, 0])
+        compare_tune("a value is typed and taken", [b"r", DOWN, DOWN, b"5%", b"\r", ESC],
+                     [0, 1, 1, 1, 1, 1, 0, 0])
+        compare_tune("a value it will not have is refused",
+                     [b"r", b"zz", b"\r", ESC], [0, 1, 1, 1, 0, 0])
+        compare_tune("a scale too large for the window is refused but stays undoable",
+                     [b"r"] + [DOWN] * 5 + [b"99", b"\r", b"auto", b"\r", ESC])
+        compare_tune("esc backs out of what is being typed before the tuner",
+                     [b"r", b"left", ESC, ESC], [0, 1, 1, 1, 0, 0])
+        # With the tuner up these are letters: a case that quit here would
+        # take the clock down mid-edit and paint a frame nobody asked for.
+        compare_tune("q and h are letters while the tuner is open",
+                     [b"r", b"q", b"h", ESC, ESC], [0, 1, 1, 1, 1, 0, 0])
+        compare_tune("a lone esc closes the tuner, an arrow does not",
+                     [b"r", UP, ESC], [0, 1, 1, 0, 0])
+        # Stepping: the arrows and space move a value without typing one, and
+        # what they land on is what the flag spells the same way.
+        LEFT, RIGHT = b"\x1b[D", b"\x1b[C"
+        compare_tune("left and right step a value", [b"r", RIGHT, LEFT, ESC],
+                     [0, 1, 1, 1, 0, 0])
+        compare_tune("space walks the words round", [b"r", b" ", b" ", b" ", ESC],
+                     [0, 1, 1, 1, 1, 0, 0])
+        # center, right, and then nowhere: an arrow stops where the list does,
+        # where space would have wrapped.
+        compare_tune("an arrow stops at the end of the list",
+                     [b"r", RIGHT, RIGHT, ESC], [0, 1, 1, 0, 0])
+        tuned_layout("six rights on hpad draw what --hpad 5% draws",
+                     [b"r", DOWN, DOWN] + [RIGHT] * 6 + [ESC], ["--hpad", "5%"],
+                     args=("-q", "ET,PT,UTC"))
+        tuned_layout("one space on halign draws what --halign right draws",
+                     [b"r", b" ", ESC], ["--halign", "right"],
+                     args=("-q", "ET,PT,UTC"))
+        tuned_layout("one right on scale leaves auto for the plain size",
+                     [b"r", DOWN, DOWN, DOWN, DOWN, DOWN, RIGHT, ESC], ["--scale", "1"],
+                     args=("-q", "UTC"))
+        # A held arrow: the terminal sends ESC [ C over and over, and a read
+        # can end anywhere in that. An ESC left at the end of a frame used to
+        # be answered as the key, which closed the tuner mid-keypress.
+        # An arrow split across a read boundary is still an arrow: the ESC
+        # goes on its own and the rest of it a few milliseconds later, where a
+        # held-down key puts them, inside the grace the decoder gives a
+        # half-read keystroke. Whole frames of grace rather than a timer, so
+        # both ports answer on the same frame. The ESC alone changes nothing
+        # on screen, so the states either side of it are the pad before the
+        # arrow and the pad after it -- where a decoder that answered the ESC
+        # where it landed would close the tuner instead, and say so loudly.
+        compare_tune("an arrow split across a read is still an arrow",
+                     [b"r", DOWN, DOWN, (b"\x1b", 0.005), b"[C", ESC],
+                     [0, 1, 1, 1, 1, 0, 0])
+        compare_tune("and a lone esc is still an esc, one frame later",
+                     [b"r", b"\x1b", b"r", ESC], [0, 1, 0, 1, 0, 0])
+        # per-row is a knob like the rest, and the only one that changes how
+        # many clocks a row holds rather than how big they are.
+        tuned_layout("stepping per-row draws what -n draws",
+                     [b"r", DOWN, DOWN, DOWN, DOWN, RIGHT, LEFT, ESC],
+                     ["-n", "2"], args=("-q", "ET,PT,UTC,JP"))
+        tuned_layout("a typed per-row draws what --per-row draws",
+                     [b"r", DOWN, DOWN, DOWN, DOWN, b"2", b"\r", ESC],
+                     ["--per-row", "2"], args=("-q", "ET,PT,UTC,JP"))
+        tuned_layout("a tenth off the cell ratio draws what --cell-ratio draws",
+                     [b"r"] + [DOWN] * 6 + [LEFT, ESC],
+                     ["--cell-ratio", "2"], args=("-q", "UTC"))
+
+        # What the tuner is for: the same layout the flag would have drawn.
+        tuned_layout("a tuned hpad draws what --hpad draws",
+                     [b"r", DOWN, DOWN, b"5%", b"\r", ESC], ["--hpad", "5%"],
+                     args=("-q", "ET,PT,UTC"))
+        tuned_layout("a tuned halign draws what --halign draws",
+                     [b"r", b"left", b"\r", ESC], ["--halign", "left"],
+                     args=("-q", "ET,PT,UTC"))
+        tuned_layout("a tuned scale draws what --scale draws",
+                     [b"r"] + [DOWN] * 5 + [b"1", b"\r", ESC], ["--scale", "1"],
+                     args=("-q", "UTC"))
+        # And what it leaves behind: the flags, in the note and again on the
+        # way out, where the screen the clock was tuned on has gone.
+        for impl, argv in IMPLS:
+            painted, status = run(argv + ["-q", "ET,PT,UTC"],
+                                  [b"r", DOWN, DOWN, b"5%", b"\r", ESC])
+            said = painted.split(LEAVE_ALT)[-1].strip()
+            report(said == b"--hpad 5% ET,PT,UTC" and NOTE_MARK in painted,
+                   f"{impl} says what it would take to start this way",
+                   f"printed {said!r}")
+            painted, _ = run(argv + ["-q", "UTC"], [b"r", ESC])
+            report(painted.split(LEAVE_ALT)[-1].strip() == b"",
+                   f"{impl} says nothing when nothing was changed")
+
+        print("== saving ==")
+        saves("S writes the clock down, and both read the file back")
+        cannot_save("a save with nowhere to go says so and carries on")
 
         print("== the startup hint ==")
         compare("without -q, the hint is up", [], args=("UTC",))

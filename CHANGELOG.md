@@ -11,6 +11,16 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 
 ## Unreleased
 
+- **`r` tunes the layout while the clock runs.** The six knobs that shape the
+  grid -- `--halign`, `--valign`, `--hpad`, `--vpad`, `--scale` and
+  `--cell-ratio` -- can now be worked against the clocks themselves instead of
+  against a guess, one flag at a time, with the faces redrawing as each value
+  is taken. A value is read by exactly the parser its flag uses, so what the
+  command line refuses the tuner refuses, in the same words. The box sits
+  below the clocks and the grid is laid out in what is left of the window, so
+  nothing being adjusted hides behind the thing adjusting it. Leaving says
+  what it would have taken to start the clock that way, and prints it again
+  once the screen has gone back to the shell.
 - **A ZIP code says where it landed, like every other place.** `clock 94110`
   draws `PDT (94110)` where it drew `PDT`, which is the label 0.3.0 should have
   given it: a ZIP is the token whose zone is least guessable of all, and it was

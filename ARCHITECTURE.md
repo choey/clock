@@ -158,6 +158,38 @@ and the face is padded into its cell when drawn. The weekday is the same
 problem solved the other way: below `DAY_COLS` it is dropped rather than
 widening every cell to hold it.
 
+**The tuner.** `r` puts up the six layout knobs and reads a value into any of
+them. It keeps them as the *text* they were given in, not as parsed values:
+that text is what the flags were spelled with, what the box shows, what a
+parting line hands back -- and it means no number is ever formatted back out,
+which matters because Go's `%g` and Python's `:g` part company past six
+significant digits. Every value goes through `checkTune`/`check_tune`, which
+is the flag's own parser, so the tuner cannot accept a spelling the command
+line refuses; `readTunes`/`read_tunes` then reads the six back into the
+settings the frame loop lays out with, and cannot fail, because nothing
+unchecked is ever stored.
+
+Two things about it are not the obvious choice. It is the one modal that shows
+over a window too small for the clocks -- every other one is hidden there --
+because a `--scale` typed too large is undone from inside it, and hiding it
+would leave nothing to undo it with. And it is not laid *over* the grid at
+all where there is room: the grid is laid out in `lines - tuneHeight` and the
+box takes the rest, since the whole point is watching the faces change while
+they are adjusted. That is also why the box's height is a constant rather than
+something measured after it is built -- the layout needs it before there is a
+box.
+
+**Arrow keys, and a lone Esc.** The tuner is the first thing here to read a
+key that is more than one byte: an arrow arrives as `ESC [ A`, or `ESC O A`
+from a terminal in application cursor mode. So `ESC` cannot be answered when
+it lands -- it is either a key of its own or the first byte of one -- and the
+usual answer, a few milliseconds' wait, is not available to a pair of ports
+compared frame for frame: which frame an Esc landed in would become a question
+about the machine's speed, and `tools/keytest.py` compares the frames. Both
+ports hold the ESC instead and decide it at the end of the batch of keys a
+frame reads, which is the same point in both loops -- a channel drained until
+the tick in Go, one `os.read` in Python.
+
 **Modals.** The key list and the startup quit hint are stamped onto the
 finished, already-coloured frame after the grid is drawn — never mixed into a
 face's own rows. The splice is ANSI-aware: it walks each row it touches,

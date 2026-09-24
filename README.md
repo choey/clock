@@ -326,6 +326,7 @@ than the alignment, whatever `--day` says.
 |---|---|
 | space | hold the frame still, and again to carry on |
 | `h` or `?` | show or hide the key list |
+| `r` | resize and align the clocks, while they run |
 | `q` | quit, as does Ctrl+C |
 
 Ctrl+Z suspends it, like any other job. The clock hands the terminal back for
@@ -344,6 +345,51 @@ this hint from the start, for a launch that doesn't blink; the key list is
 still there on `h` or `?` regardless. Pressing `h`/`?` before the three
 seconds are up shows the key list in its place, since the list already says
 everything the hint does.
+
+### Tuning the layout as it runs
+
+`r` opens a box holding the six knobs that shape the grid — `--halign`,
+`--valign`, `--hpad`, `--vpad`, `--scale` and `--cell-ratio` — and lets you
+work them against the clocks themselves rather than against a guess:
+
+```
+  halign      center
+  valign      center
+> hpad        5%_
+  vpad        even
+  scale       auto  (11 rows)
+  cell-ratio  2.1
+
+even, or a share like 10%
+up down pick   type a value   enter set   esc done
+```
+
+Up and down pick a knob, and the line under the list says what that one
+takes. Type a value and press Return to set it: the clocks redraw with it on
+the next frame, a nineteenth of a second later. A value the flag would not
+have is refused here in the same words, and the old one stays — so `--scale`
+cannot be typed up past what the window holds without a way back.
+
+The box sits below the clocks rather than over them, and the grid is laid out
+in what is left of the window, so nothing you are adjusting is hidden behind
+the thing adjusting it. In a window too short to share, it falls back to
+sitting over the clocks.
+
+Escape closes the box — once to abandon a half-typed value, again to leave —
+and the clock then says what it would have taken to start this way:
+
+```
+--hpad 5% --scale 1.5 ET,PT,UTC
+```
+
+That line is shown in the box's place for a moment, and printed again on the
+way out, where the shell keeps it: the alternate screen goes back to what it
+held before, and takes anything left on it. `clock` (or `pyclock`) in front of
+it is the whole command. Nothing is printed if nothing was changed.
+
+`--cell-ratio` is the one worth tuning this way. It depends on your font and
+line spacing, and the difference between right and wrong is a face that reads
+as round or as an egg; see [Round faces](#round-faces).
 
 ### Holding a frame
 

@@ -58,7 +58,7 @@ LEAVE_ALT = "\x1b[?1049l"
 # same string, and difftest holds all three together: a clock that cannot say
 # what it is turns every bug report into a round trip, and one that says the
 # wrong thing is worse than one that says nothing at all.
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 # What both ports exit with when the reader goes away -- `clock | head`. 128
 # plus SIGPIPE, which is what a shell reports for a filter that died of it;
@@ -2900,8 +2900,15 @@ def pending_keys():
     """
     if not select.select([sys.stdin], [], [], 0)[0]:
         return b""
-    return os.read(sys.stdin.fileno(), 64)
+    return os.read(sys.stdin.fileno(), KEYS_PER_FRAME)
 
+
+# How many bytes of typing a frame answers before drawing again. The Go port
+# reads the terminal a byte at a time and drains up to this many before
+# painting, which is the same rule written the other way round: a keystroke is
+# more than one byte, and a frame that landed in the middle of one would be a
+# frame the other port never painted.
+KEYS_PER_FRAME = 64
 
 # How many frames a half-read keystroke is given to finish -- 38ms, which is
 # nothing to wait for an Esc and more than enough for bytes the terminal has

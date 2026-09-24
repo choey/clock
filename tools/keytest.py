@@ -974,6 +974,21 @@ def main():
                      [b"r", b"q", b"h", ESC, ESC], [0, 1, 1, 1, 1, 0, 0])
         compare_tune("a lone esc closes the tuner, an arrow does not",
                      [b"r", UP, ESC], [0, 1, 1, 0, 0])
+        # Keys arrive as bytes, and how many of them a frame answers before
+        # drawing again has to be the same number in both ports. Go reads the
+        # terminal a byte at a time where pyclock.py takes a read of 64, so
+        # answering one byte per frame painted frames pyclock.py never painted
+        # -- which a loaded CI runner found at two characters, and this
+        # machine is too quick to show. What it cannot hide is the same rule
+        # at the other end: 99 bytes written at once is 33 arrows, which is 64
+        # bytes' worth this frame and the rest on the next, in both. A port
+        # that took the lot at once would paint one frame where the other
+        # paints two. Arrows rather than characters because a typed value that
+        # long is a box wider than the window, which is no box at all.
+        compare_tune("a burst longer than a read is the same two frames in both",
+                     [b"r", DOWN, DOWN, b"\x1b[C" * 33, ESC, ESC],
+                     [0, 1, 1, 1, 1, 1, 0, 0, 0])
+
         # Stepping: the arrows and space move a value without typing one, and
         # what they land on is what the flag spells the same way.
         LEFT, RIGHT = b"\x1b[D", b"\x1b[C"

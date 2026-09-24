@@ -64,7 +64,7 @@ const (
 // carry the same string, and difftest holds all three together: a clock that
 // cannot say what it is turns every bug report into a round trip, and one that
 // says the wrong thing is worse than one that says nothing at all.
-const version = "0.4.0"
+const version = "0.4.1"
 
 const usage = `clock - analog terminal clocks
 
@@ -2984,6 +2984,13 @@ type keyDecoder struct {
 	waited int // frames the pending thing has sat through
 }
 
+// keysPerFrame is how many bytes of keys a frame answers before drawing
+// again, which is pyclock.py's read size and has to be: a keystroke is more
+// than one byte, and answering them one at a time let a tick land in the
+// middle of one, so this port painted frames pyclock.py never painted. Both
+// take one read of this size per frame and answer all of it.
+const keysPerFrame = 64
+
 // escGrace is how many frames a half-read keystroke is given to finish --
 // 38ms, which is nothing to wait for an Esc and more than enough for bytes
 // the terminal has already written.
@@ -3591,20 +3598,22 @@ func suspend(restore, requiet func(), fullScreen bool) {
 
 // readKeys pumps stdin into a channel. Reads block, so this needs its own
 // goroutine; it ends at EOF, which is immediate when stdin isn't a terminal.
-func readKeys() <-chan byte {
-	keys := make(chan byte, 64)
+func readKeys() <-chan []byte {
+	keys := make(chan []byte, 16)
 	go func() {
-		buf := make([]byte, 64)
 		for {
+			// One read per send, up to keysPerFrame bytes, which is what
+			// pyclock.py's own read takes: a frame answers one read's worth
+			// of keys and then draws, in both, so a burst of typing or a held
+			// arrow is spread over the same frames either side.
+			buf := make([]byte, keysPerFrame)
 			n, err := os.Stdin.Read(buf)
 			if err != nil {
 				return
 			}
-			for _, b := range buf[:n] {
-				select {
-				case keys <- b:
-				default: // full: the clock only cares about q, so drop the rest
-				}
+			select {
+			case keys <- buf[:n]:
+			default: // sixteen reads behind: a clock is not a text editor
 			}
 		}
 	}()
@@ -3927,6 +3936,13 @@ func run() error {
 		// wait out the tick, consuming keys without repainting for each one
 		wasTuning := tune.open
 		prevVals := vals
+		// One read of keys per frame, which is what pyclock.py's single
+		// os.read is. Taking every read that has arrived would answer a
+		// burst -- a held arrow, a pasted value -- in one frame where the
+		// other port takes two, and these are compared frame for frame. A
+		// nil channel is how a select drops a case: it blocks forever, so
+		// the tick is all that is left to wait for.
+		unread := keys
 		for waiting := true; waiting; {
 			select {
 			case <-t.C:
@@ -3946,10 +3962,19 @@ func run() error {
 				default:
 					return nil
 				}
-			case k := <-keys:
-				for _, key := range dec.feed(k) {
-					if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now, save) {
-						return nil
+			case batch := <-unread:
+				unread = nil
+				// A whole read at a time, the way pyclock.py takes one. A
+				// keystroke is more than one byte -- an arrow, or characters
+				// typed together -- and answering them one at a time let a
+				// tick land in the middle of one, so this port painted frames
+				// pyclock.py never painted. Frame for frame is the thing
+				// being kept here, and a loaded machine is where it broke.
+				for _, b := range batch {
+					for _, key := range dec.feed(b) {
+						if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now, save) {
+							return nil
+						}
 					}
 				}
 			}

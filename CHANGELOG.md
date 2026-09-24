@@ -9,6 +9,23 @@ the golden frames in `tools/golden/` exist to make impossible to do by accident.
 The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 `tools/docnums.py` fails the build if the three disagree.
 
+## 0.4.1
+
+One read of keys per frame, in both ports. 0.4.0's tuner made typing matter
+for the first time, and the two implementations were taking keys off the
+terminal differently: pyclock.py answers one `os.read` and draws, where
+clock.go answered one byte and drew. Fast enough, that is the same thing;
+loaded -- a CI runner was the first machine slow enough to show it -- a tick
+lands in the middle of a keystroke and Go paints a frame Python never paints.
+`clock` now takes a read of the same 64 bytes per frame and answers all of it,
+which is the rule written the other way round.
+
+Nothing about a single keypress changes. What changes is a burst of them: a
+held arrow, or a value pasted in, is now spread over the same frames in both.
+
+- keytest holds it with a burst longer than one read -- 33 arrows, 99 bytes,
+  which has to be two frames either side rather than one or thirty-three.
+
 ## 0.4.0
 
 A clock you can shape while it runs, and one that remembers how you shaped it.

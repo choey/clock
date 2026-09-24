@@ -10,9 +10,11 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -111,7 +113,9 @@ sets the same thing as --cell-ratio, for when it wants to be set once per
 terminal rather than typed every time; the flag wins if both are given.
 
 Space holds the frame still, for a screenshot, h or ? opens the key list, and
-r resizes and aligns the clocks while they run.
+r resizes and aligns the clocks while they run. S saves those sizes and the
+zones on screen to ~/.config/clock/config, which every clock reads at startup;
+CLOCK_CONFIG points somewhere else, and set but empty means no file at all.
 Press q or Ctrl+C to quit.
 
 examples:
@@ -153,6 +157,7 @@ var hotkeys = []struct{ key, what string }{
 	{"space", "hold the frame"},
 	{"h ?", "toggle this list"},
 	{"r", "resize and align the clocks"},
+	{"S", "save these sizes and zones"},
 	{"q", "quit, or Ctrl+C"},
 }
 
@@ -1262,17 +1267,128 @@ func trimFloat(v float64) string {
 	return s
 }
 
+// options is everything a command line sets, and so everything the
+// preferences file can set too: the file is read by the same parser, into the
+// same struct, before the command line is read into it on top. That is the
+// whole of "the file is the front of your command line" -- last wins, with no
+// second set of rules to keep in step with the first.
+type options struct {
+	perRow     int
+	perRowAuto bool
+	zoneList   string
+	colorWhen  string
+	dayWhen    string
+	quiet      bool
+	vals       [numTunes]string
+}
+
+// defaultOptions is a clock nobody has told anything: the flag defaults, and
+// the six knobs as defaultTunes has them.
+func defaultOptions() options {
+	return options{
+		perRow:     defaultPerRow, // only used when an explicit -n/--per-row overrides perRowAuto
+		perRowAuto: true,          // the default: run() also searches per-row counts, to maximise rowsN
+		colorWhen:  "auto",
+		dayWhen:    "", // unset: run() picks it, since a pinned clock differs
+		vals:       defaultTunes(),
+	}
+}
+
+// configPath is where S saves and startup reads. CLOCK_CONFIG names it
+// outright -- set but empty means no preferences file at all, which is what
+// every harness here runs with and what a script wanting the plain defaults
+// can set. Otherwise the usual place, and nowhere at all if even HOME is
+// unset.
+func configPath() string {
+	if v, ok := os.LookupEnv("CLOCK_CONFIG"); ok {
+		return v
+	}
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, "clock", "config")
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		return filepath.Join(home, ".config", "clock", "config")
+	}
+	return ""
+}
+
+// loadConfig reads the file into the argument list it is: one token per line,
+// blank lines and # lines skipped. One token per line rather than a line of
+// arguments is what keeps a zone list with a space in it -- Salt Lake City --
+// from needing quoting rules that the two ports would then have to agree
+// about.
+//
+// A file that is not there is not an error: it is a clock that has never been
+// asked to save. One that cannot be read is, and says so in words of its own
+// rather than the language's, since Go and Python spell that complaint
+// differently and difftest compares the two.
+func loadConfig(path string) ([]string, error) {
+	if path == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("cannot read %s", path)
+	}
+	var tokens []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		tokens = append(tokens, line)
+	}
+	return tokens, nil
+}
+
+// saveConfig writes the tokens back, through a temporary file in the same
+// directory so a save that fails part way leaves the old file rather than
+// half of a new one.
+func saveConfig(path string, tokens []string) error {
+	if path == "" {
+		return errors.New("CLOCK_CONFIG is empty: nowhere to save")
+	}
+	fail := fmt.Errorf("cannot write %s", path)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fail
+	}
+	tmp, err := os.CreateTemp(dir, "config-")
+	if err != nil {
+		return fail
+	}
+	body := configHeader + strings.Join(tokens, "\n")
+	if len(tokens) > 0 {
+		body += "\n"
+	}
+	_, err = tmp.WriteString(body)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+		return fail
+	}
+	return nil
+}
+
+// configHeader says what the file is to whoever opens it, and that editing it
+// is allowed -- it is a command line, and everything the command line takes it
+// takes.
+const configHeader = "# clock: written by S, read at startup. One argument per line.\n" +
+	"# Delete this file to forget it; CLOCK_CONFIG= ignores it.\n"
+
 // parseArgs reads the command line: one optional zone list, and the flags in
 // any position. Hand-rolled rather than package flag, which insists every
 // flag precede the first positional -- "clock ET,PT -n 2" would silently
 // ignore the -n. pyclock.py runs the same algorithm for the same reason.
-func parseArgs(argv []string) (perRow int, zoneList, colorWhen, dayWhen string, vals [numTunes]string, quiet, perRowAuto bool, err error) {
-	perRow = defaultPerRow // only used when an explicit -n/--per-row overrides perRowAuto below
-	colorWhen = "auto"
-	// The six the tuner shares with the flags, as the text they were given
-	// in; run() reads them back with readTunes.
-	vals = defaultTunes()
-	perRowAuto = true // the default: run() also searches per-row counts, to maximise rowsN
+func parseArgs(argv []string, opt options) (out options, err error) {
+	out = opt
 	var positional []string
 	endOfFlags := false
 
@@ -1299,21 +1415,21 @@ func parseArgs(argv []string) (perRow int, zoneList, colorWhen, dayWhen string, 
 					val = argv[i]
 				}
 				if val == "auto" {
-					perRowAuto = true
+					out.perRowAuto = true
 					break
 				}
-				perRow, err = parseCount(val, "--per-row", maxPerRow)
+				out.perRow, err = parseCount(val, "--per-row", maxPerRow)
 				if err != nil {
 					return
 				}
-				perRowAuto = false
+				out.perRowAuto = false
 			case "color":
 				// Bare --color means always, and takes no separate argument:
 				// "clock --color ET" names a zone list, exactly as ls and git
 				// read the same flag. The value only ever follows an "=".
-				colorWhen = "always"
+				out.colorWhen = "always"
 				if haveVal {
-					if colorWhen, err = parseChoice("color", val, colorWhens); err != nil {
+					if out.colorWhen, err = parseChoice("color", val, colorWhens); err != nil {
 						return
 					}
 				}
@@ -1322,7 +1438,7 @@ func parseArgs(argv []string) (perRow int, zoneList, colorWhen, dayWhen string, 
 					err = errors.New("--no-color takes no value")
 					return
 				}
-				colorWhen = "never"
+				out.colorWhen = "never"
 			case "version":
 				// Read where it is found, like --help: everything before it on
 				// the command line still has to parse, everything after it is
@@ -1334,9 +1450,9 @@ func parseArgs(argv []string) (perRow int, zoneList, colorWhen, dayWhen string, 
 				err = errVersion
 				return
 			case "day":
-				dayWhen = "always"
+				out.dayWhen = "always"
 				if haveVal {
-					if dayWhen, err = parseChoice("day", val, whens); err != nil {
+					if out.dayWhen, err = parseChoice("day", val, whens); err != nil {
 						return
 					}
 				}
@@ -1345,13 +1461,13 @@ func parseArgs(argv []string) (perRow int, zoneList, colorWhen, dayWhen string, 
 					err = errors.New("--no-day takes no value")
 					return
 				}
-				dayWhen = "never"
+				out.dayWhen = "never"
 			case "quiet":
 				if haveVal {
 					err = errors.New("--quiet takes no value")
 					return
 				}
-				quiet = true
+				out.quiet = true
 			case "halign", "valign", "hpad", "vpad", "cell-ratio", "scale":
 				// These six want a value, and take it either way round, as
 				// --per-row does: there is no bare form to be ambiguous with.
@@ -1370,13 +1486,13 @@ func parseArgs(argv []string) (perRow int, zoneList, colorWhen, dayWhen string, 
 				if err = checkTune(k, val); err != nil {
 					return
 				}
-				vals[k] = val
+				out.vals[k] = val
 			default:
 				err = fmt.Errorf("unknown option: --%s", name)
 				return
 			}
 		case a == "-q":
-			quiet = true
+			out.quiet = true
 		case len(a) > 1 && strings.HasPrefix(a, "-"):
 			if a[1] != 'n' {
 				err = fmt.Errorf("unknown option: %s", a)
@@ -1396,14 +1512,14 @@ func parseArgs(argv []string) (perRow int, zoneList, colorWhen, dayWhen string, 
 				return
 			}
 			if rest == "auto" {
-				perRowAuto = true
+				out.perRowAuto = true
 				continue
 			}
-			perRow, err = parseCount(rest, "-n", maxPerRow)
+			out.perRow, err = parseCount(rest, "-n", maxPerRow)
 			if err != nil {
 				return
 			}
-			perRowAuto = false
+			out.perRowAuto = false
 		default:
 			positional = append(positional, a)
 		}
@@ -1415,7 +1531,7 @@ func parseArgs(argv []string) (perRow int, zoneList, colorWhen, dayWhen string, 
 		return
 	}
 	if len(positional) == 1 {
-		zoneList = positional[0]
+		out.zoneList = positional[0]
 	}
 	return
 }
@@ -2593,22 +2709,36 @@ func tuneFlags(vals [numTunes]string) []string {
 	return out
 }
 
-// tuneCommand is what the layout on screen would take on a command line: the
-// knobs that differ, then the -n and the zone list as they were given. No
-// program name in front of it -- the two ports are installed under different
-// ones, and the flags are the part worth copying either way.
-func tuneCommand(vals [numTunes]string, zoneList string, perRow int, perRowAuto bool) string {
-	parts := tuneFlags(vals)
-	if len(parts) == 0 {
-		return ""
-	}
+// configTokens is the clock on screen written as an argument list: the knobs
+// that differ from an untouched clock's, the -n if one was given, and the zone
+// list as it was typed. What S saves, one token per line, and what the line
+// the tuner leaves behind is made of.
+func configTokens(vals [numTunes]string, zoneList string, perRow int, perRowAuto bool) []string {
+	tokens := tuneFlags(vals)
 	if !perRowAuto {
-		parts = append(parts, "-n", strconv.Itoa(perRow))
+		tokens = append(tokens, "-n", strconv.Itoa(perRow))
 	}
 	if zoneList != "" {
-		parts = append(parts, shellQuote(zoneList))
+		tokens = append(tokens, zoneList)
 	}
-	return strings.Join(parts, " ")
+	return tokens
+}
+
+// tuneCommand is the same list said out loud: quoted for a shell, and empty
+// unless some knob was actually moved -- a clock still at its defaults has
+// nothing to tell anyone. No program name in front of it, since the two ports
+// are installed under different ones and the flags are the part worth copying
+// either way.
+func tuneCommand(vals [numTunes]string, zoneList string, perRow int, perRowAuto bool) string {
+	if len(tuneFlags(vals)) == 0 {
+		return ""
+	}
+	tokens := configTokens(vals, zoneList, perRow, perRowAuto)
+	quoted := make([]string, len(tokens))
+	for i, t := range tokens {
+		quoted[i] = shellQuote(t)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // shellQuote wraps a zone list a shell would read as more than one word.
@@ -2619,7 +2749,7 @@ func shellQuote(s string) string {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
-			strings.IndexByte("_,./:+-", c) >= 0) {
+			strings.IndexByte("_,./:+-%=", c) >= 0) {
 			safe = false
 			break
 		}
@@ -3273,7 +3403,24 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	askedPerRow, zoneList, colorWhen, dayWhen, vals, quiet, perRowAuto, err := parseArgs(os.Args[1:])
+	// The preferences file first, then the command line on top of it, both
+	// through the same parser: a flag typed here beats the same flag saved
+	// there because it is read second, which is the only rule either of them
+	// needs. -h and --version are refused in a file, where a clock that
+	// printed its usage and stopped would be a bad afternoon.
+	conf := configPath()
+	opt := defaultOptions()
+	tokens, err := loadConfig(conf)
+	if err != nil {
+		return err
+	}
+	if opt, err = parseArgs(tokens, opt); err != nil {
+		if errors.Is(err, errHelp) || errors.Is(err, errVersion) {
+			return fmt.Errorf("%s: -h and --version are not settings; delete that line", conf)
+		}
+		return fmt.Errorf("%s: %v", conf, err)
+	}
+	opt, err = parseArgs(os.Args[1:], opt)
 	if errors.Is(err, errHelp) {
 		fmt.Print(usage)
 		return nil
@@ -3285,7 +3432,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	color := useColor(colorWhen)
+	vals := opt.vals
+	askedPerRow, perRowAuto := opt.perRow, opt.perRowAuto
+	zoneList, quiet := opt.zoneList, opt.quiet
+	color := useColor(opt.colorWhen)
 
 	// The six knobs, as text, are the whole of the layout state: --cell-ratio
 	// has already beaten CLOCK_CELL_RATIO in defaultTunes, and a fixed
@@ -3299,6 +3449,7 @@ func run() error {
 	// A pinned clock is a still of one instant, and an undated still records
 	// half of it, so the weekday goes under every face unless --day says
 	// otherwise. Live, auto keeps it for the clocks that actually disagree.
+	dayWhen := opt.dayWhen
 	if dayWhen == "" {
 		dayWhen = "auto"
 		if pinned {
@@ -3373,6 +3524,14 @@ func run() error {
 	// The tuner, and the keys feeding it.
 	tune := tuner{}
 	var dec keyDecoder
+	// What S does, and what it says afterwards: the clock on screen written
+	// back to the preferences file, or why it could not be.
+	save := func() string {
+		if err := saveConfig(conf, configTokens(vals, zoneList, askedPerRow, perRowAuto)); err != nil {
+			return err.Error()
+		}
+		return "saved to " + conf
+	}
 	// Said once the tuner closes, in the same modal it used, and dropped at
 	// the next key: the flags the layout on screen would need.
 	note := ""
@@ -3472,7 +3631,11 @@ func run() error {
 			// hiding it would leave nothing to undo it with.
 			content = tuneRows(tune, vals)
 		case fullScreen && note != "":
-			content = []string{note}
+			// Folded, not one line: a note names a file, and a path is
+			// easily longer than a window -- where a modal that does not fit
+			// is a modal not shown at all, which for "cannot write" would
+			// mean a failed save that said nothing.
+			content = fold(note, cols-4)
 		case err == nil && fullScreen && helpOn:
 			content = helpRows()
 		case !quiet && fullScreen && time.Now().Before(flashUntil):
@@ -3579,7 +3742,7 @@ func run() error {
 				}
 			case k := <-keys:
 				for _, key := range dec.feed(k) {
-					if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now) {
+					if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now, save) {
 						return nil
 					}
 				}
@@ -3589,7 +3752,7 @@ func run() error {
 				// waiting to be told what it was is the key itself. Decided
 				// here rather than on a timer: see keyDecoder.
 				for _, key := range dec.flush() {
-					if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now) {
+					if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now, save) {
 						return nil
 					}
 				}
@@ -3614,7 +3777,8 @@ func run() error {
 // rather than the keys they are everywhere else. Ctrl+C still quits, being
 // the terminal driver's rather than the clock's.
 func pressed(key string, tune *tuner, vals *[numTunes]string, set *settings,
-	holding *bool, held *time.Time, helpOn *bool, note *string, now time.Time) bool {
+	holding *bool, held *time.Time, helpOn *bool, note *string, now time.Time,
+	save func() string) bool {
 	if *note != "" {
 		// Any key clears the note the tuner left behind; the key still
 		// counts, so a reader who went straight for q gets it.
@@ -3675,6 +3839,12 @@ func pressed(key string, tune *tuner, vals *[numTunes]string, set *settings,
 		*helpOn = !*helpOn
 	case "r", "R":
 		*tune = tuner{open: true}
+		*helpOn = false
+	case "S":
+		// Capitalised on purpose: it overwrites a file, and a shift is enough
+		// to keep an elbow from doing it. Lowercase s is not taken, so a miss
+		// does nothing at all.
+		*note = save()
 		*helpOn = false
 	}
 	return false

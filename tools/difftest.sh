@@ -8,6 +8,12 @@
 # Usage: tools/difftest.sh [-v]      (-v echoes each case as it passes)
 set -eu
 
+# No preferences file, ever: S writes one, the clock reads it at startup, and
+# whether the machine running this happens to have one is not something the
+# comparison below may depend on. Empty means none at all, which every harness
+# here sets for the same reason.
+export CLOCK_CONFIG=
+
 cd "$(dirname "$0")/.."
 
 # ZIP codes resolve through ziptz, which is a module of its own now: Go links
@@ -143,14 +149,14 @@ check() {
 	# so both sides read 0 however the clock exited and the comparison below
 	# was comparing nothing. An if condition is exempt from set -e too.
 	if env CLOCK_FREEZE="$freeze" COLUMNS="$cols" LINES="$lines" \
-		CLOCK_CELL_RATIO="${ratio:-}" TZDIR="${tzdir:-}" \
+		CLOCK_CELL_RATIO="${ratio:-}" TZDIR="${tzdir:-}" CLOCK_CONFIG="${conf:-}" \
 		CLOCK_FRAMES="${frames:-}" CLOCK_STEP="${step:-}" \
 		"$out/clock" "$@" >"$out/go.out" 2>"$out/go.err" </dev/null
 	then go_status=0
 	else go_status=$?
 	fi
 	if env CLOCK_FREEZE="$freeze" COLUMNS="$cols" LINES="$lines" \
-		CLOCK_CELL_RATIO="${ratio:-}" TZDIR="${tzdir:-}" \
+		CLOCK_CELL_RATIO="${ratio:-}" TZDIR="${tzdir:-}" CLOCK_CONFIG="${conf:-}" \
 		CLOCK_FRAMES="${frames:-}" CLOCK_STEP="${step:-}" \
 		python3 pyclock.py "$@" >"$out/py.out" 2>"$out/py.err" </dev/null
 	then py_status=0
@@ -576,6 +582,50 @@ done
 ratio=1.7
 check "$SUMMER" 200 60 --scale 1 --cell-ratio 2.9 ET,PT,UTC -n 2
 ratio=
+
+echo "== the preferences file =="
+# A file of settings is an argument list, one token per line, read before the
+# command line and by the same parser -- so everything the command line takes
+# it takes, and a flag typed beats the same flag saved. Written by S, which no
+# redirected clock ever presses: what is compared here is the reading of it,
+# and tools/keytest.py compares the writing.
+#
+# The lines up to -- are the file; the rest is the argv both clocks are given.
+config_case() {
+	: >"$out/config"
+	while [ "$1" != "--" ]; do
+		printf '%s\n' "$1" >>"$out/config"
+		shift
+	done
+	shift
+	conf=$out/config
+	check "$SUMMER" 80 24 "$@"
+	conf=
+}
+
+config_case -- ET,PT,UTC                                 # no file at all, for the baseline
+config_case --hpad 5% ET,PT,UTC --                       # the whole clock out of the file
+config_case --hpad 5% ET,PT,UTC -- UTC                   # a zone list typed beats one saved
+config_case --scale 2 -- --scale 1 ET,PT,UTC             # and so does a flag
+config_case --halign left -- --hpad 5% ET,PT,UTC         # what is not typed is still read
+config_case -n 2 ET,PT,UTC,JP --                         # -n saves and reads like the rest
+config_case "# a comment" "" --vpad 5% -- ET,PT,UTC      # comments and blank lines are skipped
+config_case "Salt Lake City,UTC" --                      # a space in a token needs no quoting
+config_case --hpad nope -- ET,PT,UTC                     # a value the file may not hold
+config_case --nonsense -- ET,PT,UTC                      # a flag that does not exist
+config_case --help -- ET,PT,UTC                          # nor may it ask for the usage
+config_case --version -- ET,PT,UTC                       # or the version
+config_case ET,PT UTC -- ET                              # two zone lists in the file
+
+# A file that was never written is not an error; one that cannot be read is,
+# and both say so in the same words -- which is why neither says the
+# language's, where Go and Python spell it differently.
+conf=$out/never-written
+check "$SUMMER" 80 24 ET,PT,UTC
+mkdir -p "$out/config-dir"
+conf=$out/config-dir
+check "$SUMMER" 80 24 ET,PT,UTC
+conf=
 
 echo "== auto scale =="
 for size in "80 24" "100 30" "200 60" "40 15" "300 90"; do

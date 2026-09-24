@@ -327,6 +327,7 @@ than the alignment, whatever `--day` says.
 | space | hold the frame still, and again to carry on |
 | `h` or `?` | show or hide the key list |
 | `r` | resize and align the clocks, while they run |
+| `S` | save those sizes and the zones on screen, for next time |
 | `q` | quit, as does Ctrl+C |
 
 Ctrl+Z suspends it, like any other job. The clock hands the terminal back for
@@ -390,6 +391,51 @@ it is the whole command. Nothing is printed if nothing was changed.
 `--cell-ratio` is the one worth tuning this way. It depends on your font and
 line spacing, and the difference between right and wrong is a face that reads
 as round or as an egg; see [Round faces](#round-faces).
+
+### Saving what you tuned
+
+`S` writes the clock on screen — the layout knobs that differ from the
+defaults, the `-n` if you gave one, and the zones themselves — to
+`~/.config/clock/config`, and says where it put it. Every clock started
+afterwards reads that file, so the tuning survives the terminal it was done
+in:
+
+```
+# clock: written by S, read at startup. One argument per line.
+# Delete this file to forget it; CLOCK_CONFIG= ignores it.
+--hpad
+5%
+ET,PT,UTC
+```
+
+The file is an argument list, one token per line — a token to a line so that a
+zone list with a space in it needs no quoting rules. Blank lines and lines
+starting with `#` are skipped. It is read by the same parser the command line
+goes through, before the command line, which gives the whole of the rule for
+how the two fit together:
+
+**the file is the front of your command line.** Anything you type beats the
+same thing saved, because it is read second. `clock UTC` on a file holding
+`ET,PT,UTC` draws UTC alone; `clock --scale 1` on a file holding `--scale 2`
+gets 1. Everything in the file you did not override still applies. A setting
+the file may not hold is one that stops the clock rather than configuring it:
+`-h`, `--help` and `--version` are refused, by name.
+
+Edit it, or delete it to forget the whole thing — a missing file is not an
+error, it is a clock that has never been asked to save. `S` writes it through
+a temporary file in the same directory, so a save that fails part way leaves
+the old one rather than half of a new one, and says what went wrong instead of
+taking the clock down with it.
+
+| where | |
+|---|---|
+| `$CLOCK_CONFIG` | this file, wherever you point it |
+| `$XDG_CONFIG_HOME/clock/config` | if that variable is set |
+| `~/.config/clock/config` | otherwise |
+
+`CLOCK_CONFIG=` — set, but empty — means no preferences file at all, for a
+script that wants the defaults whatever the machine has saved. It is what
+every harness in `tools/` runs with, for that reason.
 
 ### Holding a frame
 

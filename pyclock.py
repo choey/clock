@@ -12,6 +12,7 @@ import math
 import os
 import signal
 import sys
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -111,7 +112,9 @@ sets the same thing as --cell-ratio, for when it wants to be set once per
 terminal rather than typed every time; the flag wins if both are given.
 
 Space holds the frame still, for a screenshot, h or ? opens the key list, and
-r resizes and aligns the clocks while they run.
+r resizes and aligns the clocks while they run. S saves those sizes and the
+zones on screen to ~/.config/clock/config, which every clock reads at startup;
+CLOCK_CONFIG points somewhere else, and set but empty means no file at all.
 Press q or Ctrl+C to quit.
 
 examples:
@@ -130,6 +133,7 @@ HOTKEYS = (
     ("space", "hold the frame"),
     ("h ?", "toggle this list"),
     ("r", "resize and align the clocks"),
+    ("S", "save these sizes and zones"),
     ("q", "quit, or Ctrl+C"),
 )
 HOTKEY_COL = 8  # where the descriptions start, so the keys get a gutter
@@ -1091,21 +1095,115 @@ def apply_settings(settings):
         COLS = math.floor(ROWS * CELL_RATIO + 0.5)
 
 
-def parse_args(argv):
+class Options:
+    """Everything a command line sets, and so everything the file can set too.
+
+    The preferences file is read by the same parser, into the same object,
+    before the command line is read into it on top. That is the whole of "the
+    file is the front of your command line" -- last wins, with no second set
+    of rules to keep in step with the first.
+    """
+
+    def __init__(self):
+        self.per_row = DEFAULT_PER_ROW  # only used when an explicit -n/--per-row overrides per_row_auto
+        self.per_row_auto = True  # the default: run() also searches per-row counts, to maximise ROWS
+        self.zone_list = ""
+        self.color_when = "auto"
+        self.day_when = ""  # unset: run() picks it, since a pinned clock differs
+        self.quiet = False
+        self.vals = default_tunes()  # the six knobs, as text
+
+
+def config_path():
+    """Where S saves and startup reads.
+
+    CLOCK_CONFIG names it outright -- set but empty means no preferences file
+    at all, which is what every harness here runs with and what a script
+    wanting the plain defaults can set. Otherwise the usual place, and nowhere
+    at all if even HOME is unset.
+    """
+    if "CLOCK_CONFIG" in os.environ:
+        return os.environ["CLOCK_CONFIG"]
+    xdg = os.environ.get("XDG_CONFIG_HOME", "")
+    if xdg:
+        return os.path.join(xdg, "clock", "config")
+    home = os.environ.get("HOME", "")
+    if home:
+        return os.path.join(home, ".config", "clock", "config")
+    return ""
+
+
+# What the file says about itself to whoever opens it, and that editing it is
+# allowed -- it is a command line, and everything the command line takes it
+# takes.
+CONFIG_HEADER = (
+    "# clock: written by S, read at startup. One argument per line.\n"
+    "# Delete this file to forget it; CLOCK_CONFIG= ignores it.\n"
+)
+
+
+def load_config(path):
+    """Read the file into the argument list it is.
+
+    One token per line, blank lines and # lines skipped. One token per line
+    rather than a line of arguments is what keeps a zone list with a space in
+    it -- Salt Lake City -- from needing quoting rules that the two ports
+    would then have to agree about.
+
+    A file that is not there is not an error: it is a clock that has never
+    been asked to save. One that cannot be read is, and says so in words of
+    its own rather than the language's, since Go and Python spell that
+    complaint differently and difftest compares the two.
+    """
+    if not path:
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = fh.read()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        raise ClockError(f"cannot read {path}")
+    except UnicodeDecodeError:
+        raise ClockError(f"cannot read {path}")
+    return [line for line in data.split("\n") if line and not line.startswith("#")]
+
+
+def save_config(path, tokens):
+    """Write the tokens back, through a temporary file in the same directory.
+
+    So a save that fails part way leaves the old file rather than half of a
+    new one.
+    """
+    if not path:
+        raise ClockError("CLOCK_CONFIG is empty: nowhere to save")
+    fail = ClockError(f"cannot write {path}")
+    directory = os.path.dirname(path) or "."
+    body = CONFIG_HEADER + "".join(token + "\n" for token in tokens)
+    tmp = None
+    try:
+        os.makedirs(directory, exist_ok=True)
+        handle, tmp = tempfile.mkstemp(prefix="config-", dir=directory)
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        os.replace(tmp, path)
+    except OSError:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+        raise fail from None
+
+
+def parse_args(argv, opt):
     """Read the command line: one optional zone list, and the flags anywhere.
 
     Hand-rolled rather than argparse, which prints its own usage block, exits
     with status 2, and abbreviates long options -- none of which the Go port
     can reproduce. Both implementations run this algorithm verbatim.
+
+    Reads into `opt` and hands it back, so the preferences file and then the
+    command line can go through it in turn, the second writing over the first.
     """
-    per_row = DEFAULT_PER_ROW  # only used when an explicit -n/--per-row overrides per_row_auto below
-    color_when = "auto"
-    day_when = ""  # unset: run() picks it, since a pinned clock differs
-    quiet = False
-    # The six the tuner shares with the flags, as the text they were given in;
-    # run() reads them back with read_tunes.
-    vals = default_tunes()
-    per_row_auto = True  # the default: run() also searches per-row counts, to maximise ROWS
     positional = []
     end_of_flags = False
 
@@ -1127,19 +1225,19 @@ def parse_args(argv):
                         raise ClockError("--per-row needs a number, e.g. --per-row 2")
                     val = argv[i]
                 if val == "auto":
-                    per_row_auto = True
+                    opt.per_row_auto = True
                 else:
-                    per_row = parse_count(val, "--per-row", MAX_PER_ROW)
-                    per_row_auto = False
+                    opt.per_row = parse_count(val, "--per-row", MAX_PER_ROW)
+                    opt.per_row_auto = False
             elif name == "color":
                 # Bare --color means always, and takes no separate argument:
                 # "clock --color ET" names a zone list, exactly as ls and git
                 # read the same flag. The value only ever follows an "=".
-                color_when = parse_choice("color", val, COLOR_WHENS) if sep else "always"
+                opt.color_when = parse_choice("color", val, COLOR_WHENS) if sep else "always"
             elif name == "no-color":
                 if sep:
                     raise ClockError("--no-color takes no value")
-                color_when = "never"
+                opt.color_when = "never"
             elif name == "version":
                 # Read where it is found, like --help: everything before it on
                 # the command line still has to parse, everything after it is
@@ -1148,15 +1246,15 @@ def parse_args(argv):
                     raise ClockError("--version takes no value")
                 raise VersionRequested
             elif name == "day":
-                day_when = parse_choice("day", val, WHENS) if sep else "always"
+                opt.day_when = parse_choice("day", val, WHENS) if sep else "always"
             elif name == "no-day":
                 if sep:
                     raise ClockError("--no-day takes no value")
-                day_when = "never"
+                opt.day_when = "never"
             elif name == "quiet":
                 if sep:
                     raise ClockError("--quiet takes no value")
-                quiet = True
+                opt.quiet = True
             elif name in ("halign", "valign", "hpad", "vpad", "cell-ratio", "scale"):
                 # These six want a value, and take it either way round, as
                 # --per-row does: there is no bare form to be ambiguous with.
@@ -1169,11 +1267,11 @@ def parse_args(argv):
                 # the tuner and a saved command line say what was typed.
                 k = tune_index(name)
                 check_tune(k, val)
-                vals[k] = val
+                opt.vals[k] = val
             else:
                 raise ClockError(f"unknown option: --{name}")
         elif a == "-q":
-            quiet = True
+            opt.quiet = True
         elif len(a) > 1 and a.startswith("-"):
             if a[1] != "n":
                 raise ClockError(f"unknown option: {a}")
@@ -1186,10 +1284,10 @@ def parse_args(argv):
             elif rest[0] == "=":
                 raise ClockError('-n takes its value as "-n N" or "-nN", not "-n=N"')
             if rest == "auto":
-                per_row_auto = True
+                opt.per_row_auto = True
             else:
-                per_row = parse_count(rest, "-n", MAX_PER_ROW)
-                per_row_auto = False
+                opt.per_row = parse_count(rest, "-n", MAX_PER_ROW)
+                opt.per_row_auto = False
         else:
             positional.append(a)
         i += 1
@@ -1199,15 +1297,9 @@ def parse_args(argv):
             f"expected one comma-separated zone list, got {len(positional)}: "
             + " ".join(positional)
         )
-    return (
-        per_row,
-        positional[0] if positional else "",
-        color_when,
-        day_when,
-        vals,
-        quiet,
-        per_row_auto,
-    )
+    if positional:
+        opt.zone_list = positional[0]
+    return opt
 
 
 # Fills the gaps the tz database leaves, and only those gaps. EST, MST, HST,
@@ -2195,25 +2287,39 @@ def tune_flags(vals):
     return out
 
 
-def tune_command(vals, zone_list, per_row, per_row_auto):
-    """The whole of it: the flags, then the -n and the zone list as given.
+def config_tokens(vals, zone_list, per_row, per_row_auto):
+    """The clock on screen written as an argument list.
 
-    No program name in front of it -- the two ports are installed under
-    different ones, and the flags are the part worth copying either way.
+    The knobs that differ from an untouched clock's, the -n if one was given,
+    and the zone list as it was typed. What S saves, one token per line, and
+    what the line the tuner leaves behind is made of.
     """
-    parts = tune_flags(vals)
-    if not parts:
-        return ""
+    tokens = tune_flags(vals)
     if not per_row_auto:
-        parts += ["-n", str(per_row)]
+        tokens += ["-n", str(per_row)]
     if zone_list:
-        parts.append(shell_quote(zone_list))
-    return " ".join(parts)
+        tokens.append(zone_list)
+    return tokens
+
+
+def tune_command(vals, zone_list, per_row, per_row_auto):
+    """The same list said out loud: quoted for a shell.
+
+    Empty unless some knob was actually moved -- a clock still at its defaults
+    has nothing to tell anyone. No program name in front of it, since the two
+    ports are installed under different ones and the flags are the part worth
+    copying either way.
+    """
+    if not tune_flags(vals):
+        return ""
+    return " ".join(
+        shell_quote(t) for t in config_tokens(vals, zone_list, per_row, per_row_auto)
+    )
 
 
 # What a shell reads as one word, and so needs no quoting.
 SHELL_SAFE = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_,./:+-"
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_,./:+-%="
 )
 
 
@@ -2782,18 +2888,30 @@ def run(argv):
     """Everything that can fail happens before the terminal is touched."""
     global ROWS, CELL_RATIO, COLS, LEFT_WITH
     frozen = freeze()
-    (
-        asked_per_row,
-        zone_list,
-        color_when,
-        day_when,
-        vals,
-        quiet,
-        per_row_auto,
-    ) = parse_args(argv)
+    # The preferences file first, then the command line on top of it, both
+    # through the same parser: a flag typed here beats the same flag saved
+    # there because it is read second, which is the only rule either of them
+    # needs. -h and --version are refused in a file, where a clock that
+    # printed its usage and stopped would be a bad afternoon.
+    conf = config_path()
+    opt = Options()
+    tokens = load_config(conf)  # its own complaint names the file already
+    try:
+        opt = parse_args(tokens, opt)
+    except (HelpRequested, VersionRequested):
+        raise ClockError(
+            f"{conf}: -h and --version are not settings; delete that line"
+        ) from None
+    except ClockError as exc:
+        raise ClockError(f"{conf}: {exc}") from None
+    opt = parse_args(argv, opt)
+
+    vals = opt.vals
+    asked_per_row, per_row_auto = opt.per_row, opt.per_row_auto
+    zone_list, quiet = opt.zone_list, opt.quiet
     zones = resolve_zones(zone_list, frozen or datetime.now(timezone.utc))
 
-    color = use_color(color_when)
+    color = use_color(opt.color_when)
 
     # The six knobs, as text, are the whole of the layout state: --cell-ratio
     # has already beaten CLOCK_CELL_RATIO in default_tunes, and a fixed
@@ -2806,6 +2924,7 @@ def run(argv):
     # A pinned clock is a still of one instant, and an undated still records
     # half of it, so the weekday goes under every face unless --day says
     # otherwise. Live, auto keeps it for the clocks that actually disagree.
+    day_when = opt.day_when
     if not day_when:
         day_when = "always" if frozen is not None else "auto"
     # The instant the display is holding, or None when it runs live. Holding
@@ -2822,6 +2941,20 @@ def run(argv):
     # Off the wall clock, not the frame's: a clock pinned with CLOCK_FREEZE
     # never advances, and the hint still has to give up after three seconds.
     flash_until = time.monotonic() + FLASH_SECONDS
+
+    def save():
+        """What S does, and what it says afterwards.
+
+        The clock on screen written back to the preferences file, or why it
+        could not be.
+        """
+        try:
+            save_config(
+                conf, config_tokens(vals, zone_list, asked_per_row, per_row_auto)
+            )
+        except ClockError as exc:
+            return str(exc)
+        return f"saved to {conf}"
 
     def pressed(key, now):
         """Answer one key, and say whether it was the one that quits.
@@ -2883,6 +3016,12 @@ def run(argv):
         elif key in ("r", "R"):
             tune.open, tune.sel = True, 0
             tune.edit, tune.editing, tune.err = "", False, ""
+            help_on = False
+        elif key == "S":
+            # Capitalised on purpose: it overwrites a file, and a shift is
+            # enough to keep an elbow from doing it. Lowercase s is not taken,
+            # so a miss does nothing at all.
+            note = save()
             help_on = False
         return False
 
@@ -3017,7 +3156,11 @@ def run(argv):
                     # with.
                     content = tune_rows(tune, vals)
                 elif full_screen and note:
-                    content = [note]
+                    # Folded, not one line: a note names a file, and a path is
+                    # easily longer than a window -- where a modal that does
+                    # not fit is a modal not shown at all, which for "cannot
+                    # write" would mean a failed save that said nothing.
+                    content = fold(note, cols - 4)
                 elif fits and full_screen and help_on:
                     content = help_rows()
                 elif not quiet and full_screen and time.monotonic() < flash_until:

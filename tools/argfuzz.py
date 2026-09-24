@@ -175,7 +175,11 @@ def run(argv, env):
     base = {k: v for k, v in os.environ.items() if k not in ("TZ", "COLUMNS", "LINES",
                                                              "CLOCK_CELL_RATIO", "NO_COLOR",
                                                              "CLOCK_FREEZE", "CLOCK_FRAMES",
-                                                             "CLOCK_STEP")}
+                                                             "CLOCK_STEP", "CLOCK_CONFIG")}
+    # Never a preferences file, and never a mutated path to one: a fuzzer
+    # pointed at a real file would be reading whatever the machine has saved,
+    # and both clocks would agree about it while proving nothing.
+    base["CLOCK_CONFIG"] = ""
     try:
         done = subprocess.run(
             argv, env=dict(base, **env), cwd=ROOT, timeout=LIMIT,

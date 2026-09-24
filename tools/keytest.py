@@ -31,12 +31,19 @@ import select
 import signal
 import struct
 import subprocess
+import tempfile
 import sys
 import termios
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# No preferences file, ever: S writes one and the clock reads it at startup,
+# so a file in the home directory of whoever runs this would change what every
+# case below compares. Empty means none at all. The cases that do want one
+# point CLOCK_CONFIG at a temporary file of their own.
+os.environ["CLOCK_CONFIG"] = ""
 
 # Pinned, so every repaint between two keystrokes is the same bytes and the
 # collapse below leaves one frame per state rather than however many ticks fit.
@@ -116,7 +123,7 @@ def open_pty(echo=False):
     return master, slave
 
 
-def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None, marks=None):
+def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None, marks=None, env=None):
     """One clock under a pty, fed `keys`, returning everything it painted.
 
     Each key is written after the frames from the previous one have had time to
@@ -127,13 +134,18 @@ def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None, marks=None):
     a resize run -- otherwise it would keep drawing the old size at a window
     that had changed, which is the bug this would be trying to find.
 
+    `env` adds to the environment the clock is started with, for the one thing
+    the keys can change outside the screen: where CLOCK_CONFIG points.
+
     `marks`, when a list is passed in, is filled with the offset into the
     output at the end of each phase: after the settle, then after each key. A
     caller that has to tell what one keystroke painted from what the next one
     did slices on those rather than reading the whole run as one stream.
     """
     master, slave = open_pty()
+    extra = env or {}
     env = dict(os.environ, COLUMNS=str(COLS), LINES=str(LINES), TERM="xterm-256color")
+    env.update(extra)  # a case that wants its own preferences file, say
     if sizes is not None:
         env.pop("COLUMNS", None)
         env.pop("LINES", None)
@@ -403,6 +415,88 @@ def tuned_layout(name, keys, flags, args=("-q", "UTC")):
             report(False, name, f"{impl}: tuned frame differs from {' '.join(flags)}"
                                 f"\n  tuned: {got[-1][:160]!r}\n  flagged: {want[-1][:160]!r}")
             return
+    report(True, name)
+
+
+def saves(name):
+    """S writes the clock down, and a clock started with the file matches it.
+
+    Written by one implementation and read by both: the file is a command
+    line, so a save from `clock` is a file `pyclock` runs from, and the bytes
+    each writes for the same screen have to be the same bytes.
+    """
+    keys = [b"r", b"\x1b[B", b"\x1b[B", b"5%", b"\r", b"\x1b", b"S"]
+    written = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for impl, argv in IMPLS:
+            path = Path(tmp) / f"config-{impl}"
+            painted, status = run(argv + ["-q", "ET,PT,UTC"], keys,
+                                  env={"CLOCK_CONFIG": str(path)})
+            if status == "hung":
+                report(False, name, f"{impl}: the clock never quit")
+                return
+            # A path can be longer than the window, so the note is folded
+            # onto as many lines as it takes; the words are what to look for.
+            if b"saved to" not in painted or str(path).encode() not in painted:
+                report(False, name, f"{impl}: never said it had saved to {path}")
+                return
+            if not path.exists():
+                report(False, name, f"{impl}: saved nothing to {path}")
+                return
+            written[impl] = path.read_bytes()
+
+        if written["go"] != written["py"]:
+            report(False, name, f"the two wrote different files\n"
+                                f"  go: {written['go']!r}\n  py: {written['py']!r}")
+            return
+
+        # And read back: the saved file draws what the flags it was saved from
+        # draw, in both, which is the whole promise of the thing.
+        saved = Path(tmp) / "config-go"
+        for impl, argv in IMPLS:
+            from_file, _ = run(argv + ["-q"], [], env={"CLOCK_CONFIG": str(saved)})
+            from_flags, _ = run(argv + ["-q", "--hpad", "5%", "ET,PT,UTC"], [])
+            drawn = lambda f: (BRAILLE[0] in f or BRAILLE[1] in f) and BOX_MARK not in f
+            got = [f for f in states(from_file.split(LEAVE_ALT)[0]) if drawn(f)]
+            want = [f for f in states(from_flags.split(LEAVE_ALT)[0]) if drawn(f)]
+            if not got or not want or got[-1] != want[-1]:
+                report(False, name, f"{impl}: the saved file draws something else")
+                return
+    report(True, name)
+
+
+def cannot_save(name):
+    """A save that cannot happen says so, and the clock carries on.
+
+    Both ways it can fail: nowhere to write, and nowhere that will have it.
+    The words are the clock's own rather than the language's, since Go and
+    Python spell a write error differently and both have to say this.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        shut = Path(tmp) / "shut"
+        shut.mkdir(mode=0o500)
+        cases = (
+            ("", (b"CLOCK_CONFIG is empty: nowhere to save",)),
+            (str(shut / "config"), (b"cannot write", str(shut / "config").encode())),
+        )
+        try:
+            for where, said in cases:
+                for impl, argv in IMPLS:
+                    painted, status = run(argv + ["-q", "UTC"], [b"S", b"h"],
+                                          env={"CLOCK_CONFIG": where})
+                    if status != 0:
+                        report(False, name, f"{impl}: exit status {status}")
+                        return
+                    missing = [w for w in said if w not in painted]
+                    if missing:
+                        report(False, name, f"{impl}: never said {missing[0]!r}")
+                        return
+                    # Still a clock afterwards: h still opens the key list.
+                    if HELP_MARK not in painted:
+                        report(False, name, f"{impl}: stopped answering keys after S")
+                        return
+        finally:
+            shut.chmod(0o700)
     report(True, name)
 
 
@@ -897,6 +991,10 @@ def main():
             painted, _ = run(argv + ["-q", "UTC"], [b"r", ESC])
             report(painted.split(LEAVE_ALT)[-1].strip() == b"",
                    f"{impl} says nothing when nothing was changed")
+
+        print("== saving ==")
+        saves("S writes the clock down, and both read the file back")
+        cannot_save("a save with nowhere to go says so and carries on")
 
         print("== the startup hint ==")
         compare("without -q, the hint is up", [], args=("UTC",))

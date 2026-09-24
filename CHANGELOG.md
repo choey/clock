@@ -9,18 +9,29 @@ the golden frames in `tools/golden/` exist to make impossible to do by accident.
 The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 `tools/docnums.py` fails the build if the three disagree.
 
-## Unreleased
+## 0.4.0
 
-- **`r` tunes the layout while the clock runs.** The six knobs that shape the
-  grid -- `--halign`, `--valign`, `--hpad`, `--vpad`, `--scale` and
-  `--cell-ratio` -- can now be worked against the clocks themselves instead of
-  against a guess, one flag at a time, with the faces redrawing as each value
-  is taken. A value is read by exactly the parser its flag uses, so what the
-  command line refuses the tuner refuses, in the same words. The box sits
-  below the clocks and the grid is laid out in what is left of the window, so
-  nothing being adjusted hides behind the thing adjusting it. Leaving says
-  what it would have taken to start the clock that way, and prints it again
-  once the screen has gone back to the shell.
+A clock you can shape while it runs, and one that remembers how you shaped it.
+`r` opens the seven knobs that decide the grid and works them against the
+faces themselves; `S` writes what is on screen to `~/.config/clock/config`,
+which every clock started afterwards reads.
+
+Nothing about an existing command line draws differently, and nothing new is
+read unless a file is saved -- but the keys and the file are both interface,
+so this is a minor release. A ZIP now labels its face like every other place,
+which is the one thing here that changes a picture.
+
+- **`r` tunes the layout while the clock runs.** The seven knobs that shape
+  the grid -- `--halign`, `--valign`, `--hpad`, `--vpad`, `--per-row`,
+  `--scale` and `--cell-ratio` -- can now be worked against the clocks
+  themselves instead of against a guess, with the faces redrawing as each
+  value is taken. Left and right step a value and space walks a list round;
+  each knob shows what it holds in brackets between the values either side of
+  it, so the size of a step is on screen rather than something to find out by
+  pressing a key. Typing one still works, and is read by exactly the parser
+  its flag uses, so what the command line refuses the tuner refuses, in the
+  same words. Leaving says what it would have taken to start the clock that
+  way, and prints it again once the screen has gone back to the shell.
 - **`S` saves the clock, and the next one starts that way.** The layout the
   tuner left, the per-row count, and the zones on screen, written to
   `~/.config/clock/config` and read at startup. The file is an argument list

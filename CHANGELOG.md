@@ -11,6 +11,15 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 
 ## 0.4.3
 
+A read that cannot block, and FreeBSD builds again.
+
+Asking whether stdin is ready and then reading it is two syscalls with a gap
+between them, and until now the read in that gap could block -- so a clock
+could stop dead, painting nothing, until the next keystroke arrived. A CI job
+wedged for half an hour is what said so. Both ports now set `VMIN` and `VTIME`
+to zero along with the rest of cbreak, which makes a read come back with
+whatever is there, including nothing at all.
+
 FreeBSD builds again. 0.4.2's one select-per-frame reached for
 `syscall.FdSet`, whose single field FreeBSD spells `X__fds_bits` where every
 other platform says `Bits` -- so the release build got four of its five

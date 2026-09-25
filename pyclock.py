@@ -2879,6 +2879,14 @@ def quiet_terminal():
 
     quiet = list(saved)
     quiet[3] &= ~(termios.ECHO | termios.ECHONL | termios.ICANON)  # lflag
+    # VMIN 0, VTIME 0: a read comes back with whatever is there, including
+    # nothing. select says whether stdin is ready and the read takes what is
+    # there, which is two syscalls with a gap between them, and a read that
+    # can block in that gap is a clock that stops dead until the next
+    # keystroke. With these, it cannot. clock.go sets the same two.
+    quiet[6] = list(quiet[6])  # cc, which tcgetattr hands back shared
+    quiet[6][termios.VMIN] = 0
+    quiet[6][termios.VTIME] = 0
     try:
         termios.tcsetattr(fd, termios.TCSANOW, quiet)
         yield (

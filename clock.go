@@ -3531,6 +3531,13 @@ func quietTerminal() (restore, requiet func()) {
 	}
 	quiet := saved
 	quiet.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON
+	// VMIN 0, VTIME 0: a read comes back with whatever is there, including
+	// nothing. Asking whether stdin is ready and then reading it is two
+	// syscalls with a gap between them, and a read that can block in that gap
+	// is a clock that stops dead until the next keystroke -- which is what a
+	// wedged CI job turned out to be. With these, it cannot.
+	quiet.Cc[syscall.VMIN] = 0
+	quiet.Cc[syscall.VTIME] = 0
 	if ioctlTermios(fd, tcSet, &quiet) != nil {
 		return nothing, nothing
 	}

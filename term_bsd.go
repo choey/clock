@@ -1,4 +1,4 @@
-//go:build darwin || dragonfly || freebsd || netbsd || openbsd
+//go:build darwin || dragonfly || netbsd || openbsd
 
 package main
 
@@ -13,13 +13,19 @@ const (
 	tcSetFlush = syscall.TIOCSETAF
 )
 
-// selectRead asks whether a descriptor has anything to read, without waiting.
-// syscall.Select is the fourth name that differs: the BSDs' wrapper hands
-// back an error alone where Linux's also returns the count, so the count is
-// what this adds -- ready or not, which is all pendingKeys asks.
-func selectRead(fds *syscall.FdSet, tv *syscall.Timeval) (bool, error) {
-	err := syscall.Select(1, fds, nil, nil, tv)
-	if err != nil {
+// selectRead asks whether stdin has anything to read, without waiting.
+//
+// syscall.Select is the fourth name that differs, and differs twice over: the
+// BSDs' wrapper hands back an error alone where Linux's also returns a count,
+// and FreeBSD spells FdSet's one field differently from everybody else. So
+// the whole question is asked per platform rather than the set being built in
+// one place and passed in -- three small functions, no build tags in the
+// clock itself.
+func selectRead() (bool, error) {
+	var fds syscall.FdSet
+	fds.Bits[0] = 1 // fd 0 is the only one asked about
+	tv := syscall.Timeval{}
+	if err := syscall.Select(1, &fds, nil, nil, &tv); err != nil {
 		return false, err
 	}
 	return fds.Bits[0]&1 != 0, nil

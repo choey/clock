@@ -64,7 +64,7 @@ const (
 // carry the same string, and difftest holds all three together: a clock that
 // cannot say what it is turns every bug report into a round trip, and one that
 // says the wrong thing is worse than one that says nothing at all.
-const version = "0.4.2"
+const version = "0.4.3"
 
 const usage = `clock - analog terminal clocks
 
@@ -3608,10 +3608,7 @@ func suspend(restore, requiet func(), fullScreen bool) {
 // gathered, never paints. That difference cost a release. This is the same
 // select-then-read pyclock.py does, in the same place in the loop.
 func pendingKeys(buf []byte) []byte {
-	var fds syscall.FdSet
-	fds.Bits[0] = 1 // fd 0 is the only one asked about
-	tv := syscall.Timeval{}
-	ready, err := selectRead(&fds, &tv)
+	ready, err := selectRead()
 	if err != nil || !ready {
 		return nil
 	}

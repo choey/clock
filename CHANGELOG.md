@@ -9,6 +9,16 @@ the golden frames in `tools/golden/` exist to make impossible to do by accident.
 The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 `tools/docnums.py` fails the build if the three disagree.
 
+## 0.4.3
+
+FreeBSD builds again. 0.4.2's one select-per-frame reached for
+`syscall.FdSet`, whose single field FreeBSD spells `X__fds_bits` where every
+other platform says `Bits` -- so the release build got four of its five
+targets and stopped, and v0.4.2 has no binaries to its name. The question is
+asked per platform now, in the files that already existed for the three
+termios requests that differ, and all five targets are built here before
+tagging as well as in CI.
+
 ## 0.4.2
 
 0.4.1 was the right diagnosis and the wrong cure. Batching the bytes did not

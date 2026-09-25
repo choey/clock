@@ -349,35 +349,67 @@ def compare(name, keys, expect=None, freeze=FROZEN, loose=False, args=("-q", "UT
 BRAILLE = (b"\xe2\xa0", b"\xe2\xa1", b"\xe2\xa2", b"\xe2\xa3")
 
 
-def compare_tune(name, keys, expect=None, args=("-q", "UTC")):
-    """Both implementations, same keys: same frames, and the tuner in step.
+def tune_view(frame):
+    """What the tuner box says in a frame, or b"" where there is no box.
 
-    The same comparison compare() makes, read through the tuner's own marker
-    rather than the key list's. Every case here has to leave the tuner closed:
-    with it open q is a letter like any other, and run() ends by pressing q.
+    The box's own lines, borders included: the values, which knob is picked,
+    and whatever the line under them says. Everything the tuner is.
+    """
+    if TUNE_MARK not in frame:  # some other modal, or none: not the tuner
+        return b""
+    lines = [l for l in frame.split(b"\n") if BOX_MARK in l or b"\xe2\x94\x82" in l]
+    return b"\n".join(l.strip() for l in lines)
+
+
+def tune_walk(painted):
+    """The tuner states a run walked through, in order.
+
+    Frames are not states here. A keystroke is more than one byte -- an arrow
+    is three -- and where a read boundary falls inside one is the terminal's
+    business and the scheduler's, so the same keys can take one frame in one
+    implementation and two in the other without either being wrong. What has
+    to match is what the tuner *said*: the same values, in the same order, and
+    the box open at the same points. Repeats collapse, so a state that lasted
+    four frames here and two there is one state in both.
+    """
+    walk = []
+    for frame in states(painted):
+        view = tune_view(frame)
+        if not walk or view != walk[-1]:
+            walk.append(view)
+    return walk
+
+
+def compare_tune(name, keys, expect=None, args=("-q", "UTC")):
+    """Both implementations, same keys: the same walk through the tuner.
+
+    Every case here has to leave the tuner closed: with it open q is a letter
+    like any other, and run() ends by pressing q.
     """
     seen = {}
     for impl, argv in IMPLS:
         painted, status = run(argv + list(args), keys)
-        seen[impl] = (states(painted), status, painted)
+        seen[impl] = (tune_walk(painted), status, painted)
 
-    (go_states, go_status, go_painted) = seen["go"]
-    (py_states, py_status, py_painted) = seen["py"]
+    (go_walk, go_status, go_painted) = seen["go"]
+    (py_walk, py_status, py_painted) = seen["py"]
     if go_status != py_status:
         report(False, name, f"exit status go={go_status} py={py_status}")
         return
     if go_status == "hung":
         report(False, name, "the clock never quit: the tuner swallowed the q")
         return
-    if len(go_states) != len(py_states):
-        report(False, name, f"{len(go_states)} states from go, {len(py_states)} from py")
+    if len(go_walk) != len(py_walk):
+        report(False, name, f"{len(go_walk)} tuner states from go, {len(py_walk)} from py"
+                            f"\n  go: {[v[:40] for v in go_walk]}"
+                            f"\n  py: {[v[:40] for v in py_walk]}")
         return
-    for i, (g, p) in enumerate(zip(go_states, py_states)):
+    for i, (g, p) in enumerate(zip(go_walk, py_walk)):
         if g != p:
-            report(False, name, f"state {i} differs\n  go: {g[:160]!r}\n  py: {p[:160]!r}")
+            report(False, name, f"tuner state {i} differs\n  go: {g[:200]!r}\n  py: {p[:200]!r}")
             return
     if expect is not None:
-        got = tuned(go_states)
+        got = [bool(v) for v in go_walk]
         if got != [bool(f) for f in expect]:
             report(False, name, f"tuner went {got}, expected {expect}")
             return
@@ -401,7 +433,10 @@ def tuned_layout(name, keys, flags, args=("-q", "UTC")):
         # One more key after the caller's: the note the tuner leaves is a
         # modal like any other, and it sits there until something clears it,
         # so without this there is no frame of clocks alone left to compare.
-        tuned_painted, status = run(argv + list(args), list(keys) + [b"x"])
+        # It settles for longer than the rest, since what is being compared is
+        # a frame that has to have been painted, and a loaded machine paints
+        # them further apart.
+        tuned_painted, status = run(argv + list(args), list(keys) + [(b"x", 1.0)])
         if status == "hung":
             report(False, name, f"{impl}: the clock never quit")
             return
@@ -430,7 +465,9 @@ def saves(name):
     line, so a save from `clock` is a file `pyclock` runs from, and the bytes
     each writes for the same screen have to be the same bytes.
     """
-    keys = [b"r", b"\x1b[B", b"\x1b[B", b"5%", b"\r", b"\x1b", b"S"]
+    # The S settles for longer than the rest: what is checked is a frame that
+    # has to have been painted, and a loaded machine paints them further apart.
+    keys = [b"r", b"\x1b[B", b"\x1b[B", b"5%", b"\r", b"\x1b", (b"S", 1.0)]
     written = {}
     with tempfile.TemporaryDirectory() as tmp:
         for impl, argv in IMPLS:
@@ -487,7 +524,7 @@ def cannot_save(name):
         try:
             for where, said in cases:
                 for impl, argv in IMPLS:
-                    painted, status = run(argv + ["-q", "UTC"], [b"S", b"h"],
+                    painted, status = run(argv + ["-q", "UTC"], [(b"S", 1.0), b"h"],
                                           env={"CLOCK_CONFIG": where})
                     if status != 0:
                         report(False, name, f"{impl}: exit status {status}")
@@ -955,25 +992,25 @@ def main():
 
         print("== the tuner ==")
         UP, DOWN, ESC = b"\x1b[A", b"\x1b[B", b"\x1b"
-        compare_tune("r opens the tuner, esc closes it", [b"r", ESC], [0, 1, 0, 0])
+        compare_tune("r opens the tuner, esc closes it", [b"r", ESC], [0, 1, 0])
         compare_tune("the tuner replaces the key list", [b"h", b"r", ESC],
-                     [0, 0, 1, 0, 0])
+                     [0, 1, 0])
         compare_tune("down and up walk the knobs", [b"r", DOWN, DOWN, UP, ESC],
-                     [0, 1, 1, 1, 1, 0, 0])
+                     [0, 1, 1, 1, 1, 0])
         compare_tune("a value is typed and taken", [b"r", DOWN, DOWN, b"5%", b"\r", ESC],
-                     [0, 1, 1, 1, 1, 1, 0, 0])
+                     [0, 1, 1, 1, 1, 1, 0])
         compare_tune("a value it will not have is refused",
-                     [b"r", b"zz", b"\r", ESC], [0, 1, 1, 1, 0, 0])
+                     [b"r", b"zz", b"\r", ESC], [0, 1, 1, 1, 0])
         compare_tune("a scale too large for the window is refused but stays undoable",
                      [b"r"] + [DOWN] * 5 + [b"99", b"\r", b"auto", b"\r", ESC])
         compare_tune("esc backs out of what is being typed before the tuner",
-                     [b"r", b"left", ESC, ESC], [0, 1, 1, 1, 0, 0])
+                     [b"r", b"left", ESC, ESC], [0, 1, 1, 1, 0])
         # With the tuner up these are letters: a case that quit here would
         # take the clock down mid-edit and paint a frame nobody asked for.
         compare_tune("q and h are letters while the tuner is open",
-                     [b"r", b"q", b"h", ESC, ESC], [0, 1, 1, 1, 1, 0, 0])
+                     [b"r", b"q", b"h", ESC, ESC], [0, 1, 1, 1, 1, 0])
         compare_tune("a lone esc closes the tuner, an arrow does not",
-                     [b"r", UP, ESC], [0, 1, 1, 0, 0])
+                     [b"r", UP, ESC], [0, 1, 1, 0])
         # Keys arrive as bytes, and how many of them a frame answers before
         # drawing again has to be the same number in both ports. Go reads the
         # terminal a byte at a time where pyclock.py takes a read of 64, so
@@ -987,19 +1024,19 @@ def main():
         # long is a box wider than the window, which is no box at all.
         compare_tune("a burst longer than a read is the same two frames in both",
                      [b"r", DOWN, DOWN, b"\x1b[C" * 33, ESC, ESC],
-                     [0, 1, 1, 1, 1, 1, 0, 0, 0])
+                     [0, 1, 1, 1, 1, 1, 0])
 
         # Stepping: the arrows and space move a value without typing one, and
         # what they land on is what the flag spells the same way.
         LEFT, RIGHT = b"\x1b[D", b"\x1b[C"
         compare_tune("left and right step a value", [b"r", RIGHT, LEFT, ESC],
-                     [0, 1, 1, 1, 0, 0])
+                     [0, 1, 1, 1, 0])
         compare_tune("space walks the words round", [b"r", b" ", b" ", b" ", ESC],
-                     [0, 1, 1, 1, 1, 0, 0])
+                     [0, 1, 1, 1, 1, 0])
         # center, right, and then nowhere: an arrow stops where the list does,
         # where space would have wrapped.
         compare_tune("an arrow stops at the end of the list",
-                     [b"r", RIGHT, RIGHT, ESC], [0, 1, 1, 0, 0])
+                     [b"r", RIGHT, RIGHT, ESC], [0, 1, 1, 0])
         tuned_layout("six rights on hpad draw what --hpad 5% draws",
                      [b"r", DOWN, DOWN] + [RIGHT] * 6 + [ESC], ["--hpad", "5%"],
                      args=("-q", "ET,PT,UTC"))
@@ -1022,9 +1059,9 @@ def main():
         # where it landed would close the tuner instead, and say so loudly.
         compare_tune("an arrow split across a read is still an arrow",
                      [b"r", DOWN, DOWN, (b"\x1b", 0.005), b"[C", ESC],
-                     [0, 1, 1, 1, 1, 0, 0])
+                     [0, 1, 1, 1, 1, 0])
         compare_tune("and a lone esc is still an esc, one frame later",
-                     [b"r", b"\x1b", b"r", ESC], [0, 1, 0, 1, 0, 0])
+                     [b"r", b"\x1b", b"r", ESC], [0, 1, 0, 1, 0])
         # per-row is a knob like the rest, and the only one that changes how
         # many clocks a row holds rather than how big they are.
         tuned_layout("stepping per-row draws what -n draws",

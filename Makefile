@@ -1,4 +1,4 @@
-.PHONY: run-go run-py setup test clean
+.PHONY: run-go run-py setup test release-check dist clean
 
 # A .venv here, if there is one, wins for everything below -- `make setup`
 # builds it. This is a PATH entry rather than a $(PYTHON) variable threaded
@@ -39,6 +39,34 @@ test:
 	tools/argfuzz.py
 	tools/docnums.py
 	tools/placecheck.py
+
+# Everything a tag is about to be judged by, before the tag exists: every
+# platform the release builds for, cross-compiled here, and then the suite.
+#
+# This exists because v0.4.2 was tagged with a freebsd build that did not
+# compile -- syscall.FdSet spells its one field differently there -- and the
+# release workflow found out four targets in, after the tag was cut and a tag
+# is the one thing this project cannot take back. `make test` runs what a
+# change needs; this runs what a release needs.
+release-check:
+	@for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 freebsd/amd64; do \
+		os=$${target%/*} arch=$${target#*/}; \
+		printf 'build %s/%s ... ' "$$os" "$$arch"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
+			go build -trimpath -ldflags "-s -w" -o /dev/null . || exit 1; \
+		echo ok; \
+	done
+	@printf 'version: %s\n' "$$(go run . --version)"
+	$(MAKE) test
+
+# The Python artifacts, the same two files the pypi workflow builds and
+# uploads. Built here to be looked at, not to be uploaded from here: the
+# upload has no password to type, and see .github/workflows/pypi.yml for why.
+dist: setup
+	.venv/bin/python -m pip install --quiet build twine
+	rm -rf dist build terminal_clock.egg-info
+	.venv/bin/python -m build
+	.venv/bin/python -m twine check dist/*
 
 clean:
 	rm -rf .venv dist build

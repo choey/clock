@@ -1145,6 +1145,33 @@ and the difftest together.
 make test
 ```
 
+### Cutting a release
+
+`make test` is what a change has to pass. A release has to pass more, because
+a tag cannot be taken back — the Go module proxy caches it, and 0.4.2 is a tag
+whose FreeBSD build did not compile, found four targets into the release
+build:
+
+```sh
+make release-check
+```
+
+That cross-compiles every platform the release ships a binary for, prints the
+version the binary says, and then runs the suite. Then the tag, pushed last:
+
+```sh
+git tag -a v0.4.3 -F -   # the release notes, on the tag
+git push github main v0.4.3
+```
+
+Two workflows answer a tag. `release.yml` cross-compiles the five binaries,
+checksums them and attaches them to the release; `pypi.yml` builds
+`terminal-clock`'s wheel and sdist and uploads them. Neither holds a password:
+the first uses the token GitHub gives a job, and the second uses PyPI's
+trusted publishing, which verifies the workflow itself rather than a secret
+kept in the repository. Both check that what they are about to publish says
+the same version as the tag.
+
 The ZIP tables are `ziptz`'s, not the clock's, and so is regenerating them:
 see [Regenerating](https://github.com/choey/ziptz#regenerating) and [When to
 regenerate](https://github.com/choey/ziptz#when-to-regenerate) there, and run

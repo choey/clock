@@ -1,0 +1,61 @@
+# Publishes the Python side to PyPI, which the binaries' workflow does not:
+# release.yml attaches a build of clock.go to the tag, and this uploads
+# pyclock.py's wheel and sdist as terminal-clock.
+#
+# No password, anywhere. PyPI's trusted publishing lets it verify the
+# workflow itself -- this file, in this repository, on a tag -- through the
+# OIDC token `id-token: write` below asks for, so there is no secret in the
+# repository to leak, rotate or forget. It needs one setting on PyPI's side,
+# once: the project's Publishing page, a GitHub publisher naming this
+# repository and `pypi.yml`.
+#
+# Tags do it by themselves; workflow_dispatch is here for a tag whose upload
+# failed for a reason that has since been fixed, since a tag cannot be cut
+# twice.
+name: pypi
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "tag to build and upload, e.g. v0.4.3"
+        required: true
+
+permissions:
+  id-token: write # trusted publishing; nothing else is needed
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: build
+        run: |
+          python -m pip install --quiet build twine
+          python -m build
+          python -m twine check dist/*
+          ls -l dist
+
+      # The same check release.yml makes of the binary: what is about to be
+      # published says which release it is, and a package that disagrees with
+      # its tag is worse than no package at all. PyPI will not take the same
+      # version twice, so this is the last moment it can be caught.
+      - name: the package agrees with the tag
+        run: |
+          want=${{ inputs.tag || github.ref_name }}
+          want=${want#v}
+          said=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "pyproject says: $said"
+          echo "tag wants:      $want"
+          [ "$said" = "$want" ]
+          ls dist/terminal_clock-"$want"-py3-none-any.whl dist/terminal_clock-"$want".tar.gz
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

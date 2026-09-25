@@ -430,13 +430,15 @@ def tuned_layout(name, keys, flags, args=("-q", "UTC")):
     first, since the flagged clock has neither.
     """
     for impl, argv in IMPLS:
-        # One more key after the caller's: the note the tuner leaves is a
-        # modal like any other, and it sits there until something clears it,
-        # so without this there is no frame of clocks alone left to compare.
-        # It settles for longer than the rest, since what is being compared is
-        # a frame that has to have been painted, and a loaded machine paints
-        # them further apart.
-        tuned_painted, status = run(argv + list(args), list(keys) + [(b"x", 1.0)])
+        # The last two keys get a second each rather than the usual quarter.
+        # What is compared here is a painted frame, so the keys that have to
+        # have landed before it -- the esc that closes the tuner, and the one
+        # after it that clears the note the tuner leaves -- cannot be hurried:
+        # an esc waits frames to be told it is not an arrow, and a loaded
+        # machine's frames are far apart. Without this the comparison reads a
+        # frame from before the tuning and calls it a difference.
+        unhurried = list(keys[:-1]) + [(keys[-1], 1.0), (b"x", 1.0)]
+        tuned_painted, status = run(argv + list(args), unhurried)
         if status == "hung":
             report(False, name, f"{impl}: the clock never quit")
             return
@@ -465,9 +467,10 @@ def saves(name):
     line, so a save from `clock` is a file `pyclock` runs from, and the bytes
     each writes for the same screen have to be the same bytes.
     """
-    # The S settles for longer than the rest: what is checked is a frame that
-    # has to have been painted, and a loaded machine paints them further apart.
-    keys = [b"r", b"\x1b[B", b"\x1b[B", b"5%", b"\r", b"\x1b", (b"S", 1.0)]
+    # The esc and the S get a second each: S saves nothing while the tuner is
+    # still open -- there it is a letter -- and what is checked afterwards is
+    # a frame that has to have been painted. A loaded machine needs the room.
+    keys = [b"r", b"\x1b[B", b"\x1b[B", b"5%", b"\r", (b"\x1b", 1.0), (b"S", 1.0)]
     written = {}
     with tempfile.TemporaryDirectory() as tmp:
         for impl, argv in IMPLS:

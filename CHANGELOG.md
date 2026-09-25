@@ -9,6 +9,31 @@ the golden frames in `tools/golden/` exist to make impossible to do by accident.
 The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 `tools/docnums.py` fails the build if the three disagree.
 
+## 0.4.2
+
+0.4.1 was the right diagnosis and the wrong cure. Batching the bytes did not
+help, because the reader was never the problem -- its being there was: a
+goroutine sitting in `read(2)` is handed the first byte of a keystroke the
+moment the terminal has it, so an arrow can come back as `ESC` and then `[C`,
+and a typed `5%` as `5` and then `%`. pyclock.py cannot do that, because
+between frames it is not reading at all.
+
+So `clock` now asks stdin for keys the way pyclock.py always has: one
+select-then-read a frame, at the same point in the loop, answering whatever
+has gathered since the last one. The goroutine, the channel and its
+dropped-byte fallback are gone with it. `syscall.Select` turns out to be the
+fourth name that differs between the BSDs and Linux, and joins the three
+termios requests that already do.
+
+- Reading stdin also means only reading it when a terminal is on the other
+  end: a redirected clock would otherwise eat whatever it was handed.
+- keytest compares the tuner by what it said -- the values, the knob picked,
+  the refusals, in order -- rather than by how many frames it said each in.
+  Where a read boundary falls inside a keystroke is the terminal's business,
+  and two implementations can answer the same arrow in one frame and two
+  without either being wrong. It is stricter about content than what it
+  replaced and blind to timing, which is the right way round.
+
 ## 0.4.1
 
 One read of keys per frame, in both ports. 0.4.0's tuner made typing matter

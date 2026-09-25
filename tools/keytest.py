@@ -386,6 +386,15 @@ def compare_tune(name, keys, expect=None, args=("-q", "UTC")):
     Every case here has to leave the tuner closed: with it open q is a letter
     like any other, and run() ends by pressing q.
     """
+    # The last key gets a second rather than a quarter of one. Every case here
+    # ends by closing the tuner, and an esc waits frames to be told it is not
+    # an arrow -- so on a machine whose frames are far apart, a quarter of a
+    # second can end the run before the clock has painted the state the keys
+    # were pressed to reach.
+    keys = list(keys)
+    if keys and not isinstance(keys[-1], tuple):
+        keys[-1] = (keys[-1], 1.0)
+
     seen = {}
     for impl, argv in IMPLS:
         painted, status = run(argv + list(args), keys)

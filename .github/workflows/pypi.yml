@@ -59,3 +59,13 @@ jobs:
           ls dist/terminal_clock-"$want"-py3-none-any.whl dist/terminal_clock-"$want".tar.gz
 
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # A file already on PyPI is left alone rather than failing the run.
+          # PyPI never takes a version twice, and a tag cannot be cut twice
+          # either, so the only way here with files already uploaded is a
+          # re-run of a tag whose upload half worked -- which is what
+          # workflow_dispatch is for, and which should finish the job rather
+          # than refuse it. The check above is what catches the mistake this
+          # would otherwise hide: a version that disagrees with its tag never
+          # reaches this step.
+          skip-existing: true

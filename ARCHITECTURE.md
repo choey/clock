@@ -190,26 +190,56 @@ rewriting `2.15` as `2.2` would be rounding a value nobody asked to round.
 `-n 2` and a `2` stepped into the box are the same thing to everything
 downstream -- including the saved file, which writes `--per-row`.
 
-**Arrow keys, and a lone Esc.** The tuner is the first thing here to read a
-key that is more than one byte: an arrow arrives as `ESC [ A`, or `ESC O A`
-from a terminal in application cursor mode. So `ESC` cannot be answered when
-it lands -- it is either a key of its own or the first byte of one -- and the
-usual answer, a few milliseconds' wait, is not available to a pair of ports
-compared frame for frame: which frame an Esc landed in would become a question
-about the machine's speed, and `tools/keytest.py` compares the frames. Both
-ports hold the ESC instead and decide it at the end of the batch of keys a
-frame reads, which is the same point in both loops -- a channel drained until
-the tick in Go, one `os.read` in Python.
+**Reading the keyboard.** Both ports ask stdin the same question once a frame,
+at the same point in the loop: is anything waiting, and if so take up to
+`keysPerFrame` bytes of it and answer all of them before drawing again.
+`select` with a zero timeout in both, `pendingKeys`/`pending_keys`.
 
-One batch of grace is not enough, though, and a held-down arrow is what shows
-it: the terminal sends `ESC [ C` fifty times a second and a read can end
-anywhere inside that, so an ESC left over at the end of a frame is as likely
-to be half an arrow as a whole Esc. Answering it there closed the tuner
-mid-keypress. A pending sequence therefore has to survive `escGrace` frames
-with nothing following it before it is called -- two, or 38ms, which is
-nothing to wait for an Esc and far longer than bytes the terminal has already
-written need to arrive. Frames rather than a timer, again, so both ports
-answer on the same frame and keytest can compare them.
+That sounds like an implementation detail and is not. 0.4.0 shipped with
+clock.go reading the terminal from a goroutine parked in `read(2)` and sending
+bytes down a channel, one per select iteration of the frame loop -- and a
+reader sitting in `read(2)` is handed the first byte of a keystroke the moment
+the terminal has it. So an arrow came back as `ESC` and then `[C`, and a typed
+`5%` as `5` and then `%`, and this port painted frames pyclock.py never
+painted, which only shows on a machine slow enough for a tick to land between
+the two. A CI runner was that machine within minutes of the tag; this laptop
+never was, at any load. 0.4.1 batched the bytes and was still wrong for the
+same reason. What fixed it was not reading between frames at all, which is
+what pyclock.py had been doing all along.
+
+`syscall.Select` is the fourth name that differs between the platforms, after
+the three termios requests: the BSDs' wrapper returns an error alone where
+Linux's also returns a count, and FreeBSD spells `FdSet`'s one field
+`X__fds_bits` where everything else says `Bits`. So the whole question is
+asked per platform, one small function in each of `term_bsd.go`,
+`term_freebsd.go` and `term_linux.go`. That last difference cost a release: it
+is a compile error only on FreeBSD, and it surfaced in the release build,
+after the tag.
+
+**VMIN and VTIME, both zero.** Asking whether stdin is ready and then reading
+it is two syscalls with a gap between them, and a read that can block in that
+gap is a clock that stops dead -- painting nothing, until somebody presses a
+key. Both ports set these along with the rest of cbreak, which makes a read
+return whatever is there including nothing at all, so the gap cannot bite. A
+macOS CI job wedged for half an hour is how that was found, after one
+unreproducible hang here.
+
+**A lone Esc.** An arrow arrives as `ESC [ A`, or `ESC O A` from a terminal in
+application cursor mode, so `ESC` cannot be answered where it lands: it is
+either a key of its own or the first byte of one. The usual answer is a few
+milliseconds' wait, which is not available to two ports compared frame for
+frame -- which frame an Esc landed in would become a question about the
+machine's speed. So a pending sequence waits `escGrace` frames with nothing
+following it before it is called a bare Esc: two frames, 38ms, nothing to wait
+for an Esc and far longer than bytes the terminal has already written need to
+arrive. Frames rather than a timer, so both ports answer on the same one.
+
+A read boundary can still fall inside a keystroke -- the terminal decides that,
+not the clock -- so `tools/keytest.py` does not compare how many frames the
+tuner took to say something. It compares what it said: the values, the knob
+picked, the refusals, in order, repeats collapsed. That is stricter than
+comparing frames about content and blind to timing, which is the right way
+round for the one thing neither port controls.
 
 **The preferences file.** `S` writes the clock on screen to
 `~/.config/clock/config` and startup reads it back. It is not a configuration
@@ -320,7 +350,7 @@ nothing to fail.
 | `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share | anything wrong in both, which is how they are always changed |
 | `tools/golden/` | what the clock actually draws, at eighteen sizes | the size nobody thought to keep |
 | `tools/fitfuzz.py` | invariants at arbitrary sizes: nothing overflows the window, every line ends at the default colour, no escape outside the eight it may write | whether the picture is *right*, only that it is well formed |
-| `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations frame for frame; the tuner, and a tuned frame against a clock started with the same flags; that `S` writes the same bytes from either port and that both read them back; Ctrl+C and Ctrl+Z under job control, down to what the terminal is left in while a clock is stopped; that a character device is not therefore a terminal, and what a reader walking away leaves behind | a real terminal emulator; and signal timing, where it compares loosely on purpose |
+| `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations frame for frame; the tuner, by the states it walks through rather than the frames they took, and a tuned frame against a clock started with the same flags; that `S` writes the same bytes from either port and that both read them back; Ctrl+C and Ctrl+Z under job control, down to what the terminal is left in while a clock is stopped; that a character device is not therefore a terminal, and what a reader walking away leaves behind | a real terminal emulator; signal timing, where it compares loosely on purpose; and how a keystroke's bytes are split across reads, which is the terminal's business and deliberately not compared -- a difference there cost three releases before the harness stopped asking the question |
 | `tools/argfuzz.py` | that the two agree on badly spelt arguments and environments — generated by mutating good ones, rather than listed | whether either answer is right, and anything the mutations do not reach |
 | `tools/errcover.py` | every error message the clock can print is printed by some case | three that need a machine whose tz database is missing or incomplete, exempted with the reason why |
 | `tools/docnums.py` | the figures in the prose match the tables, and every flag and variable is documented | prose that is wrong in a way no number captures |

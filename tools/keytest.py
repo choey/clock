@@ -12,12 +12,14 @@ under a clock and then give up waiting: difftest redirects to regular files
 and has no timeout, so a clock that mistook one for a terminal would hang it
 rather than fail it. See the character-device case below.
 
-A clock repaints every 19ms whether or not anything changed, so how many
-repaints land between two keystrokes is timing, not behaviour. The streams are
-therefore collapsed to their *distinct* frames before comparing -- frames are
-delimited by the cursor-home each full-screen repaint starts with. Pinned with
-CLOCK_FREEZE, every repaint draws the same bytes, so the collapsed sequence is
-exactly the sequence of states the keys walked through.
+A clock looks at the frame every 19ms, but on a terminal it paints only the
+rows that changed since the last one -- so what a case here is looking for can
+be on the screen while appearing nowhere in the stream. The streams are
+therefore replayed onto a model of a terminal (tools/termscreen.py) and
+compared as *screens*, snapshotted at each repaint and collapsed where two in
+a row are the same. Pinned with CLOCK_FREEZE nothing changes between
+keystrokes, so a repaint with nothing to say says nothing and the sequence
+that comes back is exactly the states the keys walked through.
 
     tools/keytest.py [-v]
 """
@@ -36,6 +38,9 @@ import sys
 import termios
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from termscreen import Screen  # noqa: E402  (after the path above)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -220,16 +225,37 @@ def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None, marks=None, env=No
 
 
 def states(painted):
-    """The distinct frames in what was painted, in order.
+    """The distinct screens the painting left, in order.
 
-    Consecutive repeats collapse: a pinned clock paints the same frame every
-    19ms, and how many of those landed is the machine's speed, not the clock's
-    behaviour.
+    Not the chunks of the stream, which is what this used to be: on a terminal
+    a repaint writes the rows that changed and leaves the rest alone, so a
+    chunk is a handful of rows and what the cases below look for -- the key
+    list, a readout, braille, the tuner's box -- can be on the screen the
+    whole time while appearing in none of them. So the stream is replayed onto
+    a model of a terminal, and what comes back is what was on it.
+
+    Each repaint starts with a cursor-home, which is what says where one ends
+    and the next begins; the first entry is the screen before any of them, as
+    the head of the stream used to be.
+
+    Consecutive repeats still collapse, for the same reason as before, though
+    there are far fewer of them now: a pinned clock whose frame has not
+    changed paints nothing at all rather than painting it again.
     """
-    head, *frames = painted.split(HOME)
-    out = [head]
-    for frame in frames:
-        if not out or frame != out[-1]:
+    screen = Screen()
+    # Only what was painted on the clock's own screen. What follows the
+    # alternate screen going back is the shell's line again -- the tuner's
+    # parting note, say -- written wherever the cursor was left, which is not
+    # a frame and not somewhere a model of rows can put anything.
+    text = painted.decode("utf-8", "replace").split(LEAVE_ALT.decode())[0]
+    head, *paints = text.split(HOME.decode())
+    shown = lambda: "\n".join(screen.feed("").shown()).encode("utf-8")
+    screen.feed(head)
+    out = [shown()]
+    for paint in paints:
+        screen.feed(HOME.decode() + paint)
+        frame = shown()
+        if frame != out[-1]:
             out.append(frame)
     return out
 
@@ -291,7 +317,9 @@ def compare(name, keys, expect=None, freeze=FROZEN, loose=False, args=("-q", "UT
     """Both implementations, same keys: same states, same exit status.
 
     `expect` is the key list's state through the run -- one flag per distinct
-    frame painted, which is what the keys were pressed to change.
+    screen after the first, which is what the keys were pressed to change. The
+    screen the clock quits to is not one of them: giving the terminal back is
+    not painting a frame.
 
     `loose` drops the frame-by-frame comparison and keeps the rest. A keystroke
     is read at a known point in the loop, so the frames either side of it are
@@ -596,15 +624,11 @@ def compare_hold(name):
     implementation *did*: how many distinct readouts it painted while held, and
     while running.
     """
+    # Every readout the clock put on screen during a stretch of the run.
+    # Painted, not displayed: a held clock has nothing new to say and so says
+    # nothing, which is the whole of what holding looks like now.
     def stamps(chunk):
-        return [s[0] for s in (readouts(c) for c in chunk.split(HOME)) if s]
-
-    def longest_run(values):
-        longest = run_len = 1 if values else 0
-        for a, b in zip(values, values[1:]):
-            run_len = run_len + 1 if a == b else 1
-            longest = max(longest, run_len)
-        return longest
+        return readouts(chunk)
 
     result = {}
     for impl, argv in IMPLS:
@@ -617,20 +641,21 @@ def compare_hold(name):
         result[impl] = (status, held, ran)
 
     for impl, (status, held, ran) in result.items():
-        # Each phase is judged on its own frames rather than on the whole run,
-        # which is what makes the second half of this case's name true: a clock
-        # that holds and never lets go painted its distinct readouts before the
-        # first keystroke, so a count over the whole stream cannot see it.
+        # Each phase is judged on its own painting rather than on the whole
+        # run, which is what makes the second half of this case's name true: a
+        # clock that holds and never lets go painted its distinct readouts
+        # before the first keystroke, so a count over the whole stream cannot
+        # see it.
         #
-        # A share, not a count: 0.6s buys thirty frames on a quiet machine and
-        # eight on a loaded CI runner, and a slow machine is not a broken
-        # clock. The first frame of a phase may be one the clock had already
-        # painted before it read the key, so the longest run has to cover half
-        # the phase rather than all of it.
-        alike = longest_run(held)
-        if len(held) < 2 or alike * 2 < len(held):
+        # A held clock repaints nothing, so the readouts it painted are at
+        # most the one frame still going out when the key landed -- never two
+        # different ones. Nothing here counts frames: how many land in 0.6s is
+        # thirty on a quiet machine and eight on a loaded CI runner, and a
+        # slow machine is not a broken clock.
+        if len(set(held)) > 1:
             report(False, name, f"{impl}: space did not hold "
-                                f"({alike} of {len(held)} readouts alike while held)")
+                                f"({len(set(held))} distinct of {len(held)} "
+                                f"readouts painted while held)")
             return
         if len(set(ran)) < 2:
             report(False, name, f"{impl}: space did not let go "
@@ -993,14 +1018,14 @@ def main():
         # The flags are the key list through the run, one per distinct frame:
         # the clock, then whatever the keys did to it, then the frame it went
         # out on. A run that ends with the list up ends on a frame with it up.
-        compare("h opens the key list, h closes it", [b"h", b"h"], [0, 1, 0, 0])
-        compare("? opens it too", [b"?", b"?"], [0, 1, 0, 0])
-        compare("h opens, ? closes", [b"h", b"?"], [0, 1, 0, 0])
-        compare("quitting with the list up", [b"h", b"q"], [0, 1, 1])
-        compare("keys it does not know paint nothing new", [b"x", b"z"], [0, 0])
-        compare("q quits", [b"q"], [0, 0])
-        compare("Q quits too", [b"Q"], [0, 0])
-        compare("space on a pinned clock has nothing to hold", [b" ", b" "], [0, 0])
+        compare("h opens the key list, h closes it", [b"h", b"h"], [0, 1, 0])
+        compare("? opens it too", [b"?", b"?"], [0, 1, 0])
+        compare("h opens, ? closes", [b"h", b"?"], [0, 1, 0])
+        compare("quitting with the list up", [b"h", b"q"], [0, 1])
+        compare("keys it does not know paint nothing new", [b"x", b"z"], [0])
+        compare("q quits", [b"q"], [0])
+        compare("Q quits too", [b"Q"], [0])
+        compare("space on a pinned clock has nothing to hold", [b" ", b" "], [0])
 
         print("== the tuner ==")
         UP, DOWN, ESC = b"\x1b[A", b"\x1b[B", b"\x1b"
@@ -1140,18 +1165,18 @@ def main():
         # 60 columns, not 40: three faces need three cells of at least the
         # readout's twelve, plus gaps, and 40 is not enough for that -- which
         # is a complaint, and complaints are what the two cases below are for.
-        compare_resize("shrink, then grow", ["ET,PT,UTC"], [(60, 20), (200, 50)], [0, 0, 0, 0])
-        compare_resize("a nudge that changes nothing", ["ET,PT,UTC"], [(80, 24)], [0, 0])
+        compare_resize("shrink, then grow", ["ET,PT,UTC"], [(60, 20), (200, 50)], [0, 0, 0])
+        compare_resize("a nudge that changes nothing", ["ET,PT,UTC"], [(80, 24)], [0])
         compare_resize("auto scale follows the window down", ["-n", "auto", "ET,PT,UTC"],
-                       [(200, 50), (60, 20), (200, 50)], [0, 0, 0, 0, 0])
+                       [(200, 50), (60, 20), (200, 50)], [0, 0, 0, 0])
         # At a fixed scale the faces cannot shrink, so a small enough window is
         # one they do not fit -- which on a terminal complains and keeps
         # measuring, where redirected it would have exited. Nothing else
         # reaches that path.
         compare_resize("too narrow to fit, then wide enough again", ["--scale", "1", "ET,PT,UTC"],
-                       [(12, 20), (120, 40)], [0, 1, 0, 0])
+                       [(12, 20), (120, 40)], [0, 1, 0])
         compare_resize("too short to fit, then tall enough again", ["--scale", "1", "ET,PT,UTC"],
-                       [(120, 6), (120, 40)], [0, 1, 0, 0])
+                       [(120, 6), (120, 40)], [0, 1, 0])
 
         print("== hold ==")
         compare_hold("space holds a running clock, and again lets go")

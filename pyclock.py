@@ -789,6 +789,12 @@ def snap(v):
     return math.floor(v * 1e9 + 0.5) / 1e9
 
 
+# Cell bits to the braille character that shows them: the translation table
+# Canvas.rows() runs each row through. U+2800 plus the bits, for all 256 of
+# them, worked out once.
+BRAILLE_CELL = {bits: 0x2800 + bits for bits in range(256)}
+
+
 class Canvas:
     """A dot canvas that renders to braille cells, 2 dots wide by 4 tall each.
 
@@ -823,7 +829,14 @@ class Canvas:
             self.set(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, layer)
 
     def rows(self):
-        return ["".join(chr(0x2800 + bits) for bits in row) for row in self.cells]
+        # A cell's eight dots are its eight bits, and the braille block is laid
+        # out so that the character is simply U+2800 plus them. Going through
+        # latin-1 and str.translate rather than chr() per cell does that
+        # addition in one C call per row instead of fifty-odd Python ones,
+        # which at a dozen faces fifty times a second was the largest thing
+        # left in a frame once the dial stopped being redrawn.
+        return [bytes(row).decode("latin-1").translate(BRAILLE_CELL)
+                for row in self.cells]
 
 
 def colorize(row, layers):
@@ -847,59 +860,90 @@ def colorize(row, layers):
     return "".join(out)
 
 
-def face(now, color):
-    """Render one analog face for `now`, returning a list of cell rows."""
-    rx, ry = COLS, 2 * ROWS
+def spoke(canvas, cols, rows, angle, r0, r1, thick, point, layer):
+    """Radial segment from r0 to r1, as fractions of the radius of a face
+    `cols` cells wide and `rows` tall.
+
+    A thick spoke drawn with point set narrows over its last HAND_TAPER
+    share to a single dot at r1, instead of ending in a flat,
+    two-dot-wide butt -- that is a hand. A thick spoke without point is a
+    plain parallel-sided band the same width all the way to r1 -- that is
+    always one of the four major hour ticks (h = 0, 3, 6, 9), always
+    exactly axis-aligned, always beside a numeral.
+    """
+    rx, ry = cols, 2 * rows
     # Horizontally the centre sits on a cell boundary, vertically in the middle
     # of a row. The dot grid mirrors about both, which is what makes 09 and 03
     # land the same distance from the rim.
     cx, cy = rx - 0.5, ry - 0.5
-    canvas = Canvas(2 * COLS, 4 * ROWS)
 
-    def spoke(angle, r0, r1, thick, point, layer):
-        """Radial segment from r0 to r1, as fractions of the radius.
+    sin_a, cos_a = math.sin(angle), math.cos(angle)
+    x0, y0 = cx + rx * r0 * sin_a, cy - ry * r0 * cos_a
+    x1, y1 = cx + rx * r1 * sin_a, cy - ry * r1 * cos_a
 
-        A thick spoke drawn with point set narrows over its last HAND_TAPER
-        share to a single dot at r1, instead of ending in a flat,
-        two-dot-wide butt -- that is a hand. A thick spoke without point is a
-        plain parallel-sided band the same width all the way to r1 -- that is
-        always one of the four major hour ticks (h = 0, 3, 6, 9), always
-        exactly axis-aligned, always beside a numeral.
-        """
-        sin_a, cos_a = math.sin(angle), math.cos(angle)
-        x0, y0 = cx + rx * r0 * sin_a, cy - ry * r0 * cos_a
-        x1, y1 = cx + rx * r1 * sin_a, cy - ry * r1 * cos_a
+    if thick and point:
+        tip = r1 - (r1 - r0) * HAND_TAPER
+        tx, ty = cx + rx * tip * sin_a, cy - ry * tip * cos_a
+        for off in (-0.5, 0.5):
+            dx, dy = off * cos_a, off * sin_a
+            # the offset shrinks to nothing at the tip, not the base:
+            # that is what tapers the two edges together into a point
+            canvas.line(x0 + dx, y0 + dy, tx, ty, layer)
+        canvas.line(tx, ty, x1, y1, layer)
+        return
+    if not thick:
+        canvas.line(x0, y0, x1, y1, layer)
+        return
 
-        if thick and point:
-            tip = r1 - (r1 - r0) * HAND_TAPER
-            tx, ty = cx + rx * tip * sin_a, cy - ry * tip * cos_a
-            for off in (-0.5, 0.5):
-                dx, dy = off * cos_a, off * sin_a
-                # the offset shrinks to nothing at the tip, not the base:
-                # that is what tapers the two edges together into a point
-                canvas.line(x0 + dx, y0 + dy, tx, ty, layer)
-            canvas.line(tx, ty, x1, y1, layer)
-            return
-        if not thick:
-            canvas.line(x0, y0, x1, y1, layer)
-            return
+    # A symmetric +-0.5 offset here would straddle a character cell
+    # boundary about half the time -- whichever side of a 2-or-4-dot cell
+    # the true centre's neighbouring dot falls on -- splitting the
+    # tick's two lines into different rows or columns and making it look
+    # disjointed from the numeral beside it. Landing both dots in the
+    # same cell as the numeral's own dot instead costs at most half a dot
+    # of true centring, invisible, for a tick that always reads as
+    # attached to its numeral, which is not.
+    horizontal = abs(cos_a) < 0.5
+    cell_size, center = (4, cy) if horizontal else (2, cx)
+    step = 1.0 if math.floor(center + 0.5) % cell_size == 0 else -1.0
+    for s in (0.0, step):
+        if horizontal:
+            canvas.line(x0, y0 + s, x1, y1 + s, layer)
+        else:
+            canvas.line(x0 + s, y0, x1 + s, y1, layer)
 
-        # A symmetric +-0.5 offset here would straddle a character cell
-        # boundary about half the time -- whichever side of a 2-or-4-dot cell
-        # the true centre's neighbouring dot falls on -- splitting the
-        # tick's two lines into different rows or columns and making it look
-        # disjointed from the numeral beside it. Landing both dots in the
-        # same cell as the numeral's own dot instead costs at most half a dot
-        # of true centring, invisible, for a tick that always reads as
-        # attached to its numeral, which is not.
-        horizontal = abs(cos_a) < 0.5
-        cell_size, center = (4, cy) if horizontal else (2, cx)
-        step = 1.0 if math.floor(center + 0.5) % cell_size == 0 else -1.0
-        for s in (0.0, step):
-            if horizontal:
-                canvas.line(x0, y0 + s, x1, y1 + s, layer)
-            else:
-                canvas.line(x0 + s, y0, x1 + s, y1, layer)
+
+# Per face size, the half of a face that never moves: the rim and the twelve
+# hour ticks, as the cell grid they dot.
+#
+# They are most of the drawing. The rim alone samples a dot every quarter
+# degree, some three hundred of them against a hand's forty, and neither it nor
+# a tick depends on the time -- so redrawing them was arriving at the same
+# answer fifty-two times a second, once per face on screen. Drawing them once
+# per size took the clock's largest single cost out of the frame.
+#
+# Keyed on the size because the size is the whole of what they depend on, and
+# it moves only when --scale auto answers a resize: a handful of entries over a
+# session, not a cache that grows with it.
+#
+# Dots only. Every one of them is LAYER_NONE, which is what a fresh canvas's
+# layer grid already says, so there is nothing else to carry across.
+DIAL_DOTS = {}
+
+
+def static_dial(cols, rows):
+    """The rim-and-ticks grid for a face `cols` by `rows`, drawn on first use.
+
+    The rows returned are the cache's own, so callers copy out of them and
+    never write into them.
+    """
+    cells = DIAL_DOTS.get((cols, rows))
+    if cells is not None:
+        return cells
+
+    canvas = Canvas(2 * cols, 4 * rows)
+    rx, ry = cols, 2 * rows
+    cx, cy = rx - 0.5, ry - 0.5
 
     # rim: sample densely enough that adjacent dots touch
     steps = math.floor(4 * math.pi * max(rx, ry) + 0.5)
@@ -910,7 +954,24 @@ def face(now, color):
     # hour ticks, the quarters longer and thicker so they sit on the axes
     for h in range(12):
         major = h % 3 == 0
-        spoke(2 * math.pi * h / 12, 0.80 if major else 0.90, 1.0, major, False, LAYER_NONE)
+        spoke(canvas, cols, rows, 2 * math.pi * h / 12,
+              0.80 if major else 0.90, 1.0, major, False, LAYER_NONE)
+
+    DIAL_DOTS[(cols, rows)] = canvas.cells
+    return canvas.cells
+
+
+def face(now, color):
+    """Render one analog face for `now`, returning a list of cell rows."""
+    rx, ry = COLS, 2 * ROWS
+    # Horizontally the centre sits on a cell boundary, vertically in the middle
+    # of a row. The dot grid mirrors about both, which is what makes 09 and 03
+    # land the same distance from the rim.
+    cx, cy = rx - 0.5, ry - 0.5
+    canvas = Canvas(2 * COLS, 4 * ROWS)
+    # The rim and the ticks, as they were drawn the first time a face this size
+    # came up; only the hands are left to put on.
+    canvas.cells = [row[:] for row in static_dial(COLS, ROWS)]
 
     # hands: fractional seconds drive the sweep
     frac = now.microsecond / 1e6
@@ -920,7 +981,7 @@ def face(now, color):
         (now.second + frac) / 60,
     )
     for (length, thick, layer), turn in zip(HANDS, turns):
-        spoke(2 * math.pi * turn, 0, length, thick, True, layer)
+        spoke(canvas, COLS, ROWS, 2 * math.pi * turn, 0, length, thick, True, layer)
 
     rows = canvas.rows()
 
@@ -3260,8 +3321,14 @@ def run(argv):
 
     # A pinned clock redirected to a file is the diff harness: one frame and
     # out. On a terminal there is someone watching, so it stays up instead --
-    # quitting would restore the screen and take the frame with it.
-    one_shot = frozen is not None and not full_screen
+    # quitting would restore the screen and take the frame with it. Unless
+    # CLOCK_FRAMES asked for a sequence by name: a terminal is the only place
+    # the painting below takes its shortcut, so it is the only place a harness
+    # can check the shortcut, and that needs the sequence to run and stop here
+    # too. See painttest.
+    one_shot = frozen is not None and (
+        not full_screen or os.environ.get("CLOCK_FRAMES", "") != ""
+    )
     # A pinned clock draws one frame unless CLOCK_FRAMES asks for a sequence;
     # `drawn` is which frame of it this is, and so how far the instant has
     # moved from the pinned one.
@@ -3270,6 +3337,28 @@ def run(argv):
 
     sys.stdout.write((ENTER_ALT if full_screen else "") + HIDE_CURSOR)
     height = 0
+    # `painted` is the frame the screen is holding, row for row, and is what
+    # the next one is written against: a row that comes out the same as the one
+    # already up is not written at all. None says the screen cannot be trusted
+    # to hold anything -- nothing has been drawn yet, or something other than
+    # this loop has had the terminal since -- and the next frame goes out
+    # whole.
+    #
+    # Worth the bookkeeping because almost nothing moves between two frames. At
+    # 19ms the second hand advances a fifth of a dot, so on a 200x60 screen a
+    # frame changes the two or three rows the hands are crossing and the line
+    # with the milliseconds on it, and leaves the other fifty-five exactly as
+    # they were -- against which repainting all of them was 20KB down the pty,
+    # fifty-two times a second, for about 1KB of news.
+    #
+    # Only on a terminal. Redirected output keeps writing whole frames: it is a
+    # file or a pipe, where there is nothing to address and nothing to save,
+    # and where difftest reads the frames one after another.
+    painted = None
+    # The size the last frame was measured for. A terminal that has changed
+    # shape has reflowed or cleared whatever it was holding, so what the rows
+    # say about it no longer holds.
+    painted_cols, painted_lines = 0, 0
     # Which faces there are, and in what order, changes only when some zone's
     # offset changes -- and a tz transition always lands on a whole second, so
     # recomputing once a second cannot miss one. See the loop below.
@@ -3289,6 +3378,9 @@ def run(argv):
                 # handler would interact with the sleep below and drift out of
                 # step with the Go port's loop.
                 cols, lines = term_size()
+                if (cols, lines) != (painted_cols, painted_lines):
+                    painted = None
+                    painted_cols, painted_lines = cols, lines
 
                 # Unlike the size, this is not re-measured every frame. Merging
                 # and ordering both turn on the zones' offsets at `now`, which
@@ -3399,20 +3491,62 @@ def run(argv):
                 # Repaint in one write. CLEAR_EOL wipes a longer previous
                 # line, CLEAR_BELOW a taller previous frame, so the grid
                 # reshapes itself when the window changes.
-                if full_screen:
-                    # no trailing newline: a frame exactly as tall as the
-                    # window would otherwise scroll itself off by one line
-                    body = "\n".join(r + CLEAR_EOL for r in rows)
-                    sys.stdout.write(HOME + body + CLEAR_BELOW)
-                else:
+                if not full_screen:
                     rewind = f"\x1b[{height}A" if height else ""
                     sys.stdout.write(
                         rewind
                         + "".join(r + CLEAR_EOL + "\n" for r in rows)
                         + CLEAR_BELOW
                     )
+                elif painted is None:
+                    # no trailing newline: a frame exactly as tall as the
+                    # window would otherwise scroll itself off by one line
+                    body = "\n".join(r + CLEAR_EOL for r in rows)
+                    sys.stdout.write(HOME + body + CLEAR_BELOW)
+                else:
+                    # Each row that moved, addressed where it sits. CLEAR_EOL
+                    # still follows it, so a row that got shorter does not
+                    # leave the tail of the one it replaced behind.
+                    out = []
+                    for i, r in enumerate(rows):
+                        if i < len(painted) and r == painted[i]:
+                            continue
+                        if not out:
+                            # Three bytes that say where one repaint ends and
+                            # the next begins. Nothing on screen needs them --
+                            # every row below addresses itself -- but a stream
+                            # of rows with no frames in it is a stream keytest
+                            # cannot read, and a repaint that changed nothing
+                            # writes nothing at all, so this is not a byte a
+                            # quiet clock pays.
+                            out.append(HOME)
+                        out.append(f"\x1b[{i + 1};1H" + r + CLEAR_EOL)
+                    # CLEAR_BELOW only when the frame lost height: the rows
+                    # below the last one are the previous frame's, and nothing
+                    # above wipes them. A frame that grew wrote over them
+                    # already.
+                    if len(rows) < len(painted):
+                        if not out:
+                            out.append(HOME)
+                        out.append(f"\x1b[{len(rows) + 1};1H" + CLEAR_BELOW)
+                    if out:
+                        sys.stdout.write("".join(out))
+                    else:
+                        # Nothing to paint is still a question worth asking.
+                        # Writing is how this loop finds out the terminal has
+                        # gone -- there is no other error it waits on -- and a
+                        # clock with nothing to say, which is what a held one
+                        # and a pinned one have, would otherwise never ask
+                        # again and spin on a window that closed an hour ago.
+                        # An empty write is a real write(2) through os.write
+                        # where sys.stdout's buffer would swallow it; clock.go
+                        # gets this for nothing, its Print going to the fd
+                        # either way.
+                        os.write(sys.stdout.fileno(), b"")
                 sys.stdout.flush()
                 height = len(rows)
+                if full_screen:
+                    painted = rows
 
                 if one_shot:
                     drawn += 1
@@ -3445,6 +3579,9 @@ def run(argv):
                         break
                 if _suspend_asked:
                     suspend(full_screen, restore, requiet)
+                    # The shell had the terminal, and the alt screen came back
+                    # blank: nothing of the last frame is still up.
+                    painted = None
                     # Don't wait out a tick that was interrupted by a stop of
                     # unknown length: the screen resumes blank, and the reader
                     # should not have to watch it stay that way.

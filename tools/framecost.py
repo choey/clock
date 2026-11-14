@@ -7,6 +7,11 @@ laptop under load. It is here because the question comes up -- a clock that
 repaints fifty times a second, in two languages, one of them Python -- and
 guessing at it is worse than spending a minute measuring.
 
+What it measures is the drawing -- working a frame out, start to finish -- and
+not the painting, which on a terminal writes only the rows that changed and is
+tools/painttest.py's subject. The cases here redirect, where every frame goes
+out whole.
+
 The method is CLOCK_FRAMES, which draws that many frames from a pinned instant
 and exits: one frame is startup, and the difference between one and many is
 the frames themselves, divided out. Best of three, since the slow runs are the

@@ -1021,19 +1021,21 @@ stopped clock exists to answer: what state did it leave the terminal in.
 tools/keytest.py -v
 ```
 
-A clock repaints every 19ms whether or not anything changed, so the streams are
-collapsed to their *distinct* frames first: how many repaints landed between two
-keystrokes is the machine's speed, not the clock's behaviour. Pinned with
-`CLOCK_FREEZE`, what is left is exactly the states the keys walked through — `h`
-`q` ends on a frame with the key list still up, an unknown key paints nothing
-new. Holding is checked on a live clock instead, where there is something to
-hold, and each phase is read on its own frames: what was painted between the
-first space and the second has to be one readout over and over, and what came
-after the second has to move again. Measuring the whole run at once could not
-see a clock that held and never let go, since the readouts it painted before the
-first keystroke were distinct enough to satisfy the count. The thresholds are
-shares rather than counts, because 0.6s buys thirty frames on a quiet machine
-and eight on a loaded CI runner, and a slow machine is not a broken clock.
+A clock looks at the frame every 19ms, but on a terminal it writes only the
+rows that changed — so what a case is looking for can be on the screen while
+appearing nowhere in the stream. The streams are therefore replayed onto a
+model of a terminal (`tools/termscreen.py`) and compared as *screens*, one per
+repaint, with consecutive repeats collapsed. Pinned with `CLOCK_FREEZE` a
+repaint with nothing to say says nothing, so what is left is exactly the states
+the keys walked through — `h` `q` ends on a screen with the key list still up,
+an unknown key paints nothing new. Holding is checked on a live clock instead,
+where there is something to hold, and each phase is read on its own painting:
+between the first space and the second the clock has nothing new to say and so
+says nothing, and after the second the readout has to move again. Measuring the
+whole run at once could not see a clock that held and never let go, since the
+readouts it painted before the first keystroke were distinct enough to satisfy
+the count. Nothing here counts frames: 0.6s buys thirty on a quiet machine and
+eight on a loaded CI runner, and a slow machine is not a broken clock.
 
 difftest also keeps everything the Python clock writes to stderr and, at the
 end, checks that every message `pyclock.py` can raise turned up in it —
@@ -1110,6 +1112,27 @@ drag the window smaller and larger, and at a fixed `--scale` drag it smaller
 than the clocks can fit, which on a terminal complains and keeps measuring
 where redirected output would have exited. A clock that measured once at
 startup fails four of them.
+
+`tools/painttest.py` asks the question neither of those can: not what the
+clock drew, but what it *sent*. On a terminal a repaint writes the rows that
+differ from the ones already up and leaves the rest alone, which no amount of
+comparing frames can check — a row wrongly skipped is a row that stays wrong
+until something else happens to repaint it. So each clock runs under a pty,
+what it painted is replayed onto a model of a terminal, and the screen that
+comes out is compared against the one the same frames would have left painted
+whole. It also holds the shortcut to being one, which the comparison cannot:
+given a run of identical frames the clock has to go quiet, and given a window
+that changed shape it has to go back to painting everything, against a model
+that wipes its screen the moment the window moves.
+
+```sh
+tools/painttest.py -v
+```
+
+For the sequence cases it needs a pinned clock to animate on a *terminal*,
+which is the one place the shortcut is taken; `CLOCK_FRAMES` draws its
+sequence and exits there too, where without it a pinned clock on a terminal
+holds one frame and stays up.
 
 `tools/framecost.py` is the odd one out in that directory: it measures what a
 frame costs against the 19ms the clock has to draw it in, and has nothing to

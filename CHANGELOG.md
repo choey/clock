@@ -9,6 +9,48 @@ the golden frames in `tools/golden/` exist to make impossible to do by accident.
 The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 `tools/docnums.py` fails the build if the three disagree.
 
+## Unreleased
+
+A clock that costs a third of what it did, and sends a tenth as much.
+
+Nothing on screen has changed -- the frames are the same bytes they were, at
+every size the harnesses ask for -- but three things the clock was doing fifty
+times a second it no longer does.
+
+The dial is drawn once. The rim and the twelve hour ticks are most of the dots
+on a face and none of them depend on the time, so they are now drawn once per
+face size and kept; a frame copies that grid and puts three hands on it. Cell
+bits become braille characters through a 256-entry table rather than one
+addition per cell. Between them a frame costs about a quarter of what it did:
+on an Apple-silicon laptop at 200x60, twelve faces went from 4.3ms to 1.0ms in
+pyclock.py and from 0.17ms to 0.09ms in clock.go.
+
+And on a terminal the clock writes only the rows that changed. At 19ms the
+second hand advances a fifth of a dot, so a frame changes the two or three rows
+the hands are crossing and the line with the milliseconds on it -- against
+which repainting the lot was 20KB down the pty, fifty-two times a second, for
+about 1KB of news. A frame with nothing new in it, which is what a held clock
+and a pinned one draw, now writes nothing at all. The emulator at the other end
+was paying for every one of those bytes, and that is not a cost `top` shows
+against the clock.
+
+Measured end to end under a pty, same machine, one run after the other:
+`pyclock.py` went from 36-39% of a core to 15-26%, and `clock` from 6-9% to
+under 6%, in both cases depending on how many faces are up and on what else the
+machine is doing. What either one sends fell from about 1.1MB a second to
+between a sixth and a fourteenth of that.
+
+What is left is the frame rate itself: 19ms is there so the millisecond readout
+reads as a live clock, and in Python that is most of what remains.
+
+There is a new harness for the part of this that nothing else could see.
+`tools/painttest.py` runs each clock under a pty, replays what it painted onto
+a model of a terminal, and compares that screen against the one the same frames
+would have left painted whole -- and holds the shortcut to being one: identical
+frames have to go out silent, and a window that changed shape has to be
+repainted entire. `tools/keytest.py` reads the same model now, since a repaint
+is no longer a frame it can read off the stream.
+
 ## 0.4.3
 
 A read that cannot block, and FreeBSD builds again.

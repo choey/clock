@@ -50,14 +50,33 @@ would only ever show 0 and 5.
 **Smooth sweep.** The second hand takes fractional seconds, so it glides
 rather than stepping once a second.
 
+**A dial drawn once.** Only the hands move. The rim is sampled densely enough
+that adjacent dots touch — some three hundred of them on a large face, against
+a hand's forty — and neither it nor the twelve hour ticks depend on the time.
+Both are drawn once per face *size* and kept (`staticDial` in clock.go,
+`static_dial` in pyclock.py); a frame copies that grid and puts three hands on
+it. The size is the whole of what they depend on, and it moves only when
+`--scale auto` answers a resize, so the cache holds a handful of entries over a
+session rather than growing with one. Only the dots are kept: every one of them
+is `layerNone`, which is what a fresh canvas's layer grid already says. Nothing
+on screen changes; what changes is that twelve faces fifty times a second
+stopped being twelve rims fifty times a second.
+
+**Cells to characters in one call.** A cell's eight dots are its eight bits,
+and the braille block is laid out so that the character is U+2800 plus them.
+Both ports keep that addition as a 256-entry table rather than doing it a cell
+at a time: pyclock.py runs each row through `str.translate`, clock.go indexes a
+`[256]string`. Once the dial stopped being redrawn, this was the largest thing
+left in a frame.
+
 **What a frame costs.** Fifty repaints a second, one of the two ports being
 Python, invites the question. Measured with `tools/framecost.py` on an
-Apple-silicon laptop, a 200x60 window: Go spends a couple of per cent of a
-tick on a frame, one face or twelve; pyclock.py spends a fifth of one on a
-single face and something under half of one on twelve. Both have room, and
-Python has less of it than a glance at the picture would suggest -- a machine
-ten times slower is one where the Python clock stops sweeping smoothly and the
-Go one has not noticed anything. Neither drifts when that happens: pyclock.py
+Apple-silicon laptop, a 200x60 window: Go spends half a per cent of a tick on a
+frame, one face or twelve; pyclock.py spends between two and five per cent,
+a single face to twelve. Both have room, and Python has less of it than a
+glance at the picture would suggest -- a machine twenty times slower is one
+where the Python clock stops sweeping smoothly and the Go one has not noticed
+anything. Neither drifts when that happens: pyclock.py
 sleeps to the next multiple of the tick and clock.go takes a ticker whose
 channel holds one, so a frame that runs long costs the frame after it rather
 than delaying every frame that follows. That tool measures and does not check
@@ -74,14 +93,47 @@ platform libm; they agree to well under an ulp, but not bit for bit, and
 without the snap a dot sitting near a half-dot boundary lands in different
 cells in the two renders.
 
-**Repaint.** The whole frame is built as a single string and written in one
-call. On a terminal the clock takes the alternate screen (`ESC[?1049h`) and
-paints each frame from its top corner with `ESC[H`; `ESC[K` on each row clears
-a longer previous line and `ESC[J` at the end clears a taller previous frame,
+**Repaint.** A frame is built as a single string and written in one call. On a
+terminal the clock takes the alternate screen (`ESC[?1049h`); `ESC[K` on each
+row clears a longer previous line and `ESC[J` clears a taller previous frame,
 so the grid reshapes cleanly when the window changes. Keystrokes are swallowed
-(cbreak, `ISIG` left on) so a stray Return can't scroll the frame.
+(cbreak, `ISIG` left on) so a stray Return can't scroll the frame. Redirected,
+the whole frame goes out every time, preceded by a rewind: it is a file or a
+pipe, where there is nothing to address and nothing to save.
 
-Painting from a fixed corner rather than rewinding with `ESC[<n>A` is what
+**Only what changed.** On a terminal the clock keeps the frame the screen is
+holding, row for row, and writes only the rows the new frame spells
+differently -- each addressed where it sits with `ESC[<row>;1H`. Almost
+nothing moves between two frames: at 19ms the second hand advances a fifth of
+a dot, so on a 200x60 screen a frame changes the two or three rows the hands
+are crossing and the line with the milliseconds on it, and leaves the other
+fifty-five exactly as they were. Against that, repainting all of them was 20KB
+down the pty fifty-two times a second for about 1KB of news -- and the
+emulator at the other end paid for every byte. A frame that changed nothing at
+all, which is what a held clock and a pinned one draw, writes nothing at all
+-- but it still writes. Writing is the only way this loop finds out the
+terminal has gone, and a clock that stopped painting would otherwise spin on a
+window that closed an hour ago, so a frame with nothing to say makes the write
+anyway, empty. clock.go gets that for nothing, its `Print` reaching the
+descriptor either way; pyclock.py has to go round `sys.stdout`'s buffer with
+`os.write` to make the same syscall.
+
+Three things make the clock distrust what it remembers and paint the frame
+whole: the first frame, a window that has changed shape, and a stop and
+resume. The middle one is the one worth stating -- a terminal may keep what
+was on the alternate screen across a resize, truncate it, or throw it away,
+and nothing the clock can read says which, so the rows it remembers painting
+stop being a promise about what is up there. The last leaves the alternate
+screen blank, since the shell had the terminal in between. A frame that lost
+height ends with `ESC[J` below its last row, which is the only thing that
+clears the rows the frame before it left.
+
+Each repaint that writes anything begins with `ESC[H`. Nothing on screen needs
+it -- every row below addresses itself -- but it is what says where one
+repaint ends and the next begins, which is how `tools/keytest.py` reads the
+stream at all. Three bytes, and a quiet clock does not pay them.
+
+Addressing rows absolutely rather than rewinding with `ESC[<n>A` is what
 makes a resize safe. A rewind counts the rows *written*, assuming each occupies
 one physical line — but narrow the window and the terminal rewraps the frame
 already on screen, so those rows become two lines each, the rewind lands inside
@@ -340,7 +392,7 @@ did not, with zero exceptions across five tested values.
 
 ## What the tests can and cannot see
 
-Nine harnesses, because no one of them can see everything. `make test` runs
+Ten harnesses, because no one of them can see everything. `make test` runs
 them all; the README says how to run each on its own. `tools/framecost.py` is
 in that directory and is not one of them: it reports a measurement and has
 nothing to fail.
@@ -350,7 +402,8 @@ nothing to fail.
 | `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share | anything wrong in both, which is how they are always changed |
 | `tools/golden/` | what the clock actually draws, at eighteen sizes | the size nobody thought to keep |
 | `tools/fitfuzz.py` | invariants at arbitrary sizes: nothing overflows the window, every line ends at the default colour, no escape outside the eight it may write | whether the picture is *right*, only that it is well formed |
-| `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations frame for frame; the tuner, by the states it walks through rather than the frames they took, and a tuned frame against a clock started with the same flags; that `S` writes the same bytes from either port and that both read them back; Ctrl+C and Ctrl+Z under job control, down to what the terminal is left in while a clock is stopped; that a character device is not therefore a terminal, and what a reader walking away leaves behind | a real terminal emulator; signal timing, where it compares loosely on purpose; and how a keystroke's bytes are split across reads, which is the terminal's business and deliberately not compared -- a difference there cost three releases before the harness stopped asking the question |
+| `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations screen for screen -- the streams replayed onto `tools/termscreen.py`, since a repaint is a handful of rows and not a frame; the tuner, by the states it walks through rather than the frames they took, and a tuned frame against a clock started with the same flags; that `S` writes the same bytes from either port and that both read them back; Ctrl+C and Ctrl+Z under job control, down to what the terminal is left in while a clock is stopped; that a character device is not therefore a terminal, and what a reader walking away leaves behind | a real terminal emulator; signal timing, where it compares loosely on purpose; and how a keystroke's bytes are split across reads, which is the terminal's business and deliberately not compared -- a difference there cost three releases before the harness stopped asking the question |
+| `tools/painttest.py` | that the rows a terminal is actually sent add up to the screen the frames describe, at several sizes and frame counts, in colour and out of it; that a frame with nothing new in it is not painted again; and that a resize is repainted whole, against a model that wipes its screen when the window moves | a real terminal emulator's own answer to a resize, which is the thing being guarded against and cannot be asked here |
 | `tools/argfuzz.py` | that the two agree on badly spelt arguments and environments — generated by mutating good ones, rather than listed | whether either answer is right, and anything the mutations do not reach |
 | `tools/errcover.py` | every error message the clock can print is printed by some case | three that need a machine whose tz database is missing or incomplete, exempted with the reason why |
 | `tools/docnums.py` | the figures in the prose match the tables, and every flag and variable is documented | prose that is wrong in a way no number captures |
@@ -376,7 +429,11 @@ What nothing covers, and why:
   machine has a different one — the question the diff cannot answer, answered
   either way round.
 - **A real terminal.** The pty is the same interface, but not the same
-  program: an emulator's own quirks are not in scope here.
+  program: an emulator's own quirks are not in scope here. `painttest` models
+  one well enough to say what is on its screen -- rows written from column one
+  and erased to the end of a line or below, which is the whole of what either
+  clock asks for -- and takes the harshest answer to a resize it knows of, not
+  the one any particular emulator gives.
 - **A clock that is not a job.** The Ctrl+C and Ctrl+Z cases start the clock
   the way a shell does, under a shim that owns the pty and puts the clock in a
   process group of its own; every other case starts it as a plain child, where

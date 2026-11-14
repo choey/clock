@@ -863,13 +863,26 @@ func (c *canvas) line(x0, y0, x1, y1 float64, layer uint8) {
 	}
 }
 
+// brailleCell maps a cell's bits to the character that shows them. A cell's
+// eight dots are its eight bits, and the braille block is laid out so that the
+// character is simply U+2800 plus them -- worked out once here rather than
+// encoded a rune at a time, every cell, every frame.
+var brailleCell = func() [256]string {
+	var out [256]string
+	for bits := range out {
+		out[bits] = string(rune(0x2800 + bits))
+	}
+	return out
+}()
+
 func (c *canvas) rows() []string {
 	out := make([]string, len(c.cells)/c.cols)
 	var b strings.Builder
 	for r := range out {
 		b.Reset()
+		b.Grow(3 * c.cols) // every braille character is three bytes
 		for x := 0; x < c.cols; x++ {
-			b.WriteRune(rune(0x2800 + int(c.cells[r*c.cols+x])))
+			b.WriteString(brailleCell[c.cells[r*c.cols+x]])
 		}
 		out[r] = b.String()
 	}
@@ -902,70 +915,97 @@ func colorize(row string, layers []uint8) string {
 	return b.String()
 }
 
-// face renders one analog face for t, returning its cell rows. Every face is
-// colsN cells wide and rowsN tall.
-func face(t time.Time, color bool) []string {
-	rx, ry := float64(colsN), float64(2*rowsN)
+// spoke draws a radial segment on c from r0 to r1, as fractions of the radius
+// of a face cols cells wide and rows tall.
+//
+// A thick spoke drawn with point set narrows over its last handTaper share to
+// a single dot at r1, instead of ending in a flat, two-dot-wide butt -- that
+// is a hand. A thick spoke without point is a plain parallel-sided band the
+// same width all the way to r1 -- that is always one of the four major hour
+// ticks (h = 0, 3, 6, 9), always exactly axis-aligned, always beside a
+// numeral.
+func spoke(c *canvas, cols, rows int, angle, r0, r1 float64, thick, point bool, layer uint8) {
+	rx, ry := float64(cols), float64(2*rows)
 	// Horizontally the centre sits on a cell boundary, vertically in the middle
 	// of a row. The dot grid mirrors about both, which is what makes 09 and 03
 	// land the same distance from the rim.
 	cx, cy := rx-0.5, ry-0.5
-	c := newCanvas(2*colsN, 4*rowsN)
 
-	// spoke draws a radial segment from r0 to r1, as fractions of the radius.
-	// A thick spoke drawn with point set narrows over its last handTaper share
-	// to a single dot at r1, instead of ending in a flat, two-dot-wide butt --
-	// that is a hand. A thick spoke without point is a plain parallel-sided
-	// band the same width all the way to r1 -- that is always one of the four
-	// major hour ticks (h = 0, 3, 6, 9), always exactly axis-aligned, always
-	// beside a numeral.
-	spoke := func(angle, r0, r1 float64, thick, point bool, layer uint8) {
-		sin, cos := math.Sin(angle), math.Cos(angle)
-		x0, y0 := cx+rx*r0*sin, cy-ry*r0*cos
-		x1, y1 := cx+rx*r1*sin, cy-ry*r1*cos
+	sin, cos := math.Sin(angle), math.Cos(angle)
+	x0, y0 := cx+rx*r0*sin, cy-ry*r0*cos
+	x1, y1 := cx+rx*r1*sin, cy-ry*r1*cos
 
-		if thick && point {
-			tip := r1 - (r1-r0)*handTaper
-			tx, ty := cx+rx*tip*sin, cy-ry*tip*cos
-			for _, off := range []float64{-0.5, 0.5} {
-				dx, dy := off*cos, off*sin
-				// the offset shrinks to nothing at the tip, not the base:
-				// that is what tapers the two edges together into a point
-				c.line(x0+dx, y0+dy, tx, ty, layer)
-			}
-			c.line(tx, ty, x1, y1, layer)
-			return
+	if thick && point {
+		tip := r1 - (r1-r0)*handTaper
+		tx, ty := cx+rx*tip*sin, cy-ry*tip*cos
+		for _, off := range []float64{-0.5, 0.5} {
+			dx, dy := off*cos, off*sin
+			// the offset shrinks to nothing at the tip, not the base:
+			// that is what tapers the two edges together into a point
+			c.line(x0+dx, y0+dy, tx, ty, layer)
 		}
-		if !thick {
-			c.line(x0, y0, x1, y1, layer)
-			return
-		}
+		c.line(tx, ty, x1, y1, layer)
+		return
+	}
+	if !thick {
+		c.line(x0, y0, x1, y1, layer)
+		return
+	}
 
-		// A symmetric +-0.5 offset here would straddle a character cell
-		// boundary about half the time -- whichever side of a 2-or-4-dot
-		// cell the true centre's neighbouring dot falls on -- splitting the
-		// tick's two lines into different rows or columns and making it
-		// look disjointed from the numeral beside it. Landing both dots in
-		// the same cell as the numeral's own dot instead costs at most half
-		// a dot of true centring, invisible, for a tick that always reads
-		// as attached to its numeral, which is not.
-		horizontal := math.Abs(cos) < 0.5
-		cellSize, center := 4, cy
-		if !horizontal {
-			cellSize, center = 2, cx
-		}
-		step := -1.0
-		if int(math.Floor(center+0.5))%cellSize == 0 {
-			step = 1
-		}
-		for _, s := range []float64{0, step} {
-			if horizontal {
-				c.line(x0, y0+s, x1, y1+s, layer)
-			} else {
-				c.line(x0+s, y0, x1+s, y1, layer)
-			}
+	// A symmetric +-0.5 offset here would straddle a character cell
+	// boundary about half the time -- whichever side of a 2-or-4-dot
+	// cell the true centre's neighbouring dot falls on -- splitting the
+	// tick's two lines into different rows or columns and making it
+	// look disjointed from the numeral beside it. Landing both dots in
+	// the same cell as the numeral's own dot instead costs at most half
+	// a dot of true centring, invisible, for a tick that always reads
+	// as attached to its numeral, which is not.
+	horizontal := math.Abs(cos) < 0.5
+	cellSize, center := 4, cy
+	if !horizontal {
+		cellSize, center = 2, cx
+	}
+	step := -1.0
+	if int(math.Floor(center+0.5))%cellSize == 0 {
+		step = 1
+	}
+	for _, s := range []float64{0, step} {
+		if horizontal {
+			c.line(x0, y0+s, x1, y1+s, layer)
+		} else {
+			c.line(x0+s, y0, x1+s, y1, layer)
 		}
 	}
+}
+
+// dialDots holds, per face size, the half of a face that never moves: the rim
+// and the twelve hour ticks, as the cell grid they dot.
+//
+// They are most of the drawing. The rim alone samples a dot every quarter
+// degree, some three hundred of them against a hand's forty, and neither it
+// nor a tick depends on the time -- so redrawing them was arriving at the same
+// answer fifty-two times a second, once per face on screen. Drawing them once
+// per size took the clock's largest single cost out of the frame.
+//
+// Keyed on the size because the size is the whole of what they depend on, and
+// it moves only when --scale auto answers a resize: a handful of entries over
+// a session, not a cache that grows with it.
+//
+// Dots only. Every one of them is layerNone, which is what a fresh canvas's
+// layer grid already says, so there is nothing else to carry across.
+var dialDots = map[[2]int][]uint8{}
+
+// staticDial is the rim-and-ticks grid for a face cols by rows, drawn on first
+// use and kept. The slice returned is the map's own, so callers copy out of it
+// and never write into it.
+func staticDial(cols, rows int) []uint8 {
+	key := [2]int{cols, rows}
+	if cells, ok := dialDots[key]; ok {
+		return cells
+	}
+	c := newCanvas(2*cols, 4*rows)
+	rx, ry := float64(cols), float64(2*rows)
+	cx, cy := rx-0.5, ry-0.5
 
 	// rim: sample densely enough that adjacent dots touch
 	steps := int(math.Floor(4*math.Pi*math.Max(rx, ry) + 0.5))
@@ -981,8 +1021,25 @@ func face(t time.Time, color bool) []string {
 		if major {
 			inner = 0.80
 		}
-		spoke(2*math.Pi*float64(h)/12, inner, 1.0, major, false, layerNone)
+		spoke(c, cols, rows, 2*math.Pi*float64(h)/12, inner, 1.0, major, false, layerNone)
 	}
+
+	dialDots[key] = c.cells
+	return c.cells
+}
+
+// face renders one analog face for t, returning its cell rows. Every face is
+// colsN cells wide and rowsN tall.
+func face(t time.Time, color bool) []string {
+	rx, ry := float64(colsN), float64(2*rowsN)
+	// Horizontally the centre sits on a cell boundary, vertically in the middle
+	// of a row. The dot grid mirrors about both, which is what makes 09 and 03
+	// land the same distance from the rim.
+	cx, cy := rx-0.5, ry-0.5
+	c := newCanvas(2*colsN, 4*rowsN)
+	// The rim and the ticks, as they were drawn the first time a face this
+	// size came up; only the hands are left to put on.
+	copy(c.cells, staticDial(colsN, rowsN))
 
 	// hands: fractional seconds drive the sweep
 	frac := float64(t.Nanosecond()) / 1e9
@@ -993,7 +1050,7 @@ func face(t time.Time, color bool) []string {
 		(sec + frac) / 60,
 	}
 	for i, h := range hands {
-		spoke(2*math.Pi*turns[i], 0, h.length, h.thick, true, h.layer)
+		spoke(c, colsN, rowsN, 2*math.Pi*turns[i], 0, h.length, h.thick, true, h.layer)
 	}
 
 	rows := c.rows()
@@ -3734,8 +3791,12 @@ func run() error {
 
 	// A pinned clock redirected to a file is the diff harness: one frame and
 	// out. On a terminal there is someone watching, so it stays up instead --
-	// quitting would restore the screen and take the frame with it.
-	oneShot := pinned && !fullScreen
+	// quitting would restore the screen and take the frame with it. Unless
+	// CLOCK_FRAMES asked for a sequence by name: a terminal is the only place
+	// the painting below takes its shortcut, so it is the only place a harness
+	// can check the shortcut, and that needs the sequence to run and stop here
+	// too. See painttest.
+	oneShot := pinned && (!fullScreen || os.Getenv("CLOCK_FRAMES") != "")
 	// A pinned clock draws one frame unless CLOCK_FRAMES asks for a sequence;
 	// drawn is which frame of it this is, and so how far the instant has moved
 	// from the pinned one.
@@ -3756,6 +3817,28 @@ func run() error {
 	defer t.Stop()
 
 	height := 0
+	// painted is the frame the screen is holding, row for row, and is what
+	// the next one is written against: a row that comes out the same as the
+	// one already up is not written at all. Nil says the screen cannot be
+	// trusted to hold anything -- nothing has been drawn yet, or something
+	// other than this loop has had the terminal since -- and the next frame
+	// goes out whole.
+	//
+	// Worth the bookkeeping because almost nothing moves between two frames.
+	// At 19ms the second hand advances a fifth of a dot, so on a 200x60
+	// screen a frame changes the two or three rows the hands are crossing and
+	// the line with the milliseconds on it, and leaves the other fifty-five
+	// exactly as they were -- against which repainting all of them was 20KB
+	// down the pty, fifty-two times a second, for about 1KB of news.
+	//
+	// Only on a terminal. Redirected output keeps writing whole frames: it is
+	// a file or a pipe, where there is nothing to address and nothing to
+	// save, and where difftest reads the frames one after another.
+	var painted []string
+	// The size the last frame was measured for. A terminal that has changed
+	// shape has reflowed or cleared whatever it was holding, so what the rows
+	// say about it no longer holds.
+	paintedCols, paintedLines := 0, 0
 	// held is the instant the display is holding, and holding says whether it
 	// is. Holding repaints as usual rather than idling, so a resize still
 	// reflows the grid -- it is the clock that stops, not the drawing.
@@ -3803,6 +3886,10 @@ func run() error {
 		// Python one, where a signal handler would interact with sleep()
 		// under PEP 475 and drift out of step.
 		cols, lines := termSize()
+		if cols != paintedCols || lines != paintedLines {
+			painted = nil
+			paintedCols, paintedLines = cols, lines
+		}
 
 		// Unlike the size, this is not re-measured every frame. Merging and
 		// ordering both turn on the zones' offsets at now, which move only at
@@ -3906,7 +3993,16 @@ func run() error {
 		// clearBelow a taller previous frame, so the grid reshapes itself
 		// when the window changes.
 		var b strings.Builder
-		if fullScreen {
+		switch {
+		case !fullScreen:
+			if height > 0 {
+				fmt.Fprintf(&b, "\x1b[%dA", height)
+			}
+			for _, r := range rows {
+				b.WriteString(r + clearEOL + "\n")
+			}
+			b.WriteString(clearBelow)
+		case painted == nil:
 			// no trailing newline: a frame exactly as tall as the window
 			// would otherwise scroll itself off by one line
 			b.WriteString(home)
@@ -3916,15 +4012,38 @@ func run() error {
 				}
 				b.WriteString(r + clearEOL)
 			}
-		} else {
-			if height > 0 {
-				fmt.Fprintf(&b, "\x1b[%dA", height)
+			b.WriteString(clearBelow)
+		default:
+			// Each row that moved, addressed where it sits. clearEOL still
+			// follows it, so a row that got shorter does not leave the tail
+			// of the one it replaced behind.
+			for i, r := range rows {
+				if i < len(painted) && r == painted[i] {
+					continue
+				}
+				if b.Len() == 0 {
+					// Three bytes that say where one repaint ends and the
+					// next begins. Nothing on screen needs them -- every row
+					// below addresses itself -- but a stream of rows with no
+					// frames in it is a stream keytest cannot read, and a
+					// repaint that changed nothing writes nothing at all, so
+					// this is not a byte a quiet clock pays.
+					b.WriteString(home)
+				}
+				fmt.Fprintf(&b, "\x1b[%d;1H", i+1)
+				b.WriteString(r + clearEOL)
 			}
-			for _, r := range rows {
-				b.WriteString(r + clearEOL + "\n")
+			// clearBelow only when the frame lost height: the rows below the
+			// last one are the previous frame's, and nothing above wipes
+			// them. A frame that grew wrote over them already.
+			if len(rows) < len(painted) {
+				if b.Len() == 0 {
+					b.WriteString(home)
+				}
+				fmt.Fprintf(&b, "\x1b[%d;1H", len(rows)+1)
+				b.WriteString(clearBelow)
 			}
 		}
-		b.WriteString(clearBelow)
 		// The one write whose error is worth reading: everything else painted
 		// here is an escape sequence that a dead pipe makes moot anyway, and
 		// the next frame lands on this line regardless.
@@ -3935,6 +4054,9 @@ func run() error {
 			return err
 		}
 		height = len(rows)
+		if fullScreen {
+			painted = rows
+		}
 
 		if oneShot {
 			drawn++
@@ -3980,6 +4102,9 @@ func run() error {
 					return errPipe
 				case syscall.SIGTSTP:
 					suspend(restoreTerm, requietTerm, fullScreen)
+					// The shell had the terminal, and the alt screen came
+					// back blank: nothing of the last frame is still up.
+					painted = nil
 					// Stop waiting out a tick that was interrupted by a stop
 					// of unknown length: the screen resumes blank, and the
 					// reader should not have to watch it stay that way.

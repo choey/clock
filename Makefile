@@ -29,12 +29,14 @@ setup:
 	@printf 'setup: .venv ready -- ziptz %s\n' \
 		"$$(.venv/bin/python -c 'import ziptz; print(ziptz.__version__)')"
 
-# Proves the two clocks render identical output and answer the keyboard alike.
+# Proves the two clocks render identical output, answer the keyboard alike,
+# and paint a terminal the same screen the frames describe.
 # Needs ziptz for the Python side; run `make setup` once if it is missing, and
 # difftest says so rather than reporting it as hundreds of diffs.
 test:
 	tools/difftest.sh
 	tools/keytest.py
+	tools/painttest.py
 	tools/fitfuzz.py
 	tools/argfuzz.py
 	tools/docnums.py

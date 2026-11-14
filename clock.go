@@ -37,7 +37,13 @@ const (
 
 	// 19ms, not 20: coprime to 10, so the millisecond ones digit cycles through
 	// all ten values instead of sitting still. Reads as a live clock.
+	//
+	// It is also the default for --fps, which is why that flag's default is
+	// not a round number of frames: 19ms is a shade over 52 a second.
 	tick = 19 * time.Millisecond
+
+	// A tick of one millisecond, which is as fine as the gap is measured.
+	maxFPS = 1000
 
 	defaultRowsN     = 11   // face height, in terminal rows, at --scale 1
 	defaultCellRatio = 2.1  // cell height / width; braille dots are square at 2
@@ -70,7 +76,7 @@ const usage = `clock - analog terminal clocks
 
 usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
              [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
-             [--cell-ratio N] [--scale N] [ZONES]
+             [--cell-ratio N] [--scale N] [--fps N] [ZONES]
 
   ZONES              comma-separated zone names, described below; default is
                       your local zone
@@ -91,6 +97,9 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
                       face looks squished, lower if it bulges sideways
   --scale N          resize every face by this factor; auto (default) fills
                       the window, at minimum padding
+  --fps N            repaints a second, 1 to 1000; the default is the 19ms
+                      tick, a shade over 52. Lower it where the terminal
+                      costs more to draw the clock than the clock does to run
   -h, --help         this message
   --version          print the version and exit
 
@@ -111,6 +120,17 @@ clocks over the whole window; --hpad 10% sets the gaps instead, as a share of
 the window, and then the alignment decides where the grid sits. CLOCK_CELL_RATIO
 sets the same thing as --cell-ratio, for when it wants to be set once per
 terminal rather than typed every time; the flag wins if both are given.
+
+The clock looks at the frame every 19ms, which is what sweeps the second hand
+and moves the milliseconds on the readout, and writes only the rows that
+changed since the last one -- so a clock with nothing new to say is silent. A
+frame that did change is one screen update though, and some terminals charge
+for an update whatever it contains; --fps sets how often to look, and
+CLOCK_FPS sets it once per terminal rather than every time, the flag winning
+if both are given. The drawing cost falls about in step with the rate. The
+readout is what goes first, and not only at low rates: any gap that is a
+multiple of 10ms leaves the milliseconds' last digit sitting on 0, --fps 100
+as surely as --fps 10, which is why the default gap is 19ms and not 20.
 
 Space holds the frame still, for a screenshot, h or ? opens the key list, and
 r resizes and aligns the clocks while they run. S saves those sizes and the
@@ -225,6 +245,28 @@ var rowsN = defaultRowsN
 
 // colsN is the face width in terminal columns, set alongside rowsN and cellRatio.
 var colsN = int(math.Floor(defaultRowsN*defaultCellRatio + 0.5))
+
+// paintEvery is the gap the frame loop waits: the tick, unless --fps or
+// CLOCK_FPS asked for another rate. Set for real in run(), before sequence()
+// reads it.
+//
+// A rate, not a quality. Since the clock writes only the rows that changed, a
+// frame that differs at all is one screen update, and a terminal that charges
+// per update rather than per byte charges this many times a second however
+// little moved -- measurably, several times what the clock itself costs.
+// Lowering the rate is the only thing that buys that back, and what it costs
+// is a second hand that steps where it used to glide.
+var paintEvery = tick
+
+// tickFor is the gap between repaints at a given rate, to the nearest whole
+// millisecond.
+//
+// Whole numbers throughout, and the same expression in pyclock.py: rounding a
+// float could land the two ports on different ticks for the same --fps, and
+// then on different frames for the same CLOCK_FRAMES.
+func tickFor(fps int) time.Duration {
+	return time.Duration((1000+fps/2)/fps) * time.Millisecond
+}
 
 // defaultTunes is the six knobs as an untouched clock has them: the flag
 // defaults, with CLOCK_CELL_RATIO standing in for the ratio where it is
@@ -718,7 +760,7 @@ func sequence(pinned bool) (int, time.Duration, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	step, err := envWhole("CLOCK_STEP", 0, int(tick/time.Millisecond))
+	step, err := envWhole("CLOCK_STEP", 0, int(paintEvery/time.Millisecond))
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1382,17 +1424,31 @@ type options struct {
 	colorWhen string
 	dayWhen   string
 	quiet     bool
-	vals      [numTunes]string
+	// Repaints per second, or zero for the tick. Not one of the six knobs
+	// below: those are the layout, which the tuner changes and S saves, and
+	// this changes nothing anyone can see in a still frame.
+	fps  int
+	vals [numTunes]string
 }
 
 // defaultOptions is a clock nobody has told anything: the flag defaults, and
 // the six knobs as defaultTunes has them.
 func defaultOptions() options {
-	return options{
+	out := options{
 		colorWhen: "auto",
 		dayWhen:   "", // unset: run() picks it, since a pinned clock differs
 		vals:      defaultTunes(),
 	}
+	// Like CLOCK_CELL_RATIO, and unlike the harness's variables: this one is
+	// meant to be set once per terminal and left there, where it can go stale
+	// or be meant for something else entirely, so a value that does not parse
+	// is ignored rather than refused. --fps says the same thing and wins.
+	if v := os.Getenv("CLOCK_FPS"); v != "" {
+		if n, err := parseCount(v, "CLOCK_FPS", maxFPS); err == nil {
+			out.fps = n
+		}
+	}
+	return out
 }
 
 // configPath is where S saves and startup reads. CLOCK_CONFIG names it
@@ -1524,6 +1580,18 @@ func parseArgs(argv []string, opt options) (out options, err error) {
 					}
 				}
 				out.vals[tunePerRow] = canonTune(tunePerRow, val)
+			case "fps":
+				if !haveVal {
+					i++
+					if i >= len(argv) {
+						err = errors.New("--fps needs a number, e.g. --fps 20")
+						return
+					}
+					val = argv[i]
+				}
+				if out.fps, err = parseCount(val, "--fps", maxFPS); err != nil {
+					return
+				}
 			case "color":
 				// Bare --color means always, and takes no separate argument:
 				// "clock --color ET" names a zone list, exactly as ls and git
@@ -3651,6 +3719,10 @@ func suspend(restore, requiet func(), fullScreen bool) {
 	// the shell got a stopped clock's terminal after all. Sleeping a tick is
 	// the barrier, and needs to be nothing cleverer: it cannot finish early,
 	// and a clock that really stopped is not running for any of it.
+	//
+	// The tick, not --fps's gap: this is a barrier, and it should neither
+	// shrink to a millisecond because someone asked for a thousand frames a
+	// second nor stretch to a second because they asked for one.
 	time.Sleep(tick)
 
 	requiet()
@@ -3729,6 +3801,11 @@ func run() error {
 	vals := opt.vals
 	zoneList, quiet := opt.zoneList, opt.quiet
 	color := useColor(opt.colorWhen)
+	// Before sequence() below, which takes its default step from the gap, and
+	// before the ticker that waits it out.
+	if opt.fps != 0 {
+		paintEvery = tickFor(opt.fps)
+	}
 
 	// The six knobs, as text, are the whole of the layout state: --cell-ratio
 	// has already beaten CLOCK_CELL_RATIO in defaultTunes, and a fixed
@@ -3813,7 +3890,7 @@ func run() error {
 	fmt.Print(hideCursor)
 	defer fmt.Print(showCursor)
 
-	t := time.NewTicker(tick)
+	t := time.NewTicker(paintEvery)
 	defer t.Stop()
 
 	height := 0

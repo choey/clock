@@ -150,21 +150,21 @@ check() {
 	# was comparing nothing. An if condition is exempt from set -e too.
 	if env CLOCK_FREEZE="$freeze" COLUMNS="$cols" LINES="$lines" \
 		CLOCK_CELL_RATIO="${ratio:-}" TZDIR="${tzdir:-}" CLOCK_CONFIG="${conf:-}" \
-		CLOCK_FRAMES="${frames:-}" CLOCK_STEP="${step:-}" \
+		CLOCK_FRAMES="${frames:-}" CLOCK_STEP="${step:-}" CLOCK_FPS="${fps:-}" \
 		"$out/clock" "$@" >"$out/go.out" 2>"$out/go.err" </dev/null
 	then go_status=0
 	else go_status=$?
 	fi
 	if env CLOCK_FREEZE="$freeze" COLUMNS="$cols" LINES="$lines" \
 		CLOCK_CELL_RATIO="${ratio:-}" TZDIR="${tzdir:-}" CLOCK_CONFIG="${conf:-}" \
-		CLOCK_FRAMES="${frames:-}" CLOCK_STEP="${step:-}" \
+		CLOCK_FRAMES="${frames:-}" CLOCK_STEP="${step:-}" CLOCK_FPS="${fps:-}" \
 		python3 pyclock.py "$@" >"$out/py.out" 2>"$out/py.err" </dev/null
 	then py_status=0
 	else py_status=$?
 	fi
 
 	cat "$out/py.err" >>"$out/all.err"
-	label="[$cols x $lines${ratio:+ r=$ratio}${tzdir:+ tz=$tzdir}${frames:+ x$frames}${step:+ @${step}ms}] $*"
+	label="[$cols x $lines${ratio:+ r=$ratio}${tzdir:+ tz=$tzdir}${frames:+ x$frames}${step:+ @${step}ms}${fps:+ fps=$fps}] $*"
 	if ! cmp -s "$out/go.out" "$out/py.out"; then
 		printf 'FAIL stdout %s\n' "$label"
 		diff -u "$out/py.out" "$out/go.out" | head -20
@@ -826,6 +826,50 @@ for odd in 0 abc -1 1.5 +1 " 1" 1234567890 09 ٣; do
 done
 frames=
 step=
+
+# --fps sets the gap between repaints, and nothing it changes shows in a still
+# frame: it is a rate, not a picture. What difftest can see is the sequence --
+# CLOCK_FRAMES with CLOCK_STEP unset steps the pinned instant by one gap, and
+# the gap is exactly what --fps moved. So a port that rounded 1000/fps a
+# different way would draw a different instant on every frame after the first,
+# which is the thing worth holding them to.
+echo "== repaint rate =="
+check "$SUMMER" 200 60 --fps 20 ET,UTC  # a still frame is unmoved by it
+frames=21
+for rate in 1 2 3 7 20 53 60 144 999 1000; do
+	check "$SUMMER" 200 60 --fps "$rate" ET,UTC
+done
+frames=
+
+# The rate refused. --fps is a flag, so a value it cannot read is a user error
+# and says so, in the same words from both.
+for odd in 0 -1 1.5 +1 " 1" 1001 1000000 abc "" 09 ٣ 1e3; do
+	check "$SUMMER" 200 60 --fps "$odd" ET
+done
+check "$SUMMER" 200 60 --fps ET      # the zone eaten as the value, and refused
+check "$SUMMER" 200 60 --fps         # and with nothing at all behind it
+check "$SUMMER" 200 60 --fps=20 ET   # the other way round, and accepted
+
+# CLOCK_FPS asks for the same thing once per terminal. Unlike CLOCK_FRAMES,
+# which is the harness's and strict, this one is a reader's and lives in a
+# shell profile where it can go stale or be meant for something else -- so a
+# value it cannot read is ignored, not refused, exactly as CLOCK_CELL_RATIO is.
+# Both ports have to ignore the same ones.
+for rate in 20 1 1000 0 -1 1001 abc " 20" 1.5 09 ٣ 1000000; do
+	fps=$rate
+	frames=21
+	check "$SUMMER" 200 60 ET,UTC
+	frames=
+	check "$SUMMER" 200 60 ET,UTC
+done
+fps=
+
+# And the flag wins over the variable, which is the rule --cell-ratio sets.
+fps=5
+frames=21
+check "$SUMMER" 200 60 --fps 20 ET,UTC
+fps=
+frames=
 
 # CLOCK_FRAMES without CLOCK_FREEZE is refused before the loop starts, so this
 # exits on its own -- but a regression would leave a clock running forever, so

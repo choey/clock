@@ -47,6 +47,31 @@ so the gutters between faces stay uncoloured and nothing leaks past the frame.
 cycles through all ten values. At a flat 20ms it never moves at all, and 25ms
 would only ever show 0 and 5.
 
+It is also the default for `--fps`, which is why that flag's default is not a
+round number: 19ms is a shade over 52 frames a second. `--fps N` sets the gap
+to `(1000 + N/2) / N` milliseconds -- whole-number arithmetic, the same
+expression in both ports, because rounding a float two different ways would
+put them on different ticks for the same flag and then on different frames for
+the same `CLOCK_FRAMES`. The rate reaches two places: the ticker the loop
+waits on, and `CLOCK_STEP`'s default, which is one gap. It deliberately does
+not reach the barrier `suspend()` sleeps after raising `SIGSTOP` -- that is a
+barrier, and it should neither shrink to a millisecond because someone asked
+for a thousand frames a second nor stretch to a second because they asked for
+one.
+
+**Why a rate is a knob at all.** Because the repaint above made it one. Once a
+frame with nothing new in it writes nothing, what a terminal is charged is one
+screen update per frame that *did* change -- and measuring three of them
+against the same clock, an 80x25 window on an Apple-silicon laptop, the
+terminal's own CPU was 10% (Ghostty 1.3.1), 24% (Terminal.app) and 80%
+(iTerm2 3.6.11) while the clock process stayed near 1% in all three. In the
+last of those the cost proved flat in how much changed -- 52 updates a second
+writing one row cost 62.2%, and writing twenty-five rows cost 62.9% -- so
+bytes were never the lever there and frequency was the only one left. Hence
+`--fps`, and `CLOCK_FPS` beside it for a terminal that wants it set once; the
+flag wins, and a variable that does not parse is ignored rather than refused,
+which is the rule `CLOCK_CELL_RATIO` already sets.
+
 **Smooth sweep.** The second hand takes fractional seconds, so it glides
 rather than stepping once a second.
 
@@ -399,7 +424,7 @@ nothing to fail.
 
 | harness | proves | blind to |
 |---|---|---|
-| `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share | anything wrong in both, which is how they are always changed |
+| `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share; `--fps` and `CLOCK_FPS` through the sequence, where the gap they set is the step between frames | anything wrong in both, which is how they are always changed; and what a rate does to a *live* clock, which no pinned case can see |
 | `tools/golden/` | what the clock actually draws, at eighteen sizes | the size nobody thought to keep |
 | `tools/fitfuzz.py` | invariants at arbitrary sizes: nothing overflows the window, every line ends at the default colour, no escape outside the eight it may write | whether the picture is *right*, only that it is well formed |
 | `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations screen for screen -- the streams replayed onto `tools/termscreen.py`, since a repaint is a handful of rows and not a frame; the tuner, by the states it walks through rather than the frames they took, and a tuned frame against a clock started with the same flags; that `S` writes the same bytes from either port and that both read them back; Ctrl+C and Ctrl+Z under job control, down to what the terminal is left in while a clock is stopped; that a character device is not therefore a terminal, and what a reader walking away leaves behind | a real terminal emulator; signal timing, where it compares loosely on purpose; and how a keystroke's bytes are split across reads, which is the terminal's business and deliberately not compared -- a difference there cost three releases before the harness stopped asking the question |

@@ -48,6 +48,8 @@ BASES = (
     ["--scale", "1.5", "UTC"],
     ["--scale", "auto", "ET,PT"],
     ["--cell-ratio", "2.6", "UTC"],
+    ["--fps", "20", "ET,PT"],
+    ["--fps=5", "UTC"],
     ["--hpad", "10%", "ET,PT"],
     ["--vpad", "5%", "ET,PT"],
     ["--halign", "left", "--valign", "top", "UTC"],
@@ -91,7 +93,7 @@ ZONEISH = (
 
 FLAGS = ("-n", "--per-row", "--scale", "--cell-ratio", "--hpad", "--vpad",
          "--halign", "--valign", "--color", "--day", "-q", "--quiet",
-         "--no-color", "--no-day", "-h", "--help", "--version", "--")
+         "--no-color", "--no-day", "--fps", "-h", "--help", "--version", "--")
 
 # Environment worth varying. TZ and CLOCK_CELL_RATIO are read by the clock
 # itself; COLUMNS and LINES stand in for the window, which is what makes a case
@@ -103,6 +105,11 @@ TZISH = ("UTC", "Asia/Tokyo", ":Asia/Tokyo", "", "Bogus/Zone", "PST8PDT,M3.2.0,M
 # asks for a hundred million frames is a case that never comes back.
 FRAMEISH = ("1", "2", "3", "0", "-1", "01", " 3", "3 ", "1e1", "١", "3.0", "+3", "")
 STEPISH = ("0", "19", "1", "250", "-1", "١٩", "19 ", "1e1", "")
+# CLOCK_FPS, which unlike the two above is a reader's variable: a value it
+# cannot read is ignored rather than refused, and both ports have to ignore
+# exactly the same ones.
+FPSISH = ("20", "1", "1000", "0", "-1", "1001", "09", " 20", "20 ", "1e1", "٢٠",
+          "1.5", "abc", "")
 
 FREEZEISH = (FROZEN, "2026-01-15T09:53:07.123456Z", "2026-11-01T05:59:59.900000Z",
              "0000-01-01T00:00:00.000000Z", "0001-01-01T00:00:00.000000Z",
@@ -168,6 +175,8 @@ def case(rng):
         env["CLOCK_FRAMES"] = rng.choice(FRAMEISH)
     if rng.random() < 0.15:
         env["CLOCK_STEP"] = rng.choice(STEPISH)
+    if rng.random() < 0.2:
+        env["CLOCK_FPS"] = rng.choice(FPSISH)
     return env, argv
 
 
@@ -175,7 +184,8 @@ def run(argv, env):
     base = {k: v for k, v in os.environ.items() if k not in ("TZ", "COLUMNS", "LINES",
                                                              "CLOCK_CELL_RATIO", "NO_COLOR",
                                                              "CLOCK_FREEZE", "CLOCK_FRAMES",
-                                                             "CLOCK_STEP", "CLOCK_CONFIG")}
+                                                             "CLOCK_STEP", "CLOCK_FPS",
+                                                             "CLOCK_CONFIG")}
     # Never a preferences file, and never a mutated path to one: a fuzzer
     # pointed at a real file would be reading whatever the machine has saved,
     # and both clocks would agree about it while proving nothing.

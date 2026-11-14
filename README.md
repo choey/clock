@@ -177,7 +177,7 @@ build-tagged `term_*.go` files, and naming a single file skips them.
 ```
 clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
       [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
-      [--cell-ratio N] [--scale N] [ZONES]
+      [--cell-ratio N] [--scale N] [--fps N] [ZONES]
 ```
 
 With no arguments you get one clock, in your local zone. Otherwise `ZONES` is a
@@ -889,6 +889,67 @@ the grid's shape outright, exactly as it always did.
 clock --scale 1.5
 clock --scale auto -n auto   # the defaults; only worth naming to be explicit
 ```
+
+### Repaint rate
+
+The clock looks at the frame every 19ms — about 52 times a second — which is
+what sweeps the second hand smoothly and keeps the milliseconds on the readout
+moving. On a terminal it writes only the rows that differ from the ones already
+up, so a clock with nothing new to say says nothing at all: hold the frame with
+space and it stops writing entirely.
+
+A frame that *did* change is one screen update, though, and an update is what
+some terminals charge for. One clock in an 80x25 window, measured on an
+Apple-silicon laptop as each terminal's own CPU while it drew it:
+
+| terminal | its CPU |
+|---|---|
+| Ghostty 1.3.1 | 10% |
+| Terminal.app | 24% |
+| iTerm2 3.6.11 | 80% |
+
+Those numbers belong to that machine and those versions, as every measurement
+here does. What is worth taking from them is the shape: the clock process
+itself is about 1% in all three, so the difference is entirely what the
+terminal spends drawing — and for at least one of them that cost is flat in how
+much changed, writing a single row costing the same as writing the whole
+window. Then the only thing left to move is how often.
+
+`--fps` is that knob, and the cost falls about in step with it:
+
+```sh
+clock --fps 20        # 20 repaints a second instead of 52
+```
+
+`CLOCK_FPS` sets the same thing, for a terminal you'd rather configure once
+than pass a flag to every time; `--fps` wins if both are set. As with
+`CLOCK_CELL_RATIO`, a value it cannot use leaves the default standing rather
+than failing — an environment variable may be stale or meant for another
+program, which is not the same as a typo on the command line.
+
+```sh
+CLOCK_FPS=20 clock    # or pyclock; both read it
+```
+
+It takes 1 to 1000 and sets the gap to the nearest whole millisecond, so
+`--fps 20` is 50ms and `--fps 3` is 333ms. What you give up is the sweep: low
+enough and the second hand steps where it used to glide.
+
+The readout goes first, and it is the gap that decides, not the rate — any gap
+that is a multiple of 10ms leaves the milliseconds' last digit sitting on 0, so
+`--fps 100` stops it just as dead as `--fps 10` does. A gap that shares only a
+factor of 5 with 10, like `--fps 40`'s 25ms, gets two digits; one coprime to
+10, like the default 19ms or `--fps 333`'s 3ms, gets all ten. That is the whole
+reason the default gap is 19ms rather than 20.
+
+It is a rate and not a layout knob, so the tuner does not offer it and `S` does
+not save it. Putting it in the preferences file by hand works, since that file
+is read as the front of your command line — one token per line, so `--fps=5` on
+a line of its own, or `--fps` and `5` on two — but the next `S` writes the file
+back without it.
+
+The order is the usual one: `CLOCK_FPS`, then the preferences file, then the
+command line, last one winning.
 
 ## Terminal requirements
 

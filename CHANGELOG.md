@@ -11,7 +11,7 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 
 ## Unreleased
 
-A clock that costs a third of what it did, and sends a tenth as much.
+A clock that costs a third of what it did, sends a tenth as much, and can be told to send less still.
 
 Nothing on screen has changed -- the frames are the same bytes they were, at
 every size the harnesses ask for -- but three things the clock was doing fifty
@@ -42,6 +42,27 @@ between a sixth and a fourteenth of that.
 
 What is left is the frame rate itself: 19ms is there so the millisecond readout
 reads as a live clock, and in Python that is most of what remains.
+
+**`--fps`, and `CLOCK_FPS` beside it.** The rate is now a knob, because the
+repaint above made it one. A frame with nothing new in it writes nothing, so
+what a terminal is charged is one screen update per frame that did change --
+and terminals differ wildly in what they charge for that. The same clock in an
+80x25 window, measured as each terminal's own CPU on an Apple-silicon laptop:
+Ghostty 1.3.1 10%, Terminal.app 24%, iTerm2 3.6.11 80%, with the clock process
+itself near 1% in all three. In iTerm2 the cost turned out to be flat in how
+much changed -- fifty-two updates a second writing one row cost 62.2%, writing
+twenty-five rows cost 62.9% -- so bytes were never the lever and frequency was
+the only one left.
+
+`clock --fps 20` repaints twenty times a second instead of fifty-two, and the
+drawing cost falls about in step. `CLOCK_FPS` says the same thing once per
+terminal, the flag winning if both are given, and a value it cannot read is
+ignored rather than refused -- the rule `CLOCK_CELL_RATIO` already set, for a
+variable that lives in a shell profile where it can go stale. It takes 1 to
+1000 and rounds the gap to whole milliseconds. What it costs is the sweep, and
+the readout first: any gap that is a multiple of 10ms leaves the milliseconds'
+last digit sitting on 0, which is the whole reason the default gap is 19ms and
+not 20.
 
 There is a new harness for the part of this that nothing else could see.
 `tools/painttest.py` runs each clock under a pty, replays what it painted onto

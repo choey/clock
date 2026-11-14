@@ -69,7 +69,7 @@ USAGE = """clock - analog terminal clocks
 
 usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
              [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
-             [--cell-ratio N] [--scale N] [ZONES]
+             [--cell-ratio N] [--scale N] [--fps N] [ZONES]
 
   ZONES              comma-separated zone names, described below; default is
                       your local zone
@@ -90,6 +90,9 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
                       face looks squished, lower if it bulges sideways
   --scale N          resize every face by this factor; auto (default) fills
                       the window, at minimum padding
+  --fps N            repaints a second, 1 to 1000; the default is the 19ms
+                      tick, a shade over 52. Lower it where the terminal
+                      costs more to draw the clock than the clock does to run
   -h, --help         this message
   --version          print the version and exit
 
@@ -110,6 +113,17 @@ clocks over the whole window; --hpad 10% sets the gaps instead, as a share of
 the window, and then the alignment decides where the grid sits. CLOCK_CELL_RATIO
 sets the same thing as --cell-ratio, for when it wants to be set once per
 terminal rather than typed every time; the flag wins if both are given.
+
+The clock looks at the frame every 19ms, which is what sweeps the second hand
+and moves the milliseconds on the readout, and writes only the rows that
+changed since the last one -- so a clock with nothing new to say is silent. A
+frame that did change is one screen update though, and some terminals charge
+for an update whatever it contains; --fps sets how often to look, and
+CLOCK_FPS sets it once per terminal rather than every time, the flag winning
+if both are given. The drawing cost falls about in step with the rate. The
+readout is what goes first, and not only at low rates: any gap that is a
+multiple of 10ms leaves the milliseconds' last digit sitting on 0, --fps 100
+as surely as --fps 10, which is why the default gap is 19ms and not 20.
 
 Space holds the frame still, for a screenshot, h or ? opens the key list, and
 r resizes and aligns the clocks while they run. S saves those sizes and the
@@ -182,7 +196,34 @@ MAX_PER_ROW = 64  # an upper bound so a typo can't ask for a million faces
 
 # 19ms, not 20: coprime to 10, so the millisecond ones digit cycles through
 # all ten values instead of sitting still. Reads as a live clock.
+#
+# It is also the default for --fps, which is why that flag's default is not a
+# round number of frames: 19ms is a shade over 52 a second.
 TICK = 0.019
+
+MAX_FPS = 1000  # a tick of one millisecond, which is as fine as the gap is measured
+
+# PAINT_EVERY is the gap the frame loop waits: TICK, unless --fps or CLOCK_FPS
+# asked for another rate. Set for real in run(), before sequence() reads it.
+#
+# A rate, not a quality. Since the clock writes only the rows that changed, a
+# frame that differs at all is one screen update, and a terminal that charges
+# per update rather than per byte charges this many times a second however
+# little moved -- measurably, several times what the clock itself costs.
+# Lowering the rate is the only thing that buys that back, and what it costs is
+# a second hand that steps where it used to glide.
+PAINT_EVERY = TICK
+
+
+def tick_for(fps):
+    """The gap between repaints at a given rate, to the nearest millisecond.
+
+    Whole numbers throughout, and the same expression as clock.go's tickFor:
+    rounding a float could land the two ports on different ticks for the same
+    --fps, and then on different frames for the same CLOCK_FRAMES.
+    """
+    return ((1000 + fps // 2) // fps) / 1000.0
+
 
 DEFAULT_ROWS_N = 11  # face height, in terminal rows, at --scale 1
 DEFAULT_CELL_RATIO = 2.1  # cell height / width; braille dots are square at 2
@@ -709,7 +750,7 @@ def sequence(frozen):
     to hold still. Dev hook, not in --help.
     """
     frames = env_whole("CLOCK_FRAMES", 1, 1)
-    step = env_whole("CLOCK_STEP", 0, round(TICK * 1000))
+    step = env_whole("CLOCK_STEP", 0, round(PAINT_EVERY * 1000))
     if frozen is None and (frames != 1 or os.environ.get("CLOCK_STEP", "")):
         raise ClockError(
             "CLOCK_FRAMES and CLOCK_STEP need CLOCK_FREEZE, the instant they step from"
@@ -1208,6 +1249,22 @@ class Options:
         self.color_when = "auto"
         self.day_when = ""  # unset: run() picks it, since a pinned clock differs
         self.quiet = False
+        # Repaints per second, or zero for TICK. Not one of the six knobs
+        # below: those are the layout, which the tuner changes and S saves,
+        # and this changes nothing anyone can see in a still frame.
+        #
+        # Like CLOCK_CELL_RATIO, and unlike the harness's variables: this one
+        # is meant to be set once per terminal and left there, where it can go
+        # stale or be meant for something else entirely, so a value that does
+        # not parse is ignored rather than refused. --fps says the same thing
+        # and wins.
+        self.fps = 0
+        env = os.environ.get("CLOCK_FPS", "")
+        if env:
+            try:
+                self.fps = parse_count(env, "CLOCK_FPS", MAX_FPS)
+            except ClockError:
+                pass
         self.vals = default_tunes()  # the six knobs, as text
 
 
@@ -1327,6 +1384,13 @@ def parse_args(argv, opt):
                 if val != "auto":
                     parse_count(val, "--per-row", MAX_PER_ROW)
                 opt.vals[TUNE_PER_ROW] = canon_tune(TUNE_PER_ROW, val)
+            elif name == "fps":
+                if not sep:
+                    i += 1
+                    if i >= len(argv):
+                        raise ClockError("--fps needs a number, e.g. --fps 20")
+                    val = argv[i]
+                opt.fps = parse_count(val, "--fps", MAX_FPS)
             elif name == "color":
                 # Bare --color means always, and takes no separate argument:
                 # "clock --color ET" names a zone list, exactly as ls and git
@@ -3142,6 +3206,10 @@ def suspend(full_screen, restore, requiet):
     # threads, and the one that takes the signal need not be the one that
     # raised it, which on Linux left it taking the terminal back before the
     # stop landed -- and this one keeps it so the two resume alike.
+    #
+    # TICK, not --fps's gap: this is a barrier, and it should neither shrink
+    # to a millisecond because someone asked for a thousand frames a second
+    # nor stretch to a second because they asked for one.
     time.sleep(TICK)
 
     requiet()
@@ -3183,6 +3251,11 @@ def run(argv):
     zones = resolve_zones(zone_list, frozen or datetime.now(timezone.utc))
 
     color = use_color(opt.color_when)
+    # Before sequence() below, which takes its default step from the gap, and
+    # before the sleep that waits it out.
+    if opt.fps:
+        global PAINT_EVERY
+        PAINT_EVERY = tick_for(opt.fps)
 
     # The six knobs, as text, are the whole of the layout state: --cell-ratio
     # has already beaten CLOCK_CELL_RATIO in default_tunes, and a fixed
@@ -3586,7 +3659,7 @@ def run(argv):
                     # unknown length: the screen resumes blank, and the reader
                     # should not have to watch it stay that way.
                     continue
-                time.sleep(TICK - (time.monotonic() % TICK))
+                time.sleep(PAINT_EVERY - (time.monotonic() % PAINT_EVERY))
     except KeyboardInterrupt:
         pass
     finally:

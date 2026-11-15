@@ -47,6 +47,23 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      # Ubuntu 26.04 splits the old zone names -- EST, US/Eastern, NZ,
+      # Portugal and the rest of tzdata's "backward" file -- into
+      # tzdata-legacy, and its runner image leaves that out. Python's zoneinfo
+      # reads only the system's files and refuses them; Go falls back to the
+      # zoneinfo.zip in the toolchain setup-go installed, and draws them. That
+      # is a difference between this runner and a machine, not between the
+      # ports: a released binary has no toolchain beside it to fall back to.
+      # So the runner gets the names back, as a machine with them installed
+      # has them.
+      - name: legacy zone names
+        if: runner.os == 'Linux'
+        run: |
+          if [ ! -e /usr/share/zoneinfo/US/Eastern ]; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q tzdata-legacy
+          fi
+
       - name: gofmt
         # gofmt prints the files it would change and says nothing otherwise, so
         # any output at all is the failure.

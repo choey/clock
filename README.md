@@ -667,6 +667,12 @@ which lists the canonical zones and leaves out the backward-compatibility
 links — so `Eastern` is not a name here, while `US/Eastern` still resolves the
 ordinary way, in full.
 
+Those links are the system's to provide, and some leave them out: Debian 13
+and Ubuntu 24.04 on put `US/Eastern`, `EST`, `NZ` and the rest of tzdata's
+`backward` file in a separate `tzdata-legacy` package, which minimal installs
+skip. Without it both clocks refuse those names; install it, or use the
+canonical name (`America/New_York`) or the clock's own abbreviation (`ET`).
+
 This is looked up after everything else the tz database answers to, and before
 the [states and cities](#states-and-cities) this clock carries itself, so
 neither a city nor anything written here can shadow a name the database

@@ -4271,6 +4271,13 @@ func run() error {
 	// stop the runtime would have done, so the loop owes the reader one, and
 	// owes it a terminal to come back to -- see suspend.
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGPIPE, syscall.SIGTSTP)
+	// A resize only ends the wait between frames, so the new size is drawn
+	// the moment the window changes rather than on the next frame -- which at
+	// --fps 1 is up to a second later. Its own channel, since it is a wake and
+	// not a stop: the size itself is still measured where it always was, at
+	// the top of the frame. pyclock.py wakes for it through its signal pipe.
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
 
 	restoreTerm, requietTerm := quietTerminal()
 	defer restoreTerm()
@@ -4397,11 +4404,10 @@ func run() error {
 			now = held
 		}
 
-		// re-measure every frame rather than trapping SIGWINCH: one ioctl per
-		// 19ms is nothing beside redrawing the faces, it also picks up a
-		// changed COLUMNS, and it keeps this loop the same shape as the
-		// Python one, where a signal handler would interact with sleep()
-		// under PEP 475 and drift out of step.
+		// re-measure every frame, rather than only when SIGWINCH says to: one
+		// ioctl a frame is nothing beside redrawing the faces, and it also
+		// picks up a changed COLUMNS. SIGWINCH only wakes the wait below, so a
+		// resize is drawn at once; what size it was is asked here, as always.
 		cols, lines := termSize()
 		if cols != paintedCols || lines != paintedLines {
 			painted = nil
@@ -4616,7 +4622,8 @@ func run() error {
 		// answered a second late. So a frame that answered keys draws the
 		// next at once; one holding half a keystroke waits no longer than the
 		// tick, since the grace for finishing it is counted in frames; and
-		// any wait ends early for a key, through the watcher. Otherwise a
+		// any wait ends early for a key, through the watcher, or for a
+		// resize. Otherwise a
 		// synced clock waits for the next point on its grid by the wall
 		// clock, rather than a ticker's free-running beat, which would keep
 		// whatever phase the clock started at -- asked afresh every frame, so
@@ -4644,6 +4651,8 @@ func run() error {
 				waiting = false
 			case <-keyReady:
 				watch.armed = false
+				waiting = false
+			case <-winch:
 				waiting = false
 			case s := <-sigs:
 				switch s {

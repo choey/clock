@@ -635,6 +635,64 @@ def key_lag(argv, key=b"h", mark=HELP_MARK, tries=4):
     return lags
 
 
+def resize_lag(argv, tries=4):
+    """How long, in ms, from a window resized to the clock drawing again.
+
+    The clock must be synced (--fps below 10), so its own frames land just
+    after the second: each resize is made between 300 and 600 ms past one,
+    where anything drawn within the next 300 ms can only be the resize being
+    answered, and never a frame that happened to be due.
+
+    The pty is made the clock's controlling terminal, which is what makes
+    resizing it send SIGWINCH -- the signal a real window sends -- and
+    COLUMNS/LINES are left unset, since the clock believes them first.
+    """
+    master, slave = open_pty()
+    env = dict(os.environ, TERM="xterm-256color")
+    env.pop("COLUMNS", None)
+    env.pop("LINES", None)
+
+    def own_terminal():
+        os.setsid()
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+    proc = subprocess.Popen(argv, cwd=ROOT, stdin=slave, stdout=slave, stderr=subprocess.DEVNULL,
+                            env=env, preexec_fn=own_terminal)
+    os.close(slave)
+    lags = []
+    try:
+        pump(master, bytearray(), 1.2)
+        for i in range(tries):
+            # Out to a point 300-600 ms past a second, draining as it goes.
+            target = 0.3 + 0.1 * i
+            while abs(time.time() % 1 - target) > 0.01:
+                pump(master, bytearray(), 0.005)
+            pump(master, bytearray(), 0)
+            cols, lines = (COLS + 10, LINES + 4) if i % 2 == 0 else (COLS, LINES)
+            sent = time.monotonic()
+            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", lines, cols, 0, 0))
+            got = False
+            while time.monotonic() - sent < 0.3 and not got:
+                ready, _, _ = select.select([master], [], [], 0.002)
+                if ready:
+                    try:
+                        got = bool(os.read(master, 1 << 16))
+                    except OSError:
+                        break
+            lags.append((time.monotonic() - sent) * 1000 if got else float("inf"))
+    finally:
+        try:
+            os.write(master, b"q")
+        except OSError:
+            pass
+        pump(master, bytearray(), SETTLE)
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        os.close(master)
+    return lags
+
+
 def on_the_second(argv, seconds=3.5):
     """A live clock's readouts, as (ms past the second, ms it arrived after).
 
@@ -716,8 +774,8 @@ def complaining(frame):
 def compare_resize(name, extra, sizes, expect_complaint):
     """Both implementations, same window sizes: same frames, same complaints.
 
-    The clock re-measures every frame rather than trapping SIGWINCH, so a
-    window dragged smaller reflows on the next tick -- and dragged smaller than
+    The clock re-measures every frame, so a window dragged smaller reflows
+    at once -- and dragged smaller than
     the clocks can fit, says so and keeps measuring until it fits again.
     """
     seen = {}
@@ -1319,6 +1377,15 @@ def main():
             report(max(lags) < 300, f"{impl} at --fps 1 answers a key at once",
                    f"the key list took {' '.join(f'{x:.0f}' for x in lags)} ms")
 
+        # A resize is the other thing that cannot wait for the next frame:
+        # at --fps 1 the old size stayed up, wrapped and torn, for up to a
+        # second. SIGWINCH now ends the wait the way a key does.
+        print("== resizes at a slow rate ==")
+        for impl, argv in IMPLS:
+            lags = resize_lag(argv + ["-q", "--fps", "1", "UTC"])
+            report(max(lags) < 150, f"{impl} at --fps 1 redraws a resized window at once",
+                   f"the redraw took {' '.join(f'{x:.0f}' for x in lags)} ms")
+
         print("== saving ==")
         saves("S writes the clock down, and both read the file back")
         saves_settings("S saves the settings with the layout, in the flags' own spelling",
@@ -1360,8 +1427,8 @@ def main():
         not_a_terminal("/dev/null is a character device, not a terminal")
         reader_leaves("the reader goes away mid-frame")
 
-        # The clock re-measures every frame rather than trapping SIGWINCH, so
-        # this is the only thing that can drag a window: difftest pins one size
+        # The clock re-measures every frame, and this is the only thing that
+        # can drag a window: difftest pins one size
         # per run and never changes it.
         print("== resize ==")
         # 60 columns, not 40: three faces need three cells of at least the

@@ -109,6 +109,14 @@ the select would otherwise just see it retried under PEP 475. Only a clock
 reading a terminal watches stdin: a redirected one reads as ready for ever.
 Measured, `h` at `--fps 1` now puts up the key list in under a millisecond.
 
+A resize ends the wait the same way: Go notifies `SIGWINCH` on a channel of
+its own, and Python gives it a handler that does nothing, which is what it
+takes for the wake-up pipe to be written at all -- the signal is otherwise
+ignored. Neither measures anything on the signal; the size is still asked at
+the top of every frame, which also catches a changed `COLUMNS`. At `--fps 1` a
+resized window used to keep the old frame, rewrapped and torn, for up to a
+second; now it is redrawn within a couple of milliseconds.
+
 **Hands on steps.** A hand drawn at the exact instant re-rounds its dots one or
 two at a time as its angle creeps, so it flickered along its length forty or
 fifty times a second while its tip moved four -- and every flicker was a frame

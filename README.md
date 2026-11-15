@@ -369,6 +369,8 @@ the rest.
 
 Every key is answered the moment it is pressed, whatever `--fps` says: the
 rate is how often the clock looks at the time, not how often it listens.
+Resizing the window is answered the same way: the clock redraws at the new
+size at once, rather than on its next frame.
 
 Ctrl+Z suspends it, like any other job. The clock hands the terminal back for
 the length of the stop and takes it again on `fg`; see [Terminal
@@ -1032,7 +1034,7 @@ sample that lands in either says more about the terminal than the clock.
   step through them, and any gap that is a multiple of 10ms parks the
   milliseconds' last digit on 0 under `--readout ms`, `--fps 100` as surely as
   `--fps 10`. That is why the default gap is 19ms and not 20. It never slows
-  the keys: a key is answered when it is pressed, at any rate.
+  the keys or a resize: both are answered at once, at any rate.
 
 Below 10 a second the clock keeps in step with the wall clock rather than with
 whenever it started. Each frame lands on the second or an even fraction of it
@@ -1290,11 +1292,13 @@ arm64 runners, and macOS is there for the platform, not the version.
 
 It resizes the window too, which difftest cannot: that pins `COLUMNS`/`LINES`
 for a run and never changes them, so the re-measure the clock does every frame
-— the reason it does not trap `SIGWINCH` — went untested until now. The cases
+went untested until now. The cases
 drag the window smaller and larger, and at a fixed `--scale` drag it smaller
 than the clocks can fit, which on a terminal complains and keeps measuring
 where redirected output would have exited. A clock that measured once at
-startup fails four of them.
+startup fails four of them. And at `--fps 1` it makes the pty the clock's
+controlling terminal, so that resizing it sends a real `SIGWINCH`, and times
+the redraw: a clock that waited for its next frame fails it.
 
 `tools/painttest.py` asks the question neither of those can: not what the
 clock drew, but what it *sent*. On a terminal a repaint writes the rows that

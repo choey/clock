@@ -3728,6 +3728,12 @@ def run(argv):
     os.set_blocking(wake_r, False)
     os.set_blocking(wake_w, False)
     signal.set_wakeup_fd(wake_w)
+    # A resize only ends the wait, so the new size is drawn the moment the
+    # window changes rather than on the next frame. The pipe is written only
+    # for a signal Python has a handler for, and SIGWINCH's default is to be
+    # ignored, so it needs one, even one that does nothing: the size is still
+    # measured at the top of the frame, as always.
+    signal.signal(signal.SIGWINCH, lambda *_: None)
 
     # On a terminal, take the alternate screen and paint from its top corner.
     # Relative rewind cannot survive a resize: the terminal rewraps the frame
@@ -3799,11 +3805,10 @@ def run(argv):
                 if held is not None:
                     now = held
 
-                # re-measure every frame rather than trapping SIGWINCH: one
-                # ioctl per 19ms is nothing beside redrawing the faces, it also
-                # picks up a changed COLUMNS, and under PEP 475 a signal
-                # handler would interact with the sleep below and drift out of
-                # step with the Go port's loop.
+                # re-measure every frame, rather than only when SIGWINCH says
+                # to: one ioctl a frame is nothing beside redrawing the faces,
+                # and it also picks up a changed COLUMNS. SIGWINCH only wakes
+                # the wait below, so a resize is drawn at once.
                 cols, lines = term_size()
                 if (cols, lines) != (painted_cols, painted_lines):
                     painted = None
@@ -4025,7 +4030,7 @@ def run(argv):
                 # answered keys draws the next at once; one holding half a
                 # keystroke waits no longer than the tick, since the grace for
                 # finishing it is counted in frames; and any wait ends early
-                # for a key or a signal. Otherwise a synced clock waits for the
+                # for a key or a signal, a resize among them. Otherwise a synced clock waits for the
                 # next point on its grid by the wall clock, rather than a beat
                 # on the monotonic one, which would keep whatever phase the
                 # clock started at -- asked afresh every frame, so a wake that

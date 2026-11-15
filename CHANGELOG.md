@@ -79,6 +79,8 @@ second. Now each frame lands on the second or an even fraction of it and shows
 that very instant, so the second hand turns over on the second and the readout
 says .000. And keys no longer wait for the next frame: at `--fps 1` a key took
 up to a second and a half to be answered, and now takes under a millisecond.
+A resize no longer waits either: the window is redrawn at its new size at
+once, where at `--fps 1` the old frame stayed up, torn, for up to a second.
 
 **`--fps N`, and `CLOCK_FPS` beside it.** How often the clock looks at the
 frame at all -- hands and readout together, and the clock's own wakeups. It is

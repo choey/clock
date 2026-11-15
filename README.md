@@ -32,15 +32,8 @@ choose — so the Python side takes `pyclock`, and the two can sit on one
 project's central claim without a checkout:
 
 ```sh
-export CLOCK_FREEZE="7/22/26 15:30 UTC"
-clock ET,PT,UTC | diff - <(pyclock ET,PT,UTC) && echo "byte for byte"
+(export CLOCK_FREEZE="7/22/26 15:30 UTC"; clock ET,PT,UTC | diff - <(pyclock ET,PT,UTC)) && echo "byte for byte"
 ```
-
-The pinned time is what makes this a comparison: a clock whose time is pinned
-and whose output is not a terminal draws one frame and exits, while a live one
-keeps drawing into the pipe for as long as it is left running — and two live
-clocks a few milliseconds apart would not match anyway. `export`, not a prefix
-on the first command, so the `pyclock` inside `<( )` is pinned too.
 
 Neither implementation has a third-party dependency. The Go side is standard
 library only; the Python side needs nothing beyond `zoneinfo`, which has shipped

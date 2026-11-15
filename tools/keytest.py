@@ -293,7 +293,8 @@ def tuned(state_list):
 
 def readouts(painted):
     """Every digital readout painted, in order, as they appear on the faces."""
-    return re.findall(rb"\d\d:\d\d:\d\d\.\d\d\d", painted)
+    # Any precision --readout allows: tenths by default, ms or whole seconds.
+    return re.findall(rb"\d\d:\d\d:\d\d(?:\.\d+)?", painted)
 
 
 IMPLS = (("go", ["./clock-keytest"]), ("py", [sys.executable, "pyclock.py"]))

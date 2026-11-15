@@ -43,9 +43,11 @@ the reverse of the order they are drawn in. Escapes go per run of same-coloured
 cells rather than per cell, and each row ends back on the default foreground,
 so the gutters between faces stay uncoloured and nothing leaks past the frame.
 
-**19ms refresh, not 20.** 19 is coprime to 10, so the millisecond ones digit
-cycles through all ten values. At a flat 20ms it never moves at all, and 25ms
-would only ever show 0 and 5.
+**19ms refresh, not 20.** 19 is coprime to 10, so under `--readout ms` the
+millisecond ones digit cycles through all ten values. At a flat 20ms it never
+moves at all, and 25ms would only ever show 0 and 5. The default readout shows
+tenths, where any gap would do; the tick stays 19ms so that milliseconds are
+still worth asking for.
 
 It is also the default for `--fps`, which is why that flag's default is not a
 round number: 19ms is a shade over 52 frames a second. `--fps N` sets the gap
@@ -61,19 +63,79 @@ one.
 
 **Why a rate is a knob at all.** Because the repaint above made it one. Once a
 frame with nothing new in it writes nothing, what a terminal is charged is one
-screen update per frame that *did* change -- and measuring three of them
-against the same clock, an 80x25 window on an Apple-silicon laptop, the
-terminal's own CPU was 10% (Ghostty 1.3.1), 24% (Terminal.app) and 80%
-(iTerm2 3.6.11) while the clock process stayed near 1% in all three. In the
-last of those the cost proved flat in how much changed -- 52 updates a second
+screen update per frame that *did* change -- and measured against the same
+clock with a millisecond readout, on an Apple-silicon laptop and once each had
+settled, the terminal's own CPU was 11% in Ghostty 1.3.1 and 61% in iTerm2
+3.6.11, while the clock process stayed under 3% in both. In the second the
+cost proved flat in how much changed -- 52 updates a second
 writing one row cost 62.2%, and writing twenty-five rows cost 62.9% -- so
 bytes were never the lever there and frequency was the only one left. Hence
 `--fps`, and `CLOCK_FPS` beside it for a terminal that wants it set once; the
 flag wins, and a variable that does not parse is ignored rather than refused,
 which is the rule `CLOCK_CELL_RATIO` already sets.
 
-**Smooth sweep.** The second hand takes fractional seconds, so it glides
-rather than stepping once a second.
+A rate is the blunt knob, though: it slows the hands along with everything
+else. Counting which part of a frame made it differ from the one before showed
+what the targeted ones were -- the readout's milliseconds every frame, and,
+more surprisingly, the faces themselves 39 to 51 times a second while the
+second hand's tip moved four to eleven. Hence the next two.
+
+**Hands on steps.** A hand drawn at the exact instant re-rounds its dots one or
+two at a time as its angle creeps, so it flickered along its length forty or
+fifty times a second while its tip moved four -- and every flicker was a frame
+that differed, which is the thing a terminal is charged for. Each hand now
+stands on one of `stepsAround(length)` places per turn, `floor(2π · max(rx, ry)
+· length + 0.5)`: one for each dot its tip passes, near enough, taking the
+wider radius so the tip never skips one. A hand changes exactly when its tip
+moves, as a watch's does, and the sweep is the same sweep at the tip, which is
+the only place the eye was following it. The hands stand at `floor(turn ·
+steps)`, so none ever runs ahead of the time; a frame's hands are at most one
+tip-dot behind the instant, and at a whole minute they are exactly on it.
+
+What it cost was the golden frames, every one of which moved -- by braille
+dots only, each hand pivoting by less than its tip's dot, which was checked
+cell by cell before they were blessed. What it bought, frames that differ for
+a reason other than the readout: 39-51 a second down to 4-10 on one face,
+16 down to 3 on twelve.
+
+**The readout as fine as it is asked.** With the hands stepping, the readout
+was the only thing left changing every frame, and `--readout` says how finely
+it shows the time: `tenths` by default, `ms`, or `seconds`. The precision *is*
+its refresh rate, which is the reason to make it the knob rather than a rate
+of its own -- a readout refreshed every hundred milliseconds but printed to
+the millisecond would show three digits of which two were stale. Every
+precision truncates, so the readout never shows a tenth that has not arrived,
+and a pinned still still prints its exact instant. A coarser readout is
+narrower, and `readoutCols` and `dayCols` follow it -- 10 and 14 at tenths, 12
+and 16 at ms, 8 and 12 at seconds -- so the cell a small face sits in is as
+wide as the readout it actually holds. The first version kept the twelve
+columns milliseconds need whatever the precision, on the grounds that the
+layout should not move with it; fitfuzz disagreed within one run, because a
+face narrower than its cell then has nothing reaching the cell's edge, and a
+right-aligned grid of them ended a column short of the window. The default is tenths because that is what the
+expensive kind of terminal is charged for: a fifth of the updates milliseconds
+cost, fast enough to read as live.
+
+**Faces, frames and sizes remembered.** Three caches, each keyed on exactly
+what its answer depends on, so none can be wrong rather than merely stale:
+
+- a face, by its size, its colour and where its three hands stand (`faceKey`,
+  `FACE_CACHE`). The readout under a face changes far more often than the
+  face, so most frames find every face here.
+- the whole frame, by the size, the layout, the colour and, per face, its
+  label, its hands' steps and its readout's text (`frameIn`, `FRAME_MEMO`).
+  With a coarse readout most frames are the one before them, and answering
+  those from memory leaves a tick the cost of reading the time.
+- `--scale auto`'s answer, by every argument it is asked with and the cell
+  ratio (`scaleKey`, `SCALE_CACHE`). The search tries every size from the
+  largest down, and was a millisecond of each frame in pyclock.py for the sake
+  of saying the same thing again.
+
+Callers only read what comes back -- the modal overlay copies before it stamps
+-- so a remembered frame can be handed out again as it is. The 1620-case matrix
+kept across this work printed the same digest before the frame and size caches
+went in as after; the face cache went in with the steps, and is held to
+nothing changing by the two ports agreeing on every case and every golden.
 
 **A dial drawn once.** Only the hands move. The rim is sampled densely enough
 that adjacent dots touch — some three hundred of them on a large face, against
@@ -96,12 +158,14 @@ left in a frame.
 
 **What a frame costs.** Fifty repaints a second, one of the two ports being
 Python, invites the question. Measured with `tools/framecost.py` on an
-Apple-silicon laptop, a 200x60 window: Go spends half a per cent of a tick on a
-frame, one face or twelve; pyclock.py spends between two and five per cent,
-a single face to twelve. Both have room, and Python has less of it than a
-glance at the picture would suggest -- a machine twenty times slower is one
-where the Python clock stops sweeping smoothly and the Go one has not noticed
-anything. Neither drifts when that happens: pyclock.py
+Apple-silicon laptop, a 200x60 window, averaged over a run as a live clock
+draws it: Go spends a tenth of a per cent of a tick on a frame, one face or
+twelve, and pyclock.py about half a per cent -- because almost every frame is
+answered from the caches above. A frame drawn from nothing still costs what it
+did before them, about 0.09ms in Go and 0.5-1ms in Python, which is the figure
+to hold against the tick: a machine twenty times slower is one where the Python
+clock stops sweeping smoothly when it has to draw, and the Go one has not
+noticed anything. Neither drifts when that happens: pyclock.py
 sleeps to the next multiple of the tick and clock.go takes a ticker whose
 channel holds one, so a frame that runs long costs the frame after it rather
 than delaying every frame that follows. That tool measures and does not check
@@ -130,9 +194,9 @@ pipe, where there is nothing to address and nothing to save.
 holding, row for row, and writes only the rows the new frame spells
 differently -- each addressed where it sits with `ESC[<row>;1H`. Almost
 nothing moves between two frames: at 19ms the second hand advances a fifth of
-a dot, so on a 200x60 screen a frame changes the two or three rows the hands
-are crossing and the line with the milliseconds on it, and leaves the other
-fifty-five exactly as they were. Against that, repainting all of them was 20KB
+a dot, so on a 200x60 screen a frame changes the line with the readout on it,
+and the rows a hand crosses only on the frame it steps, and leaves the rest
+exactly as they were. Against that, repainting all of them was 20KB
 down the pty fifty-two times a second for about 1KB of news -- and the
 emulator at the other end paid for every byte. A frame that changed nothing at
 all, which is what a held clock and a pinned one draw, writes nothing at all
@@ -229,8 +293,9 @@ sizes, each checked against an invariant rather than against the other
 implementation.
 
 **Cell width.** A face is `COLS` wide, but the cell it occupies is
-`max(COLS, 12)` — the readout under it is a fixed twelve characters and cannot
-shrink along with the face. Everything that measures the grid measures cells,
+`max(COLS, readoutCols)` — the readout under it, ten characters at the default
+tenths, twelve at ms and eight at seconds, cannot shrink along with the
+face. Everything that measures the grid measures cells,
 and the face is padded into its cell when drawn. The weekday is the same
 problem solved the other way: below `DAY_COLS` it is dropped rather than
 widening every cell to hold it.
@@ -424,7 +489,7 @@ nothing to fail.
 
 | harness | proves | blind to |
 |---|---|---|
-| `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share; `--fps` and `CLOCK_FPS` through the sequence, where the gap they set is the step between frames | anything wrong in both, which is how they are always changed; and what a rate does to a *live* clock, which no pinned case can see |
+| `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share; `--fps` and `CLOCK_FPS` through the sequence, where the gap they set is the step between frames; the hands' steps, over eight-minute sequences that cross hundreds of them; `--readout` at each precision, including the instants where truncating and rounding part company | anything wrong in both, which is how they are always changed; and what a rate does to a *live* clock, which no pinned case can see |
 | `tools/golden/` | what the clock actually draws, at eighteen sizes | the size nobody thought to keep |
 | `tools/fitfuzz.py` | invariants at arbitrary sizes: nothing overflows the window, every line ends at the default colour, no escape outside the eight it may write | whether the picture is *right*, only that it is well formed |
 | `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations screen for screen -- the streams replayed onto `tools/termscreen.py`, since a repaint is a handful of rows and not a frame; the tuner, by the states it walks through rather than the frames they took, and a tuned frame against a clock started with the same flags; that `S` writes the same bytes from either port and that both read them back; Ctrl+C and Ctrl+Z under job control, down to what the terminal is left in while a clock is stopped; that a character device is not therefore a terminal, and what a reader walking away leaves behind | a real terminal emulator; signal timing, where it compares loosely on purpose; and how a keystroke's bytes are split across reads, which is the terminal's business and deliberately not compared -- a difference there cost three releases before the harness stopped asking the question |

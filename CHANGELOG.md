@@ -11,66 +11,74 @@ The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 
 ## Unreleased
 
-A clock that costs a third of what it did, sends a tenth as much, and can be told to send less still.
+A clock that costs a sixth of what it did, sends a twenty-fifth as much, and
+asks far less of the terminal drawing it.
 
-Nothing on screen has changed -- the frames are the same bytes they were, at
-every size the harnesses ask for -- but three things the clock was doing fifty
-times a second it no longer does.
+The picture changes in two small ways, which is what makes this a minor
+release rather than a patch. The hands stand on steps -- one for each dot the
+tip passes on the way round -- so a hand changes exactly when its tip moves, as
+a watch's does, rather than re-rounding dots along its length dozens of times a
+second in between. And the readout shows tenths of a second by default,
+`09:53:07.1`, where it showed milliseconds; `--readout ms` puts them back.
+Every golden frame changed: by braille dots and by readout digits only, each
+checked before it was blessed.
 
-The dial is drawn once. The rim and the twelve hour ticks are most of the dots
-on a face and none of them depend on the time, so they are now drawn once per
-face size and kept; a frame copies that grid and puts three hands on it. Cell
-bits become braille characters through a 256-entry table rather than one
-addition per cell. Between them a frame costs about a quarter of what it did:
-on an Apple-silicon laptop at 200x60, twelve faces went from 4.3ms to 1.0ms in
-pyclock.py and from 0.17ms to 0.09ms in clock.go.
+**Drawing.** The rim and the hour ticks are drawn once per face size instead of
+once per frame, cells become braille through a table, and three caches answer
+the questions a frame asks again and again -- a face by where its hands stand,
+the whole frame by what it was drawn from, `--scale auto` by what it was asked.
+A frame that says nothing new is now answered from memory.
 
-And on a terminal the clock writes only the rows that changed. At 19ms the
-second hand advances a fifth of a dot, so a frame changes the two or three rows
-the hands are crossing and the line with the milliseconds on it -- against
-which repainting the lot was 20KB down the pty, fifty-two times a second, for
-about 1KB of news. A frame with nothing new in it, which is what a held clock
-and a pinned one draw, now writes nothing at all. The emulator at the other end
-was paying for every one of those bytes, and that is not a cost `top` shows
-against the clock.
+**Painting.** On a terminal only the rows that changed are written, and a frame
+that changed nothing writes nothing. With the hands stepping and the readout at
+tenths, a frame differs 13 to 18 times a second instead of every one of 52.
 
-Measured end to end under a pty, same machine, one run after the other:
-`pyclock.py` went from 36-39% of a core to 15-26%, and `clock` from 6-9% to
-under 6%, in both cases depending on how many faces are up and on what else the
-machine is doing. What either one sends fell from about 1.1MB a second to
-between a sixth and a fourteenth of that.
+Measured under a pty against 0.4.3, same machine, one run after the other, at
+200x60: `pyclock.py` went from 34-36% of a core to under 6%, `clock` from 7-9%
+to about 2%, and what either sends from about 1.1MB a second to about 45KB.
 
-What is left is the frame rate itself: 19ms is there so the millisecond readout
-reads as a live clock, and in Python that is most of what remains.
+**`--readout ms|tenths|seconds`.** How finely the readout shows the time, which
+is also how often it changes -- and it changes more often than anything else
+on screen, so it decides how often a frame differs at all. That is the number
+a terminal charges for. One clock, measured as each terminal's own CPU at its
+default window size, once it had settled, the median of three runs:
 
-**`--fps`, and `CLOCK_FPS` beside it.** The rate is now a knob, because the
-repaint above made it one. A frame with nothing new in it writes nothing, so
-what a terminal is charged is one screen update per frame that did change --
-and terminals differ wildly in what they charge for that. The same clock in an
-80x25 window, measured as each terminal's own CPU on an Apple-silicon laptop:
-Ghostty 1.3.1 10%, Terminal.app 24%, iTerm2 3.6.11 80%, with the clock process
-itself near 1% in all three. In iTerm2 the cost turned out to be flat in how
-much changed -- fifty-two updates a second writing one row cost 62.2%, writing
-twenty-five rows cost 62.9% -- so bytes were never the lever and frequency was
-the only one left.
+| | Ghostty 1.3.1, 100x36 | iTerm2 3.6.11, 80x25 |
+|---|---|---|
+| idle: a shell, nothing drawing | 0% | 5% |
+| 0.4.3 | 27% | 67% |
+| 0.5.0, `--readout ms` | 11% | 61% |
+| 0.5.0, `--readout tenths` (the default) | 6% | 29% |
+| 0.5.0, `--readout seconds` | 3% | 18% |
 
-`clock --fps 20` repaints twenty times a second instead of fifty-two, and the
-drawing cost falls about in step. `CLOCK_FPS` says the same thing once per
-terminal, the flag winning if both are given, and a value it cannot read is
-ignored rather than refused -- the rule `CLOCK_CELL_RATIO` already set, for a
-variable that lives in a shell profile where it can go stale. It takes 1 to
-1000 and rounds the gap to whole milliseconds. What it costs is the sweep, and
-the readout first: any gap that is a multiple of 10ms leaves the milliseconds'
-last digit sitting on 0, which is the whole reason the default gap is 19ms and
-not 20.
+Out of the box that is about a fifth of what Ghostty spent drawing 0.4.3, and
+well under half of what iTerm2 did.
 
-There is a new harness for the part of this that nothing else could see.
+iTerm2 charges per update almost whatever it contains -- fifty-two updates a
+second writing one row cost it about what writing twenty-five rows did -- which
+is why tenths is the default: fast enough to read as a live clock, and a fifth
+of the updates milliseconds cost. Every precision truncates, so the readout
+never shows a tenth that has not arrived. A coarser readout is narrower, and so
+is the narrowest column a face can have: on the smallest faces a few more fit.
+
+**`--fps N`, and `CLOCK_FPS` beside it.** How often the clock looks at the
+frame at all -- hands and readout together, and the clock's own wakeups. It is
+the blunt knob where `--readout` is the targeted one: below a hand's step rate
+the hand skips dots, and any gap that is a multiple of 10ms parks the
+milliseconds' last digit on 0, which is why the default gap stays 19ms. It
+takes 1 to 1000. `CLOCK_FPS` says the same once per terminal, the flag winning;
+a value it cannot read is ignored rather than refused, the rule
+`CLOCK_CELL_RATIO` already set for a variable that lives in a shell profile.
+
+There is a new harness for the part of this nothing else could see.
 `tools/painttest.py` runs each clock under a pty, replays what it painted onto
 a model of a terminal, and compares that screen against the one the same frames
 would have left painted whole -- and holds the shortcut to being one: identical
 frames have to go out silent, and a window that changed shape has to be
 repainted entire. `tools/keytest.py` reads the same model now, since a repaint
-is no longer a frame it can read off the stream.
+is no longer a frame it can read off the stream. difftest walks the hands
+through hundreds of steps in both ports, and the readout through each
+precision at the instants where truncating and rounding part company.
 
 ## 0.4.3
 

@@ -69,7 +69,7 @@ USAGE = """clock - analog terminal clocks
 
 usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
              [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
-             [--cell-ratio N] [--scale N] [--fps N] [ZONES]
+             [--cell-ratio N] [--scale N] [--fps N] [--readout UNIT] [ZONES]
 
   ZONES              comma-separated zone names, described below; default is
                       your local zone
@@ -93,6 +93,9 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
   --fps N            repaints a second, 1 to 1000; the default is the 19ms
                       tick, a shade over 52. Lower it where the terminal
                       costs more to draw the clock than the clock does to run
+  --readout UNIT     how finely the readout shows the time: tenths (default),
+                      seconds or ms. Each changes as often as it is precise,
+                      faster than anything else on screen, so coarser is cheaper
   -h, --help         this message
   --version          print the version and exit
 
@@ -114,16 +117,17 @@ the window, and then the alignment decides where the grid sits. CLOCK_CELL_RATIO
 sets the same thing as --cell-ratio, for when it wants to be set once per
 terminal rather than typed every time; the flag wins if both are given.
 
-The clock looks at the frame every 19ms, which is what sweeps the second hand
-and moves the milliseconds on the readout, and writes only the rows that
-changed since the last one -- so a clock with nothing new to say is silent. A
-frame that did change is one screen update though, and some terminals charge
-for an update whatever it contains; --fps sets how often to look, and
-CLOCK_FPS sets it once per terminal rather than every time, the flag winning
-if both are given. The drawing cost falls about in step with the rate. The
-readout is what goes first, and not only at low rates: any gap that is a
-multiple of 10ms leaves the milliseconds' last digit sitting on 0, --fps 100
-as surely as --fps 10, which is why the default gap is 19ms and not 20.
+The clock looks at the frame every 19ms and writes only the rows that changed
+since the last one, so a clock with nothing new to say is silent. The hands
+step only when their tips move a dot, a few times a second, and the readout
+changes as often as it is precise: ten times a second by default, once with
+--readout seconds, and every time the clock looks with --readout ms. Some
+terminals charge for every update whatever it contains, so that is the cost
+to choose by. --fps sets how often the clock looks at all, hands and readout
+together, and CLOCK_FPS sets it once per terminal rather than every time, the
+flag winning if both are given. Any gap that is a multiple of 10ms leaves the
+milliseconds' last digit sitting on 0, which is why the default gap is 19ms
+and not 20.
 
 Space holds the frame still, for a screenshot, h or ? opens the key list, and
 r resizes and aligns the clocks while they run. S saves those sizes and the
@@ -214,6 +218,19 @@ MAX_FPS = 1000  # a tick of one millisecond, which is as fine as the gap is meas
 # a second hand that steps where it used to glide.
 PAINT_EVERY = TICK
 
+# READOUT is how finely digital() shows the time: one of READOUTS, set for real
+# in run(). It is also, in effect, the readout's refresh rate, and the clock's
+# highest one -- the hands step only when their tips move a dot, a few times a
+# second, so the milliseconds are what make a frame differ every frame, and a
+# coarser readout is a frame that differs ten times a second, or once -- which
+# is why the default is tenths: fast enough to read as a live clock, and a fifth
+# of the updates milliseconds cost a terminal that charges per update, which is
+# the expensive kind. Unlike a
+# rate it cannot be wrong about the instant: the text is always the true time
+# at the precision shown, so a still of a pinned clock still says exactly when
+# it is.
+READOUT = "tenths"
+
 
 def tick_for(fps):
     """The gap between repaints at a given rate, to the nearest millisecond.
@@ -256,9 +273,9 @@ COLS = math.floor(ROWS * DEFAULT_CELL_RATIO + 0.5)  # face width, in terminal co
 # wider of the two. Without this a narrow enough window lays out by face width
 # and then writes a readout straight past the right edge -- which wraps, and a
 # wrapped line desynchronises the rewind exactly as fit_per_row exists to
-# prevent. The weekday is the same problem solved the other way: at DAY_COLS it
-# is dropped rather than widening every cell to hold it.
-READOUT_COLS = 12
+# prevent. The weekday is the same problem solved the other way: at day_cols()
+# it is dropped rather than widening every cell to hold it. See readout_cols()
+# for how wide that is, which depends on --readout.
 GAP = 3  # fewest blank columns between adjacent faces
 VGAP = 1  # fewest blank rows between rows of faces
 
@@ -792,6 +809,9 @@ WHENS = ("always", "auto", "never")
 # --color takes "off" too, alongside "never": both disable colour, but "off"
 # is the more obvious word for it.
 COLOR_WHENS = ("always", "auto", "never", "off")
+# How finely the time under each face can be shown, finest first, and what
+# --readout accepts.
+READOUTS = ("ms", "tenths", "seconds")
 
 # braille dot bit for (x % 2, y % 4); the block starts at U+2800
 DOT_BITS = ((0x01, 0x02, 0x04, 0x40), (0x08, 0x10, 0x20, 0x80))
@@ -1002,8 +1022,65 @@ def static_dial(cols, rows):
     return canvas.cells
 
 
+def steps_around(length):
+    """How many places a hand of this length can stand in one turn of a face.
+
+    One for each dot its tip passes on the way round, near enough, taking the
+    wider of the two radii so the tip never skips one. Finer than that changes
+    nothing the tip can show: it only re-rounds the dots further down the hand,
+    one or two at a time, so that a hand drawn at every instant flickered along
+    its length forty or fifty times a second while its tip moved four -- and
+    every flicker was a frame that differed, which is what a terminal is
+    charged for. Stepped this way the second hand changes exactly when its tip
+    moves, as a watch's does, and the minute and hour hands at the same pace
+    for their own lengths: every six seconds or so, and every couple of
+    minutes. clock.go's stepsAround is the same expression.
+    """
+    return max(1, math.floor(2 * math.pi * max(COLS, 2 * ROWS) * length + 0.5))
+
+
+def hand_steps(now):
+    """Where the three hands stand at `now`, each in whole steps round the dial.
+
+    What a face draws, and so what one is cached under.
+    """
+    frac = now.microsecond / 1e6
+    turns = (
+        (now.hour % 12 + now.minute / 60 + now.second / 3600) / 12,
+        (now.minute + (now.second + frac) / 60) / 60,
+        (now.second + frac) / 60,
+    )
+    return tuple(math.floor(turn * steps_around(length))
+                 for (length, _, _), turn in zip(HANDS, turns))
+
+
+# Faces drawn, by what they were drawn from: the size, the colour and where the
+# hands stand -- not the time, which only reaches a face through its hands. The
+# readout under a face changes every frame and the face only when a hand steps,
+# a few times a second, so most frames find every face here and draw none of
+# them. Cleared wholesale when it fills, which with a dozen zones on screen is
+# every few seconds and costs one frame a redraw it would have done anyway.
+FACE_CACHE = {}
+FACE_CACHE_MAX = 256
+
+
 def face(now, color):
-    """Render one analog face for `now`, returning a list of cell rows."""
+    """Render one analog face for `now`, returning a list of cell rows.
+
+    The list may be shared with the cache, and so with every other face drawn
+    from the same key: callers read it and never change it.
+    """
+    key = (COLS, ROWS, color, hand_steps(now))
+    rows = FACE_CACHE.get(key)
+    if rows is None:
+        if len(FACE_CACHE) >= FACE_CACHE_MAX:
+            FACE_CACHE.clear()
+        rows = FACE_CACHE[key] = draw_face(key[3], color)
+    return rows
+
+
+def draw_face(steps, color):
+    """face without the cache."""
     rx, ry = COLS, 2 * ROWS
     # Horizontally the centre sits on a cell boundary, vertically in the middle
     # of a row. The dot grid mirrors about both, which is what makes 09 and 03
@@ -1014,14 +1091,9 @@ def face(now, color):
     # came up; only the hands are left to put on.
     canvas.cells = [row[:] for row in static_dial(COLS, ROWS)]
 
-    # hands: fractional seconds drive the sweep
-    frac = now.microsecond / 1e6
-    turns = (
-        (now.hour % 12 + now.minute / 60 + now.second / 3600) / 12,
-        (now.minute + (now.second + frac) / 60) / 60,
-        (now.second + frac) / 60,
-    )
-    for (length, thick, layer), turn in zip(HANDS, turns):
+    # hands: fractional seconds drive the sweep, a step at a time
+    for (length, thick, layer), step in zip(HANDS, steps):
+        turn = step / steps_around(length)
         spoke(canvas, COLS, ROWS, 2 * math.pi * turn, 0, length, thick, True, layer)
 
     rows = canvas.rows()
@@ -1258,6 +1330,10 @@ class Options:
         # stale or be meant for something else entirely, so a value that does
         # not parse is ignored rather than refused. --fps says the same thing
         # and wins.
+        # How finely the readout shows the time: one of READOUTS. Not a knob
+        # for the tuner either, for the same reason --day is not: it changes
+        # what a readout says, not where anything sits.
+        self.readout = "tenths"
         self.fps = 0
         env = os.environ.get("CLOCK_FPS", "")
         if env:
@@ -1384,6 +1460,13 @@ def parse_args(argv, opt):
                 if val != "auto":
                     parse_count(val, "--per-row", MAX_PER_ROW)
                 opt.vals[TUNE_PER_ROW] = canon_tune(TUNE_PER_ROW, val)
+            elif name == "readout":
+                if not sep:
+                    i += 1
+                    if i >= len(argv):
+                        raise ClockError("--readout needs a value, e.g. --readout tenths")
+                    val = argv[i]
+                opt.readout = parse_choice("readout", val, READOUTS)
             elif name == "fps":
                 if not sep:
                     i += 1
@@ -2284,10 +2367,27 @@ def fit_label(label, n):
 # on every machine.
 DAY_NAMES = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 
-# The width of "Mon 05:02:41.901", against the bare readout's 12. A face
-# narrower than this would shove the columns to its right out of true, so a
-# very low CLOCK_CELL_RATIO loses the weekday rather than the alignment.
-DAY_COLS = 16
+def readout_cols():
+    """How wide digital()'s readout is, and so the narrowest a face's column gets.
+
+    "02:53:07.1" at the default tenths, twelve characters at ms, eight at
+    seconds. The width of the readout actually shown, not of the widest there
+    could be: a cell sized for milliseconds under a tenths readout leaves the
+    smallest faces with nothing reaching their cell's edge, and a right-aligned
+    grid of them ends a column short of the window. fitfuzz found exactly that.
+    clock.go's readoutCols is the same table.
+    """
+    return {"ms": 12, "seconds": 8}.get(READOUT, 10)
+
+
+def day_cols():
+    """The readout's width with a weekday on it: four more at any precision.
+
+    A face narrower than this would shove the columns to its right out of
+    true, so a very low CLOCK_CELL_RATIO loses the weekday rather than the
+    alignment.
+    """
+    return readout_cols() + 4
 
 
 def show_weekday(faces, now, when):
@@ -2305,7 +2405,7 @@ def show_weekday(faces, now, when):
     A face too narrow to hold the weekday loses it whatever the setting says,
     since the alternative is a grid out of true.
     """
-    if when == "never" or COLS < DAY_COLS or not faces:
+    if when == "never" or COLS < day_cols() or not faces:
         return False
     if when == "always":
         return True
@@ -2314,8 +2414,18 @@ def show_weekday(faces, now, when):
 
 
 def digital(t, weekday):
-    """The clock under one face: 12 characters, or 16 with a weekday on it."""
-    clock = f"{t:%H:%M:%S}.{t.microsecond // 1000:03d}"
+    """The clock under one face: 12 characters at most, or 16 with a weekday.
+
+    A coarser --readout is shorter, and the cell it sits in narrower with it:
+    see readout_cols(). Truncated, not rounded, at every precision -- integer
+    division here, Format's dropped digits in clock.go -- so the readout never
+    shows a tenth or a second that has not arrived yet.
+    """
+    clock = f"{t:%H:%M:%S}"
+    if READOUT == "ms":
+        clock += f".{t.microsecond // 1000:03d}"
+    elif READOUT == "tenths":
+        clock += f".{t.microsecond // 100000}"
     if not weekday:
         return clock
     # isoweekday is Mon=1..Sun=7, and % 7 turns that into Go's Sun=0
@@ -2633,7 +2743,35 @@ Layout = collections.namedtuple(
 )
 
 
+# The frame last drawn, and what it was drawn from: the size, the layout, the
+# colour, and for each face its label, where its hands stand and what its
+# readout says. Not the time, which reaches a frame only through those. With
+# the hands stepping a few times a second and a readout coarser than
+# milliseconds, most frames are the one before them; answering those from here
+# leaves a tick the cost of reading the time, rather than of assembling sixty
+# rows to find they say nothing new.
+FRAME_MEMO = [None, None]
+
+
 def frame(faces, now, per_row, color, day_when, lay):
+    """The whole grid for `now`, remembered.
+
+    The list may be the one returned last time: callers read it, and copy it
+    before changing it, as overlay_modal does.
+    """
+    weekday = show_weekday(faces, now, day_when)
+    key = (ROWS, COLS, per_row, color, lay, tuple(
+        (label, hand_steps(t), digital(t, weekday))
+        for label, t in ((label, in_zone(now, z)) for label, z in faces)
+    ))
+    if key == FRAME_MEMO[0]:
+        return FRAME_MEMO[1]
+    rows = draw_frame(faces, now, per_row, color, day_when, lay)
+    FRAME_MEMO[0], FRAME_MEMO[1] = key, rows
+    return rows
+
+
+def draw_frame(faces, now, per_row, color, day_when, lay):
     """Draw the whole grid: faces left to right, wrapping every per_row.
 
     A short last row keeps the gutters and margin of a full one, so the
@@ -2863,7 +3001,7 @@ def term_size():
 
 def cell_cols():
     """How wide one face's column is: the face, or its readout if that is wider."""
-    return max(COLS, READOUT_COLS)
+    return max(COLS, readout_cols())
 
 
 def fit_per_row(want, n, term_cols, gap):
@@ -2899,7 +3037,32 @@ def fit_height(chunks, term_rows, vgap):
         )
 
 
+# The sizes auto_scale settled on, by what it was asked. It is asked every
+# frame, because the window or the tuner may have moved since the last one, and
+# almost every frame the answer is the one it gave last time: the search tries
+# every size from the largest down, which was a millisecond of each frame here
+# for the sake of saying the same thing again. A handful of entries over a
+# session -- one per window shape and per tuning -- cleared wholesale in the
+# unlikely event it fills.
+SCALE_CACHE = {}
+SCALE_CACHE_MAX = 256
+
+
 def auto_scale(want_per_row, num_faces, cols, lines, hpad, vpad):
+    """search_scale, remembered: the same question gets the same ROWS and COLS."""
+    global ROWS, COLS
+    key = (want_per_row, num_faces, cols, lines, hpad, vpad, CELL_RATIO)
+    got = SCALE_CACHE.get(key)
+    if got is not None:
+        ROWS, COLS = got
+        return
+    if len(SCALE_CACHE) >= SCALE_CACHE_MAX:
+        SCALE_CACHE.clear()
+    search_scale(want_per_row, num_faces, cols, lines, hpad, vpad)
+    SCALE_CACHE[key] = (ROWS, COLS)
+
+
+def search_scale(want_per_row, num_faces, cols, lines, hpad, vpad):
     """What --scale auto resolves to every frame.
 
     The largest ROWS (and its matching COLS) that lets num_faces fit
@@ -3253,9 +3416,10 @@ def run(argv):
     color = use_color(opt.color_when)
     # Before sequence() below, which takes its default step from the gap, and
     # before the sleep that waits it out.
+    global PAINT_EVERY, READOUT
     if opt.fps:
-        global PAINT_EVERY
         PAINT_EVERY = tick_for(opt.fps)
+    READOUT = opt.readout
 
     # The six knobs, as text, are the whole of the layout state: --cell-ratio
     # has already beaten CLOCK_CELL_RATIO in default_tunes, and a fixed

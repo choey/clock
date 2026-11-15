@@ -49,6 +49,8 @@ BASES = (
     ["--scale", "auto", "ET,PT"],
     ["--cell-ratio", "2.6", "UTC"],
     ["--fps", "20", "ET,PT"],
+    ["--readout", "tenths", "UTC"],
+    ["--readout=seconds", "--day=always", "ET,JP"],
     ["--fps=5", "UTC"],
     ["--hpad", "10%", "ET,PT"],
     ["--vpad", "5%", "ET,PT"],
@@ -93,7 +95,7 @@ ZONEISH = (
 
 FLAGS = ("-n", "--per-row", "--scale", "--cell-ratio", "--hpad", "--vpad",
          "--halign", "--valign", "--color", "--day", "-q", "--quiet",
-         "--no-color", "--no-day", "--fps", "-h", "--help", "--version", "--")
+         "--no-color", "--no-day", "--fps", "--readout", "-h", "--help", "--version", "--")
 
 # Environment worth varying. TZ and CLOCK_CELL_RATIO are read by the clock
 # itself; COLUMNS and LINES stand in for the window, which is what makes a case

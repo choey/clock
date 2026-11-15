@@ -177,7 +177,7 @@ build-tagged `term_*.go` files, and naming a single file skips them.
 ```
 clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
       [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
-      [--cell-ratio N] [--scale N] [--fps N] [ZONES]
+      [--cell-ratio N] [--scale N] [--fps N] [--readout UNIT] [ZONES]
 ```
 
 With no arguments you get one clock, in your local zone. Otherwise `ZONES` is a
@@ -289,7 +289,7 @@ up a weekday:
 
 ```
           PDT                       EDT                       UTC
-   Tue 22:02:41.901          Wed 01:02:41.901          Wed 05:02:41.901
+    Tue 22:02:41.9            Wed 01:02:41.9            Wed 05:02:41.9
 ```
 
 The weekday is absolute rather than a `-1d` counted from some reference face:
@@ -316,9 +316,43 @@ one instant, usually to photograph, and an undated photograph records half of
 it — so a pinned frame carries its date even when every face agrees.
 `--day=auto` asks for the live rule back.
 
-A face has to be 16 columns wide to hold `Wed 05:02:41.901`, which it is at any
-`CLOCK_CELL_RATIO` from about 1.5 up. Below that the weekday is dropped rather
-than the alignment, whatever `--day` says.
+A weekday needs as many columns as the readout it rides on: 14 for the
+default's `Wed 05:02:41.9`, 16 for `--readout ms`, 12 for `--readout seconds`.
+A face at `--scale 1` has that at any `CLOCK_CELL_RATIO` from about 1.25 up,
+or 1.5 at `--readout ms`. Below that the weekday is dropped rather than the
+alignment, whatever `--day` says.
+
+### Readout precision
+
+The readout under each face shows tenths of a second by default —
+`09:53:07.1` — which is fast enough to read as a live clock. `--readout` says
+how finely instead:
+
+```sh
+clock --readout ms        # 09:53:07.123, the last two digits a blur while it runs
+clock --readout seconds   # 09:53:07, ticking over once a second
+```
+
+Each precision is also how often the readout changes, and the readout changes
+more often than anything else on screen, so it decides how often a frame
+differs at all — see [Repaint rate](#repaint-rate) for what that costs a
+terminal, which can be a great deal more than the clock costs itself.
+
+Every precision truncates rather than rounds, so the readout never shows a
+tenth or a second that has not arrived yet: at 09:53:07.987 it reads
+`09:53:07.9`, not `09:53:08.0`. A pinned clock still prints its exact instant,
+at whatever precision it was asked for.
+
+The precision also sets how narrow a face's column can be, since the readout
+under a face cannot be squeezed: a face smaller than its readout sits in a
+column as wide as the readout, 10 characters at the default, 12 at `ms` and 8
+at `seconds`. That only matters for the smallest faces — a low cell ratio, or
+a window crowded with zones — where a coarser readout lets a few more fit.
+
+Like `--day` and `--color` it decides what a readout says rather than where
+anything sits, so the tuner does not offer it and `S` does not save it. Put it
+in the preferences file by hand, as `--readout=seconds` on a line of its own,
+to make it stick.
 
 ### Keys
 
@@ -457,9 +491,9 @@ every harness in `tools/` runs with, for that reason.
 Space stops the clock where it stands; space again lets it go on. Nothing else
 changes — the frame stays on screen, the window can still be resized, and `q`
 still quits — so a screenshot taken while it is held catches a still face and a
-readout that agrees with it, down to the millisecond. Left to run, the second
-hand moves within a single screenshot's exposure and the milliseconds are a
-blur.
+readout that agrees with it, down to the tenth of a second — or the
+millisecond, with `--readout ms`. Left to run, the second hand moves within a
+single screenshot's exposure and the last digit is a blur.
 
 Holding is the only way to keep a frame you can see: quitting restores the
 screen underneath, exactly as `less` does, so the clocks are gone before you
@@ -620,7 +654,7 @@ side by side in July and the difference shows:
 ```
 $ clock PST,PT,PDT
           PST                     PDT/PT
-     12:00:00.000              13:00:00.000
+      12:00:00.0                13:00:00.0
 ```
 
 `PST` stays on −08:00 while `PT` has moved to `PDT` — and `PT` and `PDT`, being
@@ -892,64 +926,101 @@ clock --scale auto -n auto   # the defaults; only worth naming to be explicit
 
 ### Repaint rate
 
-The clock looks at the frame every 19ms — about 52 times a second — which is
-what sweeps the second hand smoothly and keeps the milliseconds on the readout
-moving. On a terminal it writes only the rows that differ from the ones already
-up, so a clock with nothing new to say says nothing at all: hold the frame with
-space and it stops writing entirely.
+The clock looks at the frame every 19ms — a shade over 52 times a second — and
+on a terminal writes only the rows that changed since the last one. So what it
+costs to watch is how often its frame *differs*, and each part of it is drawn
+to differ as seldom as it can while still showing everything there is to see:
 
-A frame that *did* change is one screen update, though, and an update is what
-some terminals charge for. One clock in an 80x25 window, measured on an
-Apple-silicon laptop as each terminal's own CPU while it drew it:
-
-| terminal | its CPU |
+| part | changes |
 |---|---|
-| Ghostty 1.3.1 | 10% |
-| Terminal.app | 24% |
-| iTerm2 3.6.11 | 80% |
+| the dial — rim, ticks, numerals | never; drawn once per face size |
+| the second hand | each time its tip reaches the next dot: 4–11 times a second at the sizes below |
+| the minute hand | every 6–17 seconds at those sizes |
+| the hour hand | every 2–5 minutes at those sizes |
+| the readout | as often as it is precise: ten times a second at the default |
 
-Those numbers belong to that machine and those versions, as every measurement
-here does. What is worth taking from them is the shape: the clock process
-itself is about 1% in all three, so the difference is entirely what the
-terminal spends drawing — and for at least one of them that cost is flat in how
-much changed, writing a single row costing the same as writing the whole
-window. Then the only thing left to move is how often.
+A smaller face steps its hands less often, having fewer dots to step through.
 
-`--fps` is that knob, and the cost falls about in step with it:
+The hands stand on steps, one for each dot their tip passes on the way round,
+so a hand changes exactly when its tip moves — as a watch's does — rather
+than flickering dots along its length in between. That makes the readout the
+fastest thing on screen, and so the thing that sets the pace. Frames that
+differ, per second, over a pinned run at the real 19ms tick:
+
+| `--readout` | 80x25, one face | 200x60, one face | 200x60, four faces |
+|---|---|---|---|
+| `ms` | 52.6 | 52.6 | 52.6 |
+| `tenths` (default) | 13.4 | 18.1 | 14.1 |
+| `seconds` | 5.3 | 10.7 | 5.9 |
+
+That matters because of the terminal. A frame that differs is one screen
+update, and an update is what a terminal charges for — in some of them, far
+more than the clock costs itself. One clock, measured as each terminal's own
+CPU on an Apple-silicon laptop, each at its default window size, the median of
+three runs taken once the terminal had settled:
+
+| | Ghostty 1.3.1, 100x36 | iTerm2 3.6.11, 80x25 |
+|---|---|---|
+| idle: a shell, nothing drawing | 0% | 5% |
+| `--readout ms` | 11% | 61% |
+| `--readout tenths` (the default) | 6% | 29% |
+| `--readout seconds` | 3% | 18% |
+
+The clock process itself was 1.4–2.6% in every one of those. The numbers
+belong to that machine and those versions, as every measurement here does;
+what is worth taking from them is the shape. iTerm2 charges per update almost
+whatever it contains — writing one row costs it about what writing the whole
+window does — so for it the count of frames that differ is everything.
+Ghostty charges more nearly for what changed.
+
+Measure a terminal of your own the same way, and let it settle first: a
+terminal works several times harder than its idle for its first seconds after
+launch, and for a few seconds after a clock leaves the alternate screen, and a
+sample that lands in either says more about the terminal than the clock.
+
+`--readout` and `--fps` both lower that cost, and they are not the same knob:
+
+- `--readout` changes only the text. The hands still move the moment their
+  tips can show a new dot, and the readout shows exactly the precision it
+  claims, so it never shows digits it is not keeping up with. It is the
+  targeted one: coarser text is fewer frames that differ, and nothing else
+  changes.
+- `--fps` changes how often the clock looks at anything at all — hands and
+  readout together — and so how often the clock itself wakes. It is the blunt
+  one. Below a hand's own step rate the hand starts to skip dots rather than
+  step through them, and any gap that is a multiple of 10ms parks the
+  milliseconds' last digit on 0 under `--readout ms`, `--fps 100` as surely as
+  `--fps 10`. That is why the default gap is 19ms and not 20.
+
+They combine: `--readout seconds --fps 20` looks twenty times a second and
+repaints only when a hand steps or the second turns over.
 
 ```sh
-clock --fps 20        # 20 repaints a second instead of 52
+clock --readout seconds   # the cheapest readout, the hands as smooth as ever
+clock --fps 20            # twenty looks a second instead of 52, for everything
 ```
+
+`--fps` takes 1 to 1000 and sets the gap to the nearest whole millisecond, so
+`--fps 20` is 50ms and `--fps 3` is 333ms.
 
 `CLOCK_FPS` sets the same thing, for a terminal you'd rather configure once
 than pass a flag to every time; `--fps` wins if both are set. As with
 `CLOCK_CELL_RATIO`, a value it cannot use leaves the default standing rather
 than failing — an environment variable may be stale or meant for another
-program, which is not the same as a typo on the command line.
+program, which is not the same as a typo on the command line. iTerm2, Ghostty
+and Terminal.app each set `TERM_PROGRAM`, so one shell profile can treat them
+apart:
 
 ```sh
-CLOCK_FPS=20 clock    # or pyclock; both read it
+[ "$TERM_PROGRAM" = "iTerm.app" ] && export CLOCK_FPS=20   # or pyclock; both read it
 ```
 
-It takes 1 to 1000 and sets the gap to the nearest whole millisecond, so
-`--fps 20` is 50ms and `--fps 3` is 333ms. What you give up is the sweep: low
-enough and the second hand steps where it used to glide.
-
-The readout goes first, and it is the gap that decides, not the rate — any gap
-that is a multiple of 10ms leaves the milliseconds' last digit sitting on 0, so
-`--fps 100` stops it just as dead as `--fps 10` does. A gap that shares only a
-factor of 5 with 10, like `--fps 40`'s 25ms, gets two digits; one coprime to
-10, like the default 19ms or `--fps 333`'s 3ms, gets all ten. That is the whole
-reason the default gap is 19ms rather than 20.
-
-It is a rate and not a layout knob, so the tuner does not offer it and `S` does
-not save it. Putting it in the preferences file by hand works, since that file
-is read as the front of your command line — one token per line, so `--fps=5` on
-a line of its own, or `--fps` and `5` on two — but the next `S` writes the file
-back without it.
-
-The order is the usual one: `CLOCK_FPS`, then the preferences file, then the
-command line, last one winning.
+Neither is a layout knob, so the tuner does not offer them and `S` does not
+save them. Putting them in the preferences file by hand works, since that file
+is read as the front of your command line — one token per line, so `--fps=5`
+on a line of its own, or `--fps` and `5` on two — but the next `S` writes the
+file back without them. The order is the usual one: `CLOCK_FPS`, then the
+preferences file, then the command line, last one winning.
 
 ## Terminal requirements
 

@@ -76,7 +76,7 @@ const usage = `clock - analog terminal clocks
 
 usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
              [--halign WHERE] [--valign WHERE] [--hpad SPACE] [--vpad SPACE]
-             [--cell-ratio N] [--scale N] [--fps N] [ZONES]
+             [--cell-ratio N] [--scale N] [--fps N] [--readout UNIT] [ZONES]
 
   ZONES              comma-separated zone names, described below; default is
                       your local zone
@@ -100,6 +100,9 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
   --fps N            repaints a second, 1 to 1000; the default is the 19ms
                       tick, a shade over 52. Lower it where the terminal
                       costs more to draw the clock than the clock does to run
+  --readout UNIT     how finely the readout shows the time: tenths (default),
+                      seconds or ms. Each changes as often as it is precise,
+                      faster than anything else on screen, so coarser is cheaper
   -h, --help         this message
   --version          print the version and exit
 
@@ -121,16 +124,17 @@ the window, and then the alignment decides where the grid sits. CLOCK_CELL_RATIO
 sets the same thing as --cell-ratio, for when it wants to be set once per
 terminal rather than typed every time; the flag wins if both are given.
 
-The clock looks at the frame every 19ms, which is what sweeps the second hand
-and moves the milliseconds on the readout, and writes only the rows that
-changed since the last one -- so a clock with nothing new to say is silent. A
-frame that did change is one screen update though, and some terminals charge
-for an update whatever it contains; --fps sets how often to look, and
-CLOCK_FPS sets it once per terminal rather than every time, the flag winning
-if both are given. The drawing cost falls about in step with the rate. The
-readout is what goes first, and not only at low rates: any gap that is a
-multiple of 10ms leaves the milliseconds' last digit sitting on 0, --fps 100
-as surely as --fps 10, which is why the default gap is 19ms and not 20.
+The clock looks at the frame every 19ms and writes only the rows that changed
+since the last one, so a clock with nothing new to say is silent. The hands
+step only when their tips move a dot, a few times a second, and the readout
+changes as often as it is precise: ten times a second by default, once with
+--readout seconds, and every time the clock looks with --readout ms. Some
+terminals charge for every update whatever it contains, so that is the cost
+to choose by. --fps sets how often the clock looks at all, hands and readout
+together, and CLOCK_FPS sets it once per terminal rather than every time, the
+flag winning if both are given. Any gap that is a multiple of 10ms leaves the
+milliseconds' last digit sitting on 0, which is why the default gap is 19ms
+and not 20.
 
 Space holds the frame still, for a screenshot, h or ? opens the key list, and
 r resizes and aligns the clocks while they run. S saves those sizes and the
@@ -157,6 +161,9 @@ var (
 	colorWhens = []string{"always", "auto", "never", "off"}
 	haligns    = []string{"left", "center", "right"}
 	valigns    = []string{"top", "center", "bottom"}
+	// readouts is how finely the time under each face can be shown, finest
+	// first, and what --readout accepts.
+	readouts = []string{"ms", "tenths", "seconds"}
 )
 
 // needs is the example each of the four layout flags gives when handed no
@@ -257,6 +264,19 @@ var colsN = int(math.Floor(defaultRowsN*defaultCellRatio + 0.5))
 // Lowering the rate is the only thing that buys that back, and what it costs
 // is a second hand that steps where it used to glide.
 var paintEvery = tick
+
+// readout is how finely digital shows the time: one of readouts, set for real
+// in run(). It is also, in effect, the readout's refresh rate, and the clock's
+// highest one -- the hands step only when their tips move a dot, a few times a
+// second, so the milliseconds are what make a frame differ every frame, and a
+// coarser readout is a frame that differs ten times a second, or once --
+// which is why the default is tenths: fast enough to read as a live clock, and
+// a fifth of the updates milliseconds cost a terminal that charges per update,
+// which is the expensive kind. Unlike
+// a rate it cannot be wrong about the instant: the text is always the true
+// time at the precision shown, so a still of a pinned clock still says
+// exactly when it is.
+var readout = "tenths"
 
 // tickFor is the gap between repaints at a given rate, to the nearest whole
 // millisecond.
@@ -1070,9 +1090,74 @@ func staticDial(cols, rows int) []uint8 {
 	return c.cells
 }
 
+// stepsAround is how many places a hand of this length can stand in one turn
+// of a face colsN by rowsN: one for each dot its tip passes on the way round,
+// near enough, taking the wider of the two radii so the tip never skips one.
+//
+// Finer than that changes nothing the tip can show. It only re-rounds the dots
+// further down the hand, one or two at a time, so that a hand drawn at every
+// instant flickered along its length forty or fifty times a second while its
+// tip moved four -- and every flicker was a frame that differed, which is
+// what a terminal is charged for. Stepped this way the second hand changes
+// exactly when its tip moves, as a watch's does, and the minute and hour hands
+// at the same pace for their own lengths: every six seconds or so, and every
+// couple of minutes.
+func stepsAround(length float64) float64 {
+	return math.Max(1, math.Floor(2*math.Pi*math.Max(float64(colsN), float64(2*rowsN))*length+0.5))
+}
+
+// handSteps is where the three hands stand at t, each as a whole number of
+// steps round the dial: what a face draws, and so what one is cached under.
+func handSteps(t time.Time) [3]int {
+	frac := float64(t.Nanosecond()) / 1e9
+	sec, min, hr := float64(t.Second()), float64(t.Minute()), float64(t.Hour()%12)
+	turns := [3]float64{
+		(hr + min/60 + sec/3600) / 12,
+		(min + (sec+frac)/60) / 60,
+		(sec + frac) / 60,
+	}
+	var steps [3]int
+	for i, h := range hands {
+		steps[i] = int(math.Floor(turns[i] * stepsAround(h.length)))
+	}
+	return steps
+}
+
+// faceKey is everything a face's rows depend on. Not the time: the time only
+// reaches a face through where its hands stand.
+type faceKey struct {
+	cols, rows int
+	color      bool
+	steps      [3]int
+}
+
+// faces drawn, by what they were drawn from. The readout under a face changes
+// every frame, the face itself only when a hand steps -- a few times a second
+// -- so most frames find every face here and draw none of them. Cleared
+// wholesale when it fills, which with a dozen zones on screen is every few
+// seconds and costs one frame a redraw it would have done anyway.
+var faceCache = map[faceKey][]string{}
+
+const faceCacheMax = 256
+
 // face renders one analog face for t, returning its cell rows. Every face is
-// colsN cells wide and rowsN tall.
+// colsN cells wide and rowsN tall. The rows may be shared with the cache, and
+// so with every other face drawn from the same key: callers read them only.
 func face(t time.Time, color bool) []string {
+	key := faceKey{colsN, rowsN, color, handSteps(t)}
+	if rows, ok := faceCache[key]; ok {
+		return rows
+	}
+	if len(faceCache) >= faceCacheMax {
+		faceCache = map[faceKey][]string{}
+	}
+	rows := drawFace(key)
+	faceCache[key] = rows
+	return rows
+}
+
+// drawFace is face without the cache.
+func drawFace(key faceKey) []string {
 	rx, ry := float64(colsN), float64(2*rowsN)
 	// Horizontally the centre sits on a cell boundary, vertically in the middle
 	// of a row. The dot grid mirrors about both, which is what makes 09 and 03
@@ -1083,16 +1168,10 @@ func face(t time.Time, color bool) []string {
 	// size came up; only the hands are left to put on.
 	copy(c.cells, staticDial(colsN, rowsN))
 
-	// hands: fractional seconds drive the sweep
-	frac := float64(t.Nanosecond()) / 1e9
-	sec, min, hr := float64(t.Second()), float64(t.Minute()), float64(t.Hour()%12)
-	turns := [3]float64{
-		(hr + min/60 + sec/3600) / 12,
-		(min + (sec+frac)/60) / 60,
-		(sec + frac) / 60,
-	}
+	// hands: fractional seconds drive the sweep, a step at a time
 	for i, h := range hands {
-		spoke(c, colsN, rowsN, 2*math.Pi*turns[i], 0, h.length, h.thick, true, h.layer)
+		turn := float64(key.steps[i]) / stepsAround(h.length)
+		spoke(c, colsN, rowsN, 2*math.Pi*turn, 0, h.length, h.thick, true, h.layer)
 	}
 
 	rows := c.rows()
@@ -1119,7 +1198,7 @@ func face(t time.Time, color bool) []string {
 		}
 	}
 
-	if color {
+	if key.color {
 		for r := range rows {
 			rows[r] = colorize(rows[r], c.layers[r*c.cols:(r+1)*c.cols])
 		}
@@ -1427,8 +1506,12 @@ type options struct {
 	// Repaints per second, or zero for the tick. Not one of the six knobs
 	// below: those are the layout, which the tuner changes and S saves, and
 	// this changes nothing anyone can see in a still frame.
-	fps  int
-	vals [numTunes]string
+	fps int
+	// How finely the readout shows the time: one of readouts. Not a knob for
+	// the tuner either, for the same reason --day is not: it changes what a
+	// readout says, not where anything sits.
+	readout string
+	vals    [numTunes]string
 }
 
 // defaultOptions is a clock nobody has told anything: the flag defaults, and
@@ -1437,6 +1520,7 @@ func defaultOptions() options {
 	out := options{
 		colorWhen: "auto",
 		dayWhen:   "", // unset: run() picks it, since a pinned clock differs
+		readout:   "tenths",
 		vals:      defaultTunes(),
 	}
 	// Like CLOCK_CELL_RATIO, and unlike the harness's variables: this one is
@@ -1580,6 +1664,18 @@ func parseArgs(argv []string, opt options) (out options, err error) {
 					}
 				}
 				out.vals[tunePerRow] = canonTune(tunePerRow, val)
+			case "readout":
+				if !haveVal {
+					i++
+					if i >= len(argv) {
+						err = errors.New("--readout needs a value, e.g. --readout tenths")
+						return
+					}
+					val = argv[i]
+				}
+				if out.readout, err = parseChoice("readout", val, readouts); err != nil {
+					return
+				}
 			case "fps":
 				if !haveVal {
 					i++
@@ -2626,29 +2722,47 @@ func fitLabel(label string, n int) string {
 // keeps the two renders identical on every machine.
 var dayNames = [7]string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
 
-// dayCols is the width of "Mon 05:02:41.901", against the bare readout's 12.
-// A face narrower than this would shove the columns to its right out of true,
-// so a very low CLOCK_CELL_RATIO loses the weekday rather than the alignment.
-const dayCols = 16
+// dayCols is the width of the readout with a weekday on it -- "Mon
+// 05:02:41.9" at the default, four more than the bare readout at any
+// precision. A face narrower than this would shove the columns to its right
+// out of true, so a very low CLOCK_CELL_RATIO loses the weekday rather than
+// the alignment.
+func dayCols() int {
+	return readoutCols() + 4
+}
 
-// readoutCols is "02:53:07.123" -- what digital writes under every face, and
-// the narrowest a face's column can be however small the face itself gets. A
-// face is drawn to whatever colsN the scale asks for, but the readout
-// underneath is a fixed twelve characters and cannot be shrunk, so the *cell* a
-// face occupies is the wider of the two. Without this a narrow enough window
-// lays out by face width and then writes a readout straight past the right
-// edge -- which wraps, and a wrapped line desynchronises the rewind exactly as
-// fitPerRow exists to prevent. The weekday is the same problem solved the other
-// way: at dayCols it is dropped rather than widening every cell to hold it.
-const readoutCols = 12
+// readoutCols is how wide digital's readout is -- "02:53:07.1" at the default
+// tenths, twelve characters at ms, eight at seconds -- and so the narrowest a
+// face's column can be however small the face itself gets. A face is drawn to
+// whatever colsN the scale asks for, but the readout underneath cannot be
+// shrunk, so the *cell* a face occupies is the wider of the two. Without this a
+// narrow enough window lays out by face width and then writes a readout
+// straight past the right edge -- which wraps, and a wrapped line
+// desynchronises the rewind exactly as fitPerRow exists to prevent. The
+// weekday is the same problem solved the other way: at dayCols it is dropped
+// rather than widening every cell to hold it.
+//
+// The width of the readout actually shown, not of the widest there could be:
+// a cell sized for milliseconds under a tenths readout leaves the smallest
+// faces with nothing reaching their cell's edge, and a right-aligned grid of
+// them ends a column short of the window. fitfuzz found exactly that.
+func readoutCols() int {
+	switch readout {
+	case "ms":
+		return 12
+	case "seconds":
+		return 8
+	}
+	return 10
+}
 
 // cellCols is how wide one face's column is: the face, or its readout if that
 // is wider.
 func cellCols() int {
-	if colsN > readoutCols {
+	if colsN > readoutCols() {
 		return colsN
 	}
-	return readoutCols
+	return readoutCols()
 }
 
 // calDay is a calendar date, comparable with ==.
@@ -2675,7 +2789,7 @@ func dayOf(t time.Time) calDay {
 // A face too narrow to hold the weekday loses it whatever the setting says,
 // since the alternative is a grid out of true.
 func showWeekday(faces []dial, now time.Time, when string) bool {
-	if when == "never" || colsN < dayCols || len(faces) == 0 {
+	if when == "never" || colsN < dayCols() || len(faces) == 0 {
 		return false
 	}
 	if when == "always" {
@@ -2690,11 +2804,22 @@ func showWeekday(faces []dial, now time.Time, when string) bool {
 	return false
 }
 
-// digital renders the readout under one face: 12 characters, or 16 with a
-// weekday on it. In a grid an over-long line would shove every column to its
-// right out of true, which is what dayCols guards.
+// digital renders the readout under one face: 12 characters at most, or 16
+// with a weekday on it. In a grid an over-long line would shove every column
+// to its right out of true, which is what dayCols guards; a coarser --readout
+// is shorter, and the cell it sits in narrower with it -- see readoutCols.
+//
+// Truncated, not rounded, at every precision: Format drops the digits it is
+// not asked for, as pyclock.py's integer division does, so the readout never
+// shows a tenth or a second that has not arrived yet.
 func digital(t time.Time, weekday bool) string {
 	clock := t.Format("15:04:05.000")
+	switch readout {
+	case "tenths":
+		clock = t.Format("15:04:05.0")
+	case "seconds":
+		clock = t.Format("15:04:05")
+	}
 	if !weekday {
 		return clock
 	}
@@ -3190,7 +3315,64 @@ func (d *keyDecoder) settle() []string {
 
 // frame draws the whole grid: faces left to right, wrapping every perRow. A
 // short last row is left-aligned so the column gutters stay lined up.
+// frameIn is everything a frame's rows are drawn from. Not the time: the time
+// reaches a frame only through where each face's hands stand and what each
+// readout says.
+type frameIn struct {
+	rows, cols, perRow int
+	color              bool
+	lay                layout
+	faces              []frameFace
+}
+
+type frameFace struct {
+	label   string
+	steps   [3]int
+	readout string
+}
+
+func (a frameIn) same(b frameIn) bool {
+	if a.rows != b.rows || a.cols != b.cols || a.perRow != b.perRow ||
+		a.color != b.color || a.lay != b.lay || len(a.faces) != len(b.faces) {
+		return false
+	}
+	for i := range a.faces {
+		if a.faces[i] != b.faces[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// The frame last drawn, and what from. With the hands stepping a few times a
+// second and a readout coarser than milliseconds, most frames are the one
+// before them; answering those from here leaves a tick the cost of reading
+// the time, rather than of assembling sixty rows to find they say nothing new.
+var lastFrame struct {
+	in   frameIn
+	rows []string
+	have bool
+}
+
+// frame is the whole grid for now. The rows may be the ones it returned last
+// time: callers read them, and copy before changing them, as overlayModal does.
 func frame(faces []dial, now time.Time, perRow int, color bool, dayWhen string, lay layout) []string {
+	weekday := showWeekday(faces, now, dayWhen)
+	in := frameIn{rowsN, colsN, perRow, color, lay, make([]frameFace, len(faces))}
+	for i, d := range faces {
+		t := now.In(d.loc)
+		in.faces[i] = frameFace{d.label, handSteps(t), digital(t, weekday)}
+	}
+	if lastFrame.have && in.same(lastFrame.in) {
+		return lastFrame.rows
+	}
+	rows := drawFrame(faces, now, perRow, color, dayWhen, lay)
+	lastFrame.in, lastFrame.rows, lastFrame.have = in, rows, true
+	return rows
+}
+
+// drawFrame is frame without the memory.
+func drawFrame(faces []dial, now time.Time, perRow int, color bool, dayWhen string, lay layout) []string {
 	indent := strings.Repeat(" ", lay.left)
 	weekday := showWeekday(faces, now, dayWhen)
 	chunks := chunkCount(len(faces), perRow)
@@ -3582,6 +3764,37 @@ func fitHeight(chunks, termRows, vgap int) error {
 // those few rows -- capped at symmetryWindow, so a face that never finds one
 // does not shrink indefinitely looking.
 func autoScale(wantPerRow, numFaces, cols, lines, hpad, vpad int) {
+	key := scaleKey{wantPerRow, numFaces, cols, lines, hpad, vpad, cellRatio}
+	if got, ok := scaleCache[key]; ok {
+		rowsN, colsN = got[0], got[1]
+		return
+	}
+	if len(scaleCache) >= scaleCacheMax {
+		scaleCache = map[scaleKey][2]int{}
+	}
+	searchScale(wantPerRow, numFaces, cols, lines, hpad, vpad)
+	scaleCache[key] = [2]int{rowsN, colsN}
+}
+
+// scaleKey is everything autoScale's answer depends on. It is asked every
+// frame, because the window or the tuner may have moved since the last one,
+// and almost every frame the answer is the one it gave last time: the search
+// tries every size from the largest down, which was a millisecond of each
+// frame in pyclock.py for the sake of saying the same thing again.
+type scaleKey struct {
+	wantPerRow, numFaces, cols, lines, hpad, vpad int
+	cellRatio                                     float64
+}
+
+// The sizes autoScale settled on, by what it was asked. A handful of entries
+// over a session -- one per window shape and per tuning -- cleared wholesale
+// in the unlikely event it fills.
+var scaleCache = map[scaleKey][2]int{}
+
+const scaleCacheMax = 256
+
+// searchScale is autoScale without the cache.
+func searchScale(wantPerRow, numFaces, cols, lines, hpad, vpad int) {
 	best := 0
 	for n := maxRowsN; n >= minRowsN; n-- {
 		rowsN = n
@@ -3806,6 +4019,7 @@ func run() error {
 	if opt.fps != 0 {
 		paintEvery = tickFor(opt.fps)
 	}
+	readout = opt.readout
 
 	// The six knobs, as text, are the whole of the layout state: --cell-ratio
 	// has already beaten CLOCK_CELL_RATIO in defaultTunes, and a fixed

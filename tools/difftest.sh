@@ -871,6 +871,42 @@ check "$SUMMER" 200 60 --fps 20 ET,UTC
 fps=
 frames=
 
+# The hands stand on steps, one for each dot the tip passes, and a frame's
+# hands are wherever the last step left them. Both ports compute the step from
+# the same floats; a disagreement would show as one port's hand a step behind
+# the other's, and only at the instants that land near a step boundary, so
+# this walks enough of them to be sure: eight minutes a second at a time,
+# which crosses about five hundred second-hand steps, eighty of the minute
+# hand's and a couple of the hour hand's.
+echo "== stepped hands =="
+sequence 480 1000 "$SUMMER" 200 60 ET,PT,UTC,JP
+sequence 480 1000 "$WINTER" 80 24 UTC
+sequence 200 7 "$SUMMER" 200 60 UTC     # finer than the second hand steps
+
+# --readout sets how finely the time is shown under each face, and so how
+# often a readout changes -- which, with the hands stepping, is how often a
+# frame differs at all. Truncated at every precision rather than rounded, so a
+# readout never shows a tenth that has not arrived: .999999 is the case that
+# would round over the second, and before 1970 the one where a floor and a
+# truncation part company.
+echo "== readout precision =="
+for unit in ms tenths seconds; do
+	check "$SUMMER" 200 60 --readout "$unit" ET,PT,UTC,JP
+	check "$SUMMER" 80 24 --readout "$unit" --day always UTC
+	check "$SUMMER" 40 12 --readout "$unit" --day always UTC
+	check 2026-07-15T09:53:07.999999Z 200 60 --readout "$unit" UTC
+	check 1969-12-31T23:59:59.950000Z 200 60 --readout "$unit" ET,UTC
+	frames=21
+	check "$SUMMER" 200 60 --readout "$unit" ET,UTC
+	frames=
+done
+check "$SUMMER" 200 60 --readout=tenths UTC
+for odd in Tenths ms. s second milliseconds "" " tenths" "seconds "; do
+	check "$SUMMER" 200 60 --readout "$odd" UTC
+done
+check "$SUMMER" 200 60 --readout UTC    # the zone eaten as the value, and refused
+check "$SUMMER" 200 60 --readout        # and with nothing at all behind it
+
 # CLOCK_FRAMES without CLOCK_FREEZE is refused before the loop starts, so this
 # exits on its own -- but a regression would leave a clock running forever, so
 # the output is bounded rather than trusted. head closes the pipe, and both

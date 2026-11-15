@@ -40,7 +40,8 @@ ZONES = ["UTC", "ET,PT", "ET,PT,UTC", "ET,PT,UTC,JP", "ET,PT,UTC,JP,GB,NZ",
                    "AKT", "HT", "BST", "CET", "SGT", "KST", "AET", "UTC", "ET"])]
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-READOUT = re.compile(r"(?:[A-Z][a-z][a-z] )?\d\d:\d\d:\d\d\.\d\d\d")
+# At any precision --readout allows: tenths by default, ms, or whole seconds.
+READOUT = re.compile(r"(?:[A-Z][a-z][a-z] )?\d\d:\d\d:\d\d(?:\.\d+)?")
 SGR = re.compile(r"\x1b\[([0-9;]*)m")
 
 # Every escape the clock is allowed to write. Anything else is either a bug or
@@ -133,6 +134,12 @@ def main():
                                 ["--hpad", "10%"], ["--vpad", "20%"],
                                 ["--hpad", "even"], ["--vpad", "even"],
                                 ["--color=always"], ["--color=always", "--day=always"]]) + align
+            # Every precision, since each sizes the cells differently: a cell is
+            # as wide as the readout it holds, and a cell sized for the wrong one
+            # is exactly what left a right-aligned grid a column short.
+            extra += rng.choice([[], ["--readout", "ms"], ["--readout", "seconds"],
+                                 ["--readout", "seconds", "--day=always"],
+                                 ["--readout", "ms", "--day=always"]])
             impl, binary = rng.choice(list(zip(("go", "py"), binaries)))
             status, painted, complaint = render(binary, cols, lines, zones, extra)
             what = f"{impl} {cols}x{lines} {' '.join(extra)} {zones}"

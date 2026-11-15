@@ -1363,11 +1363,22 @@ make release-check
 ```
 
 That cross-compiles every platform the release ships a binary for, prints the
-version the binary says, and then runs the suite. Then the tag, pushed last:
+version the binary says, and then runs the suite. Then `main` goes up on its
+own, so CI can say what it says about the commit before there is a tag to take
+the blame -- a green suite here has missed key-timing and cross-compile bugs
+that a runner found:
 
 ```sh
-git tag -a v0.4.3 -F -   # the release notes, on the tag
-git push github main v0.4.3
+git push github main
+```
+
+`test.yml` answers every push. `release.yml` can also be run by hand against
+`main` from the Actions tab, which builds and checksums the five binaries
+without publishing anything. When both are green, the tag, pushed last:
+
+```sh
+git tag -a v0.5.0 -F -   # the release notes, on the tag
+git push github v0.5.0
 ```
 
 Two workflows answer a tag. `release.yml` cross-compiles the five binaries,

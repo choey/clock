@@ -9,7 +9,7 @@ the golden frames in `tools/golden/` exist to make impossible to do by accident.
 The version is written in `pyclock.py`, `clock.go` and `pyproject.toml`, and
 `tools/docnums.py` fails the build if the three disagree.
 
-## Unreleased
+## 0.5.0
 
 A clock that costs a sixth of what it did, sends a twenty-fifth as much, and
 asks far less of the terminal drawing it.

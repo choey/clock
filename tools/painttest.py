@@ -54,6 +54,12 @@ ROOT = Path(__file__).resolve().parent.parent
 # below may depend on. Empty means none at all.
 os.environ["CLOCK_CONFIG"] = ""
 
+# Never a terminal's own default either: iTerm2 starts the readout at seconds,
+# found by TERM_PROGRAM, so a run of this from inside it would compare frames
+# drawn to a different default from everyone else's. The cases that want it
+# set it themselves.
+os.environ["TERM_PROGRAM"] = ""
+
 FROZEN = "2026-07-15T09:53:07.123456Z"
 
 # -q, every case: on a terminal a clock flashes a hint over the frame for its

@@ -61,6 +61,18 @@ of the updates milliseconds cost. Every precision truncates, so the readout
 never shows a tenth that has not arrived. A coarser readout is narrower, and so
 is the narrowest column a face can have: on the smallest faces a few more fit.
 
+**iTerm2 starts at a seconds readout.** It is the terminal that charges most
+for an update, so there an untouched clock shows whole seconds -- found by the
+`TERM_PROGRAM` it sets, and overridden by `--readout`, a saved setting or the
+settings page. A save in iTerm2 does not write those seconds down, so they do
+not follow you to another terminal.
+
+**A settings page, on `s`.** The readout, the rate, colour and the weekday, in
+the same box `r` puts up for the layout: stepped with the arrows, typed with
+Return, shown on the next frame, and saved by `S` along with the sizes and the
+zones. `S` saves what differs from the defaults this clock started with in
+this terminal. The key list names it.
+
 **`--fps N`, and `CLOCK_FPS` beside it.** How often the clock looks at the
 frame at all -- hands and readout together, and the clock's own wakeups. It is
 the blunt knob where `--readout` is the targeted one: below a hand's step rate

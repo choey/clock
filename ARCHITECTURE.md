@@ -126,8 +126,8 @@ what its answer depends on, so none can be wrong rather than merely stale:
   label, its hands' steps and its readout's text (`frameIn`, `FRAME_MEMO`).
   With a coarse readout most frames are the one before them, and answering
   those from memory leaves a tick the cost of reading the time.
-- `--scale auto`'s answer, by every argument it is asked with and the cell
-  ratio (`scaleKey`, `SCALE_CACHE`). The search tries every size from the
+- `--scale auto`'s answer, by every argument it is asked with, the cell ratio
+  and the readout, which sets the narrowest cell (`scaleKey`, `SCALE_CACHE`). The search tries every size from the
   largest down, and was a millisecond of each frame in pyclock.py for the sake
   of saying the same thing again.
 
@@ -286,7 +286,7 @@ itself is diffed along with everything else that only shows between frames.
 
 Comparing the two proves they agree, which is not the same as proving either
 is right: a mistake made in both — and both is how they are always changed —
-looks like agreement. `tools/golden/` is the other half, eighteen renderings
+looks like agreement. `tools/golden/` is the other half, nineteen renderings
 kept as bytes and compared against what the clock draws today, and
 `tools/fitfuzz.py` is the generative version of the same idea: many window
 sizes, each checked against an invariant rather than against the other
@@ -311,7 +311,33 @@ line refuses; `readTunes`/`read_tunes` then reads the seven back into the
 settings the frame loop lays out with, and cannot fail, because nothing
 unchecked is ever stored.
 
-One thing about it is not the obvious choice: it is the modal that shows over
+**Two pages, one table.** `s` puts up the settings -- `--readout`, `--fps`,
+`--color` and `--day` -- through the same tuner, as a second run of the same
+`tunables` table (`pageSpan`/`page_span` says which run a page shows). So
+they are kept as text the same way, stepped and typed and refused the same
+way, saved by `S` with the layout, and named in the line the tuner leaves
+behind, with nothing written twice. The frame loop re-reads the four
+whenever a key changes the values: the readout and the gap go into the
+globals the drawing and the wait read, the ticker is reset to the new gap,
+and the colour and weekday rules are worked out again. `--fps` steps along a
+ladder of rates rather than one frame at a time, and `--color` writes `off`
+down as `never`, so the box only ever brackets a word it lists.
+
+Saving compares against the clock's *starting* defaults, which are this
+terminal's: `defaultTunes` folds in `CLOCK_CELL_RATIO`, `CLOCK_FPS`, a pinned
+clock's always-on weekday, and the readout `defaultReadout` picks -- seconds
+when `TERM_PROGRAM` is `iTerm.app`, tenths otherwise. So a save in iTerm2 does
+not write down the seconds it started at, which would pin every other terminal
+to them, and a readout chosen on purpose is saved wherever it was chosen.
+`--color` and `--day` are saved joined, `--color=never`, because their bare
+forms mean always and would read a separate value as a zone list. iTerm2 gets
+its own default because it charges per screen update almost whatever the
+update holds: a clock at tenths cost it 29% of a core where seconds cost 18%
+and its idle 5%, so it is the one terminal where the readout's rate is most of
+the bill. Every harness pins `TERM_PROGRAM` empty, as it pins `CLOCK_CONFIG`,
+and one golden is drawn with it set.
+
+One thing about the tuner is not the obvious choice: it is the modal that shows over
 a window too small for the clocks, where every other one is hidden. That is
 exactly the window a `--scale` typed too large leaves behind, and hiding the
 way out of it there would be hiding it when it is needed most.
@@ -489,10 +515,10 @@ nothing to fail.
 
 | harness | proves | blind to |
 |---|---|---|
-| `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share; `--fps` and `CLOCK_FPS` through the sequence, where the gap they set is the step between frames; the hands' steps, over eight-minute sequences that cross hundreds of them; `--readout` at each precision, including the instants where truncating and rounding part company | anything wrong in both, which is how they are always changed; and what a rate does to a *live* clock, which no pinned case can see |
-| `tools/golden/` | what the clock actually draws, at eighteen sizes | the size nobody thought to keep |
+| `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share; `--fps` and `CLOCK_FPS` through the sequence, where the gap they set is the step between frames; the hands' steps, over eight-minute sequences that cross hundreds of them; `--readout` at each precision, including the instants where truncating and rounding part company; which `TERM_PROGRAM` is iTerm2's, and that a flag or a saved setting beats it | anything wrong in both, which is how they are always changed; and what a rate does to a *live* clock, which no pinned case can see |
+| `tools/golden/` | what the clock actually draws, at nineteen sizes and settings, iTerm2's default among them | the size nobody thought to keep |
 | `tools/fitfuzz.py` | invariants at arbitrary sizes: nothing overflows the window, every line ends at the default colour, no escape outside the eight it may write | whether the picture is *right*, only that it is well formed |
-| `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations screen for screen -- the streams replayed onto `tools/termscreen.py`, since a repaint is a handful of rows and not a frame; the tuner, by the states it walks through rather than the frames they took, and a tuned frame against a clock started with the same flags; that `S` writes the same bytes from either port and that both read them back; Ctrl+C and Ctrl+Z under job control, down to what the terminal is left in while a clock is stopped; that a character device is not therefore a terminal, and what a reader walking away leaves behind | a real terminal emulator; signal timing, where it compares loosely on purpose; and how a keystroke's bytes are split across reads, which is the terminal's business and deliberately not compared -- a difference there cost three releases before the harness stopped asking the question |
+| `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations screen for screen -- the streams replayed onto `tools/termscreen.py`, since a repaint is a handful of rows and not a frame; the tuner, both its pages, by the states it walks through rather than the frames they took, and a tuned frame against a clock started with the same flags; that `S` writes the same bytes from either port and that both read them back, settings and all, and that in iTerm2 it does not write down the readout the terminal started with; Ctrl+C and Ctrl+Z under job control, down to what the terminal is left in while a clock is stopped; that a character device is not therefore a terminal, and what a reader walking away leaves behind | a real terminal emulator; signal timing, where it compares loosely on purpose; and how a keystroke's bytes are split across reads, which is the terminal's business and deliberately not compared -- a difference there cost three releases before the harness stopped asking the question |
 | `tools/painttest.py` | that the rows a terminal is actually sent add up to the screen the frames describe, at several sizes and frame counts, in colour and out of it; that a frame with nothing new in it is not painted again; and that a resize is repainted whole, against a model that wipes its screen when the window moves | a real terminal emulator's own answer to a resize, which is the thing being guarded against and cannot be asked here |
 | `tools/argfuzz.py` | that the two agree on badly spelt arguments and environments — generated by mutating good ones, rather than listed | whether either answer is right, and anything the mutations do not reach |
 | `tools/errcover.py` | every error message the clock can print is printed by some case | three that need a machine whose tz database is missing or incomplete, exempted with the reason why |

@@ -13,6 +13,10 @@ set -eu
 # comparison below may depend on. Empty means none at all, which every harness
 # here sets for the same reason.
 export CLOCK_CONFIG=
+# Nor a terminal's own default: iTerm2 starts the readout at seconds, found by
+# TERM_PROGRAM, so running this from inside it would draw every golden to a
+# different default from CI's. The cases that want one set termprog.
+export TERM_PROGRAM=
 
 cd "$(dirname "$0")/.."
 
@@ -151,6 +155,7 @@ check() {
 	if env CLOCK_FREEZE="$freeze" COLUMNS="$cols" LINES="$lines" \
 		CLOCK_CELL_RATIO="${ratio:-}" TZDIR="${tzdir:-}" CLOCK_CONFIG="${conf:-}" \
 		CLOCK_FRAMES="${frames:-}" CLOCK_STEP="${step:-}" CLOCK_FPS="${fps:-}" \
+		TERM_PROGRAM="${termprog:-}" \
 		"$out/clock" "$@" >"$out/go.out" 2>"$out/go.err" </dev/null
 	then go_status=0
 	else go_status=$?
@@ -158,13 +163,14 @@ check() {
 	if env CLOCK_FREEZE="$freeze" COLUMNS="$cols" LINES="$lines" \
 		CLOCK_CELL_RATIO="${ratio:-}" TZDIR="${tzdir:-}" CLOCK_CONFIG="${conf:-}" \
 		CLOCK_FRAMES="${frames:-}" CLOCK_STEP="${step:-}" CLOCK_FPS="${fps:-}" \
+		TERM_PROGRAM="${termprog:-}" \
 		python3 pyclock.py "$@" >"$out/py.out" 2>"$out/py.err" </dev/null
 	then py_status=0
 	else py_status=$?
 	fi
 
 	cat "$out/py.err" >>"$out/all.err"
-	label="[$cols x $lines${ratio:+ r=$ratio}${tzdir:+ tz=$tzdir}${frames:+ x$frames}${step:+ @${step}ms}${fps:+ fps=$fps}] $*"
+	label="[$cols x $lines${ratio:+ r=$ratio}${tzdir:+ tz=$tzdir}${frames:+ x$frames}${step:+ @${step}ms}${fps:+ fps=$fps}${termprog:+ term=$termprog}] $*"
 	if ! cmp -s "$out/go.out" "$out/py.out"; then
 		printf 'FAIL stdout %s\n' "$label"
 		diff -u "$out/py.out" "$out/go.out" | head -20
@@ -905,6 +911,23 @@ for odd in Tenths ms. s second milliseconds "" " tenths" "seconds "; do
 	check "$SUMMER" 200 60 --readout "$odd" UTC
 done
 check "$SUMMER" 200 60 --readout UTC    # the zone eaten as the value, and refused
+
+# Where the readout starts depends on the terminal: seconds in iTerm2, which
+# charges for each update almost whatever it holds, and tenths everywhere else.
+# Only the exact TERM_PROGRAM iTerm2 sets counts -- nothing near it -- and a
+# flag or a saved setting says otherwise, the flag winning.
+echo "== the terminal's default readout =="
+for termprog in iTerm.app ghostty Apple_Terminal iterm.app "iTerm.app " iTerm; do
+	check "$SUMMER" 200 60 ET,UTC
+	frames=21
+	check "$SUMMER" 200 60 ET,UTC
+	frames=
+	check "$SUMMER" 200 60 --readout tenths ET,UTC
+done
+termprog=iTerm.app
+config_case --readout=ms -- ET,UTC                   # a saved readout beats the terminal's
+config_case --readout=ms -- --readout tenths ET,UTC  # and a typed one beats both
+termprog=
 check "$SUMMER" 200 60 --readout        # and with nothing at all behind it
 
 # CLOCK_FRAMES without CLOCK_FREEZE is refused before the loop starts, so this
@@ -1017,6 +1040,12 @@ golden date-together     "$SUMMER" 120 24 --day=auto ET,JP
 golden too-narrow        "$SUMMER" 20 24 ET,PT,UTC
 golden fixed-offset      "$SUMMER" 80 24 PST,PDT
 golden winter            "$WINTER" 120 24 ET,PT,UTC
+# The one golden drawn to a terminal's own default rather than everyone's:
+# iTerm2 starts the readout at seconds. Comparing the two ports cannot see
+# that default lost from both, which is what this is for.
+termprog=iTerm.app
+golden iterm             "$SUMMER" 80 24 UTC
+termprog=
 # A state, a city from the table, a city off the end of an IANA zone, and a
 # place merged with an abbreviation; then a list of places too long for its cell.
 golden places            "$SUMMER" 120 24 "Arizona,Boise,New York,Seattle,MT"

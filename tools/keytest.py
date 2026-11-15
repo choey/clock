@@ -50,6 +50,12 @@ ROOT = Path(__file__).resolve().parent.parent
 # point CLOCK_CONFIG at a temporary file of their own.
 os.environ["CLOCK_CONFIG"] = ""
 
+# Never a terminal's own default either: iTerm2 starts the readout at seconds,
+# found by TERM_PROGRAM, so a run of this from inside it would compare frames
+# drawn to a different default from everyone else's. The cases that want it
+# set it themselves.
+os.environ["TERM_PROGRAM"] = ""
+
 # Pinned, so every repaint between two keystrokes is the same bytes and the
 # collapse below leaves one frame per state rather than however many ticks fit.
 FROZEN = "2026-07-15T09:53:07.123456Z"
@@ -539,6 +545,48 @@ def saves(name):
         for impl, argv in IMPLS:
             from_file, _ = run(argv + ["-q"], [], env={"CLOCK_CONFIG": str(saved)})
             from_flags, _ = run(argv + ["-q", "--hpad", "5%", "ET,PT,UTC"], [])
+            drawn = lambda f: (BRAILLE[0] in f or BRAILLE[1] in f) and BOX_MARK not in f
+            got = [f for f in states(from_file.split(LEAVE_ALT)[0]) if drawn(f)]
+            want = [f for f in states(from_flags.split(LEAVE_ALT)[0]) if drawn(f)]
+            if not got or not want or got[-1] != want[-1]:
+                report(False, name, f"{impl}: the saved file draws something else")
+                return
+    report(True, name)
+
+
+def saves_settings(name, keys, want_tokens, flags, env=None, args=("-q", "ET,PT,UTC")):
+    """S writes the settings page down with the layout, and the file draws it.
+
+    `want_tokens` is the file, line by line: only what differs from the clock's
+    own starting defaults -- in iTerm2, a seconds readout is one of those, and
+    saving it would pin every other terminal to it too. `flags` is what a clock
+    started without the file needs to draw the same frame.
+    """
+    written = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for impl, argv in IMPLS:
+            path = Path(tmp) / f"config-{impl}"
+            painted, status = run(argv + list(args), keys,
+                                  env=dict(env or {}, CLOCK_CONFIG=str(path)))
+            if status == "hung":
+                report(False, name, f"{impl}: the clock never quit")
+                return
+            if not path.exists():
+                report(False, name, f"{impl}: saved nothing to {path}")
+                return
+            written[impl] = path.read_bytes()
+        if written["go"] != written["py"]:
+            report(False, name, f"the two wrote different files\n"
+                                f"  go: {written['go']!r}\n  py: {written['py']!r}")
+            return
+        tokens = [l for l in written["go"].decode().splitlines() if l and not l.startswith("#")]
+        if tokens != want_tokens:
+            report(False, name, f"saved {tokens}, wanted {want_tokens}")
+            return
+        saved = Path(tmp) / "config-go"
+        for impl, argv in IMPLS:
+            from_file, _ = run(argv + ["-q"], [], env=dict(env or {}, CLOCK_CONFIG=str(saved)))
+            from_flags, _ = run(argv + ["-q"] + list(flags), [], env=env)
             drawn = lambda f: (BRAILLE[0] in f or BRAILLE[1] in f) and BOX_MARK not in f
             got = [f for f in states(from_file.split(LEAVE_ALT)[0]) if drawn(f)]
             want = [f for f in states(from_flags.split(LEAVE_ALT)[0]) if drawn(f)]
@@ -1135,8 +1183,54 @@ def main():
             report(painted.split(LEAVE_ALT)[-1].strip() == b"",
                    f"{impl} says nothing when nothing was changed")
 
+        # The settings page: s puts up the knobs that say what the clocks show
+        # and how often -- the readout, the rate, colour and the weekday --
+        # through the same tuner, so it walks, steps, types and refuses the
+        # same way the layout page does.
+        print("== the settings page ==")
+        compare_tune("s opens the settings, esc closes them", [b"s", ESC], [0, 1, 0])
+        compare_tune("the settings replace the key list", [b"h", b"s", ESC], [0, 1, 0])
+        compare_tune("up and down stay on their own page",
+                     [b"s", UP, UP, DOWN, ESC], [0, 1, 1, 1, 1, 0])
+        compare_tune("a rate it will not have is refused",
+                     [b"s", DOWN, b"0", b"\r", ESC], [0, 1, 1, 1, 1, 0])
+        compare_tune("the rate steps along its ladder", [b"s", DOWN, LEFT, LEFT, RIGHT, ESC],
+                     [0, 1, 1, 1, 1, 1, 0])
+        tuned_layout("a stepped readout draws what --readout draws",
+                     [b"s", RIGHT, ESC], ["--readout", "seconds"])
+        tuned_layout("a typed readout draws what --readout draws",
+                     [b"s", b"ms", b"\r", ESC], ["--readout", "ms"])
+        tuned_layout("colour turned off draws what --color=never draws",
+                     [b"s", DOWN, DOWN, RIGHT, ESC], ["--color=never"])
+        tuned_layout("the weekday's live rule draws what --day=auto draws",
+                     [b"s", UP, RIGHT, ESC], ["--day=auto"])
+        for impl, argv in IMPLS:
+            painted, _ = run(argv + ["-q", "UTC"], [b"s", DOWN, LEFT, LEFT, ESC])
+            said = painted.split(LEAVE_ALT)[-1].strip()
+            report(said == b"--fps 20 UTC", f"{impl} says the rate it would take to start this way",
+                   f"printed {said!r}")
+            painted, _ = run(argv + ["-q", "UTC"], [b"h"])
+            report(b"settings: readout" in painted, f"{impl} lists s in the key list")
+
         print("== saving ==")
         saves("S writes the clock down, and both read the file back")
+        saves_settings("S saves the settings with the layout, in the flags' own spelling",
+                       [b"s", RIGHT, DOWN, DOWN, RIGHT, (b"\x1b", 1.0), (b"S", 1.0)],
+                       ["--readout", "seconds", "--color=never", "ET,PT,UTC"],
+                       ["--readout", "seconds", "--color=never", "ET,PT,UTC"])
+        # iTerm2 starts at seconds: one step left from there is tenths, where
+        # from anywhere else's tenths it would be ms -- so this passes only if
+        # the default really was seconds.
+        saves_settings("in iTerm2 the readout starts at seconds",
+                       [b"s", LEFT, (b"\x1b", 1.0), (b"S", 1.0)],
+                       ["--readout", "tenths", "ET,PT,UTC"], ["--readout", "tenths", "ET,PT,UTC"],
+                       env={"TERM_PROGRAM": "iTerm.app"})
+        # And saving that seconds would pin every other terminal to it, so S
+        # keeps only what was changed from where this one began.
+        saves_settings("in iTerm2, S does not save the readout it started with",
+                       [b"s", DOWN, LEFT, (b"\x1b", 1.0), (b"S", 1.0)],
+                       ["--fps", "30", "ET,PT,UTC"], ["--fps", "30", "ET,PT,UTC"],
+                       env={"TERM_PROGRAM": "iTerm.app"})
         cannot_save("a save with nowhere to go says so and carries on")
 
         print("== the startup hint ==")

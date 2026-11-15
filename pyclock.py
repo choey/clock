@@ -93,9 +93,9 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
   --fps N            repaints a second, 1 to 1000; the default is the 19ms
                       tick, a shade over 52. Lower it where the terminal
                       costs more to draw the clock than the clock does to run
-  --readout UNIT     how finely the readout shows the time: tenths (default),
-                      seconds or ms. Each changes as often as it is precise,
-                      faster than anything else on screen, so coarser is cheaper
+  --readout UNIT     how finely the readout shows the time: tenths, seconds or
+                      ms. Tenths by default, and seconds in iTerm2, where every
+                      change costs more to draw than anywhere else
   -h, --help         this message
   --version          print the version and exit
 
@@ -120,8 +120,9 @@ terminal rather than typed every time; the flag wins if both are given.
 The clock looks at the frame every 19ms and writes only the rows that changed
 since the last one, so a clock with nothing new to say is silent. The hands
 step only when their tips move a dot, a few times a second, and the readout
-changes as often as it is precise: ten times a second by default, once with
---readout seconds, and every time the clock looks with --readout ms. Some
+changes as often as it is precise: ten times a second by default (once in
+iTerm2), once with --readout seconds, and every time the clock looks with
+--readout ms. Some
 terminals charge for every update whatever it contains, so that is the cost
 to choose by. --fps sets how often the clock looks at all, hands and readout
 together, and CLOCK_FPS sets it once per terminal rather than every time, the
@@ -129,11 +130,12 @@ flag winning if both are given. Any gap that is a multiple of 10ms leaves the
 milliseconds' last digit sitting on 0, which is why the default gap is 19ms
 and not 20.
 
-Space holds the frame still, for a screenshot, h or ? opens the key list, and
-r resizes and aligns the clocks while they run. S saves those sizes and the
-zones on screen to ~/.config/clock/config, which every clock reads at startup;
-CLOCK_CONFIG points somewhere else, and set but empty means no file at all.
-Press q or Ctrl+C to quit.
+Space holds the frame still, for a screenshot, h or ? opens the key list, r
+resizes and aligns the clocks while they run, and s sets the readout, the rate,
+the colour and the weekday. S saves all of those and the zones on screen to
+~/.config/clock/config, which every clock reads at startup; CLOCK_CONFIG points
+somewhere else, and set but empty means no file at all. Press q or Ctrl+C to
+quit.
 
 examples:
   clock
@@ -151,7 +153,8 @@ HOTKEYS = (
     ("space", "hold the frame"),
     ("h ?", "toggle this list"),
     ("r", "resize and align the clocks"),
-    ("S", "save these sizes and zones"),
+    ("s", "settings: readout, fps, colour, day"),
+    ("S", "save these sizes, settings and zones"),
     ("q", "quit, or Ctrl+C"),
 )
 HOTKEY_COL = 8  # where the descriptions start, so the keys get a gutter
@@ -168,6 +171,14 @@ TUNABLES = (
     ("per-row", "auto, or a count like 3"),
     ("scale", "auto, or a number like 1.5"),
     ("cell-ratio", "a number like 2.1"),
+    # The settings page, which s puts up: what the clocks say and how often,
+    # rather than where they sit. The same table, so S saves them with the
+    # layout, the tuner steps and types them the same way, and the line the
+    # tuner leaves behind names them too.
+    ("readout", "ms, tenths or seconds"),
+    ("fps", "how often to look, 1 to 1000"),
+    ("color", "always, auto or never"),
+    ("day", "always, auto or never"),
 )
 
 # Which tunable is which. The frame loop holds the six as the text they were
@@ -184,8 +195,48 @@ TUNABLES = (
     TUNE_PER_ROW,
     TUNE_SCALE,
     TUNE_CELL_RATIO,
-) = range(7)
+    TUNE_READOUT,
+    TUNE_FPS,
+    TUNE_COLOR,
+    TUNE_DAY,
+) = range(11)
 NUM_TUNES = len(TUNABLES)
+
+# The two pages of tunables: r shows the layout, s the settings. A page is a
+# run of the table, so a knob is the same index whichever page shows it.
+LAYOUT_PAGE, SETTINGS_PAGE = 0, 1
+
+
+def page_span(page):
+    """The run of TUNABLES a page shows, as (lo, hi)."""
+    return (TUNE_READOUT, NUM_TUNES) if page == SETTINGS_PAGE else (0, TUNE_READOUT)
+
+
+# What the settings page offers for colour: --color's own words, less "off",
+# which it takes as a synonym and the tuner writes down as never.
+COLOR_WORDS = ("always", "auto", "never")
+
+# Where left and right step the rate: the rates worth having, rather than one
+# frame at a time from 1 to 1000. 52 is the default tick's rate, so stepping
+# back to it lands exactly on an untouched clock.
+FPS_LADDER = (1, 2, 5, 10, 15, 20, 30, 52, 60)
+
+# This run is a still of one instant, which changes one default: a pinned
+# clock puts the weekday under every face, since an undated still records half
+# of when it is. Set at the top of run(), before anything asks default_tunes.
+PINNED_CLOCK = False
+
+
+def default_readout():
+    """The readout an untouched clock starts with in this terminal.
+
+    Tenths everywhere but iTerm2, which charges for each screen update almost
+    whatever it contains -- measured, a clock at tenths cost it 29% of a core
+    where seconds cost 18% and its idle 5% -- so there it starts at seconds. A
+    flag, the preferences file or the settings page says otherwise;
+    TERM_PROGRAM is what iTerm2 sets in every session it starts.
+    """
+    return "seconds" if os.environ.get("TERM_PROGRAM") == "iTerm.app" else "tenths"
 
 TUNE_COL = 12  # where the values start, past the longest name plus a gutter
 
@@ -318,20 +369,35 @@ def positive_number(val):
 
 
 def default_tunes():
-    """The six knobs as an untouched clock has them.
+    """Every knob as an untouched clock has them in this terminal.
 
-    The flag defaults, with CLOCK_CELL_RATIO standing in for the ratio where
-    it is usable. That ratio is the only knob that decides whether the face is
+    What S compares against, so it saves what was changed and not what this
+    terminal would have started with anyway. The flag defaults, with
+    CLOCK_CELL_RATIO standing in for the ratio and CLOCK_FPS for the rate
+    where they are usable, and the readout as default_readout() has it. That ratio is the only knob that decides whether the face is
     round, and it varies by font and line spacing; raise it if the face looks
     squished, lower it if it bulges sideways. Unlike --cell-ratio, an
     environment variable might be stale or set for some other program, so a
     bad value there is not a user error -- it is simply ignored, the same way
     an unset one is.
     """
-    vals = ["center", "center", "even", "even", "auto", "auto", DEFAULT_CELL_RATIO_TEXT]
+    vals = ["center", "center", "even", "even", "auto", "auto", DEFAULT_CELL_RATIO_TEXT,
+            default_readout(), "52", "auto", "auto"]
     env = os.environ.get("CLOCK_CELL_RATIO", "")
     if env and positive_number(env) is not None:
         vals[TUNE_CELL_RATIO] = env
+    # Like CLOCK_CELL_RATIO, and unlike the harness's variables: this one is
+    # meant to be set once per terminal and left there, where it can go stale
+    # or be meant for something else entirely, so a value that does not parse
+    # is ignored rather than refused. --fps says the same thing and wins.
+    env = os.environ.get("CLOCK_FPS", "")
+    if env:
+        try:
+            vals[TUNE_FPS] = str(parse_count(env, "CLOCK_FPS", MAX_FPS))
+        except ClockError:
+            pass
+    if PINNED_CLOCK:
+        vals[TUNE_DAY] = "always"
     return vals
 
 
@@ -1196,7 +1262,9 @@ def parse_pad(flag, val):
 # back from the text with read_tunes whenever the text changes -- at startup,
 # and after every value the tuner takes.
 Settings = collections.namedtuple(
-    "Settings", "halign valign hpad vpad cell_ratio scale_auto rows per_row per_row_auto"
+    "Settings",
+    "halign valign hpad vpad cell_ratio scale_auto rows per_row per_row_auto"
+    " readout gap color_when day_when",
 )
 
 
@@ -1236,6 +1304,14 @@ def check_tune(i, val):
     elif i == TUNE_SCALE:
         if val != "auto":
             rows_for_scale(parse_scale(val))
+    elif i == TUNE_READOUT:
+        parse_choice("readout", val, READOUTS)
+    elif i == TUNE_FPS:
+        parse_count(val, "--fps", MAX_FPS)
+    elif i == TUNE_COLOR:
+        parse_choice("color", val, COLOR_WHENS)
+    elif i == TUNE_DAY:
+        parse_choice("day", val, WHENS)
     else:
         parse_ratio(val)
 
@@ -1262,6 +1338,13 @@ def canon_tune(i, val):
             return str(parse_count(val, "--per-row", MAX_PER_ROW))
         except ClockError:
             return val
+    if i == TUNE_FPS:
+        try:
+            return str(parse_count(val, "--fps", MAX_FPS))
+        except ClockError:
+            return val
+    if i == TUNE_COLOR and val == "off":
+        return "never"
     return val
 
 
@@ -1291,6 +1374,10 @@ def read_tunes(vals):
         rows,
         per_row,
         per_row_auto,
+        vals[TUNE_READOUT],
+        tick_for(parse_count(vals[TUNE_FPS], "--fps", MAX_FPS)),
+        vals[TUNE_COLOR],
+        vals[TUNE_DAY],
     )
 
 
@@ -1300,7 +1387,8 @@ def apply_settings(settings):
     A fixed scale sizes the face here and for good; --scale auto leaves ROWS
     to the per-frame search, which reads CELL_RATIO itself.
     """
-    global ROWS, COLS, CELL_RATIO
+    global ROWS, COLS, CELL_RATIO, READOUT, PAINT_EVERY
+    READOUT, PAINT_EVERY = settings.readout, settings.gap
     CELL_RATIO = settings.cell_ratio
     if not settings.scale_auto:
         ROWS = settings.rows
@@ -1318,30 +1406,11 @@ class Options:
 
     def __init__(self):
         self.zone_list = ""
-        self.color_when = "auto"
-        self.day_when = ""  # unset: run() picks it, since a pinned clock differs
         self.quiet = False
-        # Repaints per second, or zero for TICK. Not one of the six knobs
-        # below: those are the layout, which the tuner changes and S saves,
-        # and this changes nothing anyone can see in a still frame.
-        #
-        # Like CLOCK_CELL_RATIO, and unlike the harness's variables: this one
-        # is meant to be set once per terminal and left there, where it can go
-        # stale or be meant for something else entirely, so a value that does
-        # not parse is ignored rather than refused. --fps says the same thing
-        # and wins.
-        # How finely the readout shows the time: one of READOUTS. Not a knob
-        # for the tuner either, for the same reason --day is not: it changes
-        # what a readout says, not where anything sits.
-        self.readout = "tenths"
-        self.fps = 0
-        env = os.environ.get("CLOCK_FPS", "")
-        if env:
-            try:
-                self.fps = parse_count(env, "CLOCK_FPS", MAX_FPS)
-            except ClockError:
-                pass
-        self.vals = default_tunes()  # the six knobs, as text
+        # The knobs, layout and settings both, as text: --readout, --fps,
+        # --color and --day land here along with the layout flags, so the
+        # settings page shows what they said and S saves what changed.
+        self.vals = default_tunes()
 
 
 def config_path():
@@ -1466,23 +1535,26 @@ def parse_args(argv, opt):
                     if i >= len(argv):
                         raise ClockError("--readout needs a value, e.g. --readout tenths")
                     val = argv[i]
-                opt.readout = parse_choice("readout", val, READOUTS)
+                opt.vals[TUNE_READOUT] = parse_choice("readout", val, READOUTS)
             elif name == "fps":
                 if not sep:
                     i += 1
                     if i >= len(argv):
                         raise ClockError("--fps needs a number, e.g. --fps 20")
                     val = argv[i]
-                opt.fps = parse_count(val, "--fps", MAX_FPS)
+                opt.vals[TUNE_FPS] = str(parse_count(val, "--fps", MAX_FPS))
             elif name == "color":
                 # Bare --color means always, and takes no separate argument:
                 # "clock --color ET" names a zone list, exactly as ls and git
                 # read the same flag. The value only ever follows an "=".
-                opt.color_when = parse_choice("color", val, COLOR_WHENS) if sep else "always"
+                opt.vals[TUNE_COLOR] = (
+                    canon_tune(TUNE_COLOR, parse_choice("color", val, COLOR_WHENS))
+                    if sep else "always"
+                )
             elif name == "no-color":
                 if sep:
                     raise ClockError("--no-color takes no value")
-                opt.color_when = "never"
+                opt.vals[TUNE_COLOR] = "never"
             elif name == "version":
                 # Read where it is found, like --help: everything before it on
                 # the command line still has to parse, everything after it is
@@ -1491,11 +1563,11 @@ def parse_args(argv, opt):
                     raise ClockError("--version takes no value")
                 raise VersionRequested
             elif name == "day":
-                opt.day_when = parse_choice("day", val, WHENS) if sep else "always"
+                opt.vals[TUNE_DAY] = parse_choice("day", val, WHENS) if sep else "always"
             elif name == "no-day":
                 if sep:
                     raise ClockError("--no-day takes no value")
-                opt.day_when = "never"
+                opt.vals[TUNE_DAY] = "never"
             elif name == "quiet":
                 if sep:
                     raise ClockError("--quiet takes no value")
@@ -2507,7 +2579,7 @@ def help_rows():
 
 
 class Tuner:
-    """What r puts up: the six knobs, one picked, and what is being typed.
+    """What r and s put up: one page of knobs, one picked, and what is typed.
 
     It holds no values of its own -- the text it shows is the same text the
     frame loop lays out from, so what is on screen is always what is in
@@ -2516,7 +2588,8 @@ class Tuner:
 
     def __init__(self):
         self.open = False
-        self.sel = 0  # which of the six is picked
+        self.page = LAYOUT_PAGE
+        self.sel = 0  # which knob is picked, as its index in TUNABLES
         self.edit = ""  # what has been typed into it, once typing has started
         self.editing = False
         self.err = ""  # the last refusal, in the flag's own words
@@ -2532,6 +2605,12 @@ def tune_options(i):
         return HALIGNS
     if i == TUNE_VALIGN:
         return VALIGNS
+    if i == TUNE_READOUT:
+        return READOUTS
+    if i == TUNE_COLOR:
+        return COLOR_WORDS
+    if i == TUNE_DAY:
+        return WHENS
     return None
 
 
@@ -2584,6 +2663,17 @@ def tune_step(i, val, delta, wrap):
         if not 0 <= following < len(options):
             return val
         return options[following]
+
+    if i == TUNE_FPS:
+        # Along the ladder rather than a frame at a time: to the next rate on
+        # it past this one, whatever this one is, and nowhere off its ends.
+        try:
+            n = parse_count(val, "--fps", MAX_FPS)
+        except ClockError:
+            return val
+        if delta > 0:
+            return next((str(r) for r in FPS_LADDER if r > n), val)
+        return next((str(r) for r in reversed(FPS_LADDER) if r < n), val)
 
     word = tune_word(i)
     if val == word:
@@ -2662,7 +2752,9 @@ def tune_rows(tune, vals):
     auto is choosing and the one a reader wanting to pin it down needs.
     """
     rows = []
-    for i, (name, _) in enumerate(TUNABLES):
+    lo, hi = page_span(tune.page)
+    for i in range(lo, hi):
+        name = TUNABLES[i][0]
         mark = "> " if i == tune.sel else "  "
         val = tune.edit + "_" if i == tune.sel and tune.editing else tune_show(i, vals[i])
         if i == TUNE_SCALE:
@@ -2686,7 +2778,14 @@ def tune_flags(vals):
     default = default_tunes()
     out = []
     for i, (name, _) in enumerate(TUNABLES):
-        if vals[i] != default[i]:
+        if vals[i] == default[i]:
+            continue
+        if i in (TUNE_COLOR, TUNE_DAY):
+            # One token, joined: bare --color and --day mean always and take
+            # no separate argument, so "--color", "never" would read the
+            # second as a zone list.
+            out.append(f"--{name}={vals[i]}")
+        else:
             out += [f"--{name}", vals[i]]
     return out
 
@@ -3051,7 +3150,7 @@ SCALE_CACHE_MAX = 256
 def auto_scale(want_per_row, num_faces, cols, lines, hpad, vpad):
     """search_scale, remembered: the same question gets the same ROWS and COLS."""
     global ROWS, COLS
-    key = (want_per_row, num_faces, cols, lines, hpad, vpad, CELL_RATIO)
+    key = (want_per_row, num_faces, cols, lines, hpad, vpad, CELL_RATIO, READOUT)
     got = SCALE_CACHE.get(key)
     if got is not None:
         ROWS, COLS = got
@@ -3391,6 +3490,8 @@ def run(argv):
     """Everything that can fail happens before the terminal is touched."""
     global ROWS, CELL_RATIO, COLS, LEFT_WITH
     frozen = freeze()
+    global PINNED_CLOCK
+    PINNED_CLOCK = frozen is not None
     # The preferences file first, then the command line on top of it, both
     # through the same parser: a flag typed here beats the same flag saved
     # there because it is read second, which is the only rule either of them
@@ -3413,28 +3514,20 @@ def run(argv):
     zone_list, quiet = opt.zone_list, opt.quiet
     zones = resolve_zones(zone_list, frozen or datetime.now(timezone.utc))
 
-    color = use_color(opt.color_when)
-    # Before sequence() below, which takes its default step from the gap, and
-    # before the sleep that waits it out.
-    global PAINT_EVERY, READOUT
-    if opt.fps:
-        PAINT_EVERY = tick_for(opt.fps)
-    READOUT = opt.readout
-
     # The six knobs, as text, are the whole of the layout state: --cell-ratio
     # has already beaten CLOCK_CELL_RATIO in default_tunes, and a fixed
     # --scale sizes the face here and for good, where --scale auto leaves ROWS
     # to the per-frame search. r re-runs exactly this, which is why it can
     # change any of them without the loop knowing where a value came from.
+    #
+    # The settings ride the same way: the readout, the gap the loop waits --
+    # before sequence() below, which takes its default step from it -- and the
+    # colour and weekday rules, which s can change while it runs too. A pinned
+    # clock's weekday defaults to always, which default_tunes has seen to: an
+    # undated still records half of when it is.
     settings = read_tunes(vals)
     apply_settings(settings)
-
-    # A pinned clock is a still of one instant, and an undated still records
-    # half of it, so the weekday goes under every face unless --day says
-    # otherwise. Live, auto keeps it for the clocks that actually disagree.
-    day_when = opt.day_when
-    if not day_when:
-        day_when = "always" if frozen is not None else "auto"
+    color, day_when = use_color(settings.color_when), settings.day_when
     # The instant the display is holding, or None when it runs live. Holding
     # repaints as usual rather than idling, so a resize still reflows the grid
     # -- it is the clock that stops, not the drawing.
@@ -3480,8 +3573,9 @@ def run(argv):
             note = ""
         if tune.open:
             if key in (KEY_UP, KEY_DOWN):
-                step = NUM_TUNES - 1 if key == KEY_UP else 1
-                tune.sel = (tune.sel + step) % NUM_TUNES
+                lo, hi = page_span(tune.page)
+                step = hi - lo - 1 if key == KEY_UP else 1
+                tune.sel = lo + (tune.sel - lo + step) % (hi - lo)
                 tune.edit, tune.editing, tune.err = "", False, ""
             elif key in (KEY_LEFT, KEY_RIGHT, " "):
                 # Straight onto the clocks: every value stepping can reach has
@@ -3532,13 +3626,19 @@ def run(argv):
         elif key in ("h", "H", "?"):
             help_on = not help_on
         elif key in ("r", "R"):
-            tune.open, tune.sel = True, 0
+            tune.open, tune.page, tune.sel = True, LAYOUT_PAGE, 0
+            tune.edit, tune.editing, tune.err = "", False, ""
+            help_on = False
+        elif key == "s":
+            # Lowercase only: the capital saves, and the two are a shift apart
+            # on purpose -- looking at the settings is free, writing a file is
+            # not.
+            tune.open, tune.page, tune.sel = True, SETTINGS_PAGE, TUNE_READOUT
             tune.edit, tune.editing, tune.err = "", False, ""
             help_on = False
         elif key == "S":
             # Capitalised on purpose: it overwrites a file, and a shift is
-            # enough to keep an elbow from doing it. Lowercase s is not taken,
-            # so a miss does nothing at all.
+            # enough to keep an elbow from doing it.
             note = save()
             help_on = False
         return False
@@ -3806,6 +3906,9 @@ def run(argv):
                             quitting = True
                     if vals != prev_vals:
                         LEFT_WITH = tune_command(vals, zone_list)
+                        # What the settings page may have moved; the sleep
+                        # below reads PAINT_EVERY afresh every time anyway.
+                        color, day_when = use_color(settings.color_when), settings.day_when
                     if was_tuning and not tune.open:
                         # Closing the tuner says what it would take to start
                         # the clock this way, since the screen it was tuned on

@@ -179,6 +179,11 @@ def case(rng):
         env["CLOCK_STEP"] = rng.choice(STEPISH)
     if rng.random() < 0.2:
         env["CLOCK_FPS"] = rng.choice(FPSISH)
+    if rng.random() < 0.2:
+        # iTerm2 starts the readout at seconds; the two ports have to agree on
+        # which TERM_PROGRAM is iTerm2's, near misses included.
+        env["TERM_PROGRAM"] = rng.choice(("iTerm.app", "iterm.app", "iTerm", "ghostty",
+                                          "Apple_Terminal", "iTerm.app ", ""))
     return env, argv
 
 
@@ -187,7 +192,7 @@ def run(argv, env):
                                                              "CLOCK_CELL_RATIO", "NO_COLOR",
                                                              "CLOCK_FREEZE", "CLOCK_FRAMES",
                                                              "CLOCK_STEP", "CLOCK_FPS",
-                                                             "CLOCK_CONFIG")}
+                                                             "CLOCK_CONFIG", "TERM_PROGRAM")}
     # Never a preferences file, and never a mutated path to one: a fuzzer
     # pointed at a real file would be reading whatever the machine has saved,
     # and both clocks would agree about it while proving nothing.

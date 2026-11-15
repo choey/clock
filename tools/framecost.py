@@ -45,6 +45,7 @@ def timed(argv, zones, frames):
     env = dict(
         os.environ,
         CLOCK_CONFIG="",  # no preferences file: measure the clock, not a machine
+        TERM_PROGRAM="",  # nor iTerm2's default readout: the same frames everywhere
         CLOCK_FREEZE=FROZEN,
         CLOCK_FRAMES=str(frames),
         CLOCK_STEP=str(TICK_MS),

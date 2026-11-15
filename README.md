@@ -325,8 +325,11 @@ alignment, whatever `--day` says.
 ### Readout precision
 
 The readout under each face shows tenths of a second by default —
-`09:53:07.1` — which is fast enough to read as a live clock. `--readout` says
-how finely instead:
+`09:53:07.1` — which is fast enough to read as a live clock. In iTerm2 it
+starts at whole seconds instead, for the reason under [Repaint
+rate](#repaint-rate): iTerm2 charges for every change to the screen, and tenths
+cost it about half as much again as seconds do. `--readout` says how finely
+either way:
 
 ```sh
 clock --readout ms        # 09:53:07.123, the last two digits a blur while it runs
@@ -349,10 +352,9 @@ column as wide as the readout, 10 characters at the default, 12 at `ms` and 8
 at `seconds`. That only matters for the smallest faces — a low cell ratio, or
 a window crowded with zones — where a coarser readout lets a few more fit.
 
-Like `--day` and `--color` it decides what a readout says rather than where
-anything sits, so the tuner does not offer it and `S` does not save it. Put it
-in the preferences file by hand, as `--readout=seconds` on a line of its own,
-to make it stick.
+It is on the settings page, `s`, alongside the rate, colour and the weekday —
+see [Settings while it runs](#settings-while-it-runs) — and `S` saves it with
+the rest.
 
 ### Keys
 
@@ -361,7 +363,8 @@ to make it stick.
 | space | hold the frame still, and again to carry on |
 | `h` or `?` | show or hide the key list |
 | `r` | resize and align the clocks, while they run |
-| `S` | save those sizes and the zones on screen, for next time |
+| `s` | settings: the readout, the rate, colour and the weekday |
+| `S` | save those sizes, the settings and the zones on screen, for next time |
 | `q` | quit, as does Ctrl+C |
 
 Ctrl+Z suspends it, like any other job. The clock hands the terminal back for
@@ -441,11 +444,46 @@ below, saves it instead of printing it.
 line spacing, and the difference between right and wrong is a face that reads
 as round or as an egg; see [Round faces](#round-faces).
 
+### Settings while it runs
+
+`s` opens the same kind of box for the four settings that say what the clocks
+show and how often, rather than where they sit — `--readout`, `--fps`,
+`--color` and `--day`:
+
+```
+> readout     ms [tenths] seconds
+  fps         30 [52] 60
+  color       always [auto] never
+  day         always [auto] never
+
+ms, tenths or seconds
+up down pick   left right or space change
+or type a value and enter   esc done
+```
+
+It works exactly as the layout box does: up and down pick, left, right and
+space step, typing a value and Return sets one, and Escape closes it and says
+what it would take to start this way. The rate steps along the rates worth
+having — 1, 2, 5, 10, 15, 20, 30, 52 and 60 a second, 52 being the default
+19ms tick — and takes any whole number from 1 to 1000 typed. A change shows on
+the next frame: a coarser readout, the colour gone, the weekday under every
+face.
+
+It is `s` and not `S` on purpose: looking at the settings is free, and saving
+them writes a file. `S` saves both pages at once.
+
 ### Saving what you tuned
 
-`S` writes the clock on screen — the layout knobs that differ from the
-defaults, the per-row count among them, and the zones themselves — to
-`~/.config/clock/config`, and says where it put it. Every clock started
+`S` writes the clock on screen — the layout knobs and settings that differ
+from the ones this clock started with, the per-row count among them, and the
+zones themselves — to `~/.config/clock/config`, and says where it put it.
+
+"Started with" is this terminal's defaults, not the same everywhere. In iTerm2
+the readout starts at seconds, so a save there does not write seconds down —
+which would pin every other terminal to them too — unless you chose a
+different readout; elsewhere tenths is the start. `--color` and `--day` are
+saved as `--color=never` and `--day=always`, one token each, since their bare
+forms mean always and take no separate value. Every clock started
 afterwards reads that file, so the tuning survives the terminal it was done
 in:
 
@@ -1015,12 +1053,11 @@ apart:
 [ "$TERM_PROGRAM" = "iTerm.app" ] && export CLOCK_FPS=20   # or pyclock; both read it
 ```
 
-Neither is a layout knob, so the tuner does not offer them and `S` does not
-save them. Putting them in the preferences file by hand works, since that file
-is read as the front of your command line — one token per line, so `--fps=5`
-on a line of its own, or `--fps` and `5` on two — but the next `S` writes the
-file back without them. The order is the usual one: `CLOCK_FPS`, then the
-preferences file, then the command line, last one winning.
+Both are on the settings page, `s`, and `S` saves them with the layout. iTerm2
+already starts at `--readout seconds`, found by the `TERM_PROGRAM` it sets, so
+there is nothing to do there unless you want something else. The order is the
+usual one: the terminal's own default and `CLOCK_FPS`, then the preferences
+file, then the command line, last one winning.
 
 ## Terminal requirements
 
@@ -1097,11 +1134,11 @@ tools/difftest.sh -v
 ```
 
 What none of that can see is a change that alters the picture in *both*
-implementations — which is how every change is made, in one pass. So eighteen
+implementations — which is how every change is made, in one pass. So nineteen
 frames are kept as bytes in `tools/golden/`, one of each kind of picture the
-clock can draw, and compared after the two are compared with each other.
+clock can draw — iTerm2's own default readout among them — and compared after the two are compared with each other.
 Shortening the second hand to 0.70 of the radius, in both, passes every
-differential case and fails every one of the 18 goldens.
+differential case and fails every one of the 19 goldens.
 
 ```sh
 BLESS=1 tools/difftest.sh    # accept the new rendering, deliberately

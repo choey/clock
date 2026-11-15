@@ -100,9 +100,9 @@ usage: clock [-n N | --per-row N] [--color[=WHEN]] [--day[=WHEN]] [-q | --quiet]
   --fps N            repaints a second, 1 to 1000; the default is the 19ms
                       tick, a shade over 52. Lower it where the terminal
                       costs more to draw the clock than the clock does to run
-  --readout UNIT     how finely the readout shows the time: tenths (default),
-                      seconds or ms. Each changes as often as it is precise,
-                      faster than anything else on screen, so coarser is cheaper
+  --readout UNIT     how finely the readout shows the time: tenths, seconds or
+                      ms. Tenths by default, and seconds in iTerm2, where every
+                      change costs more to draw than anywhere else
   -h, --help         this message
   --version          print the version and exit
 
@@ -127,8 +127,9 @@ terminal rather than typed every time; the flag wins if both are given.
 The clock looks at the frame every 19ms and writes only the rows that changed
 since the last one, so a clock with nothing new to say is silent. The hands
 step only when their tips move a dot, a few times a second, and the readout
-changes as often as it is precise: ten times a second by default, once with
---readout seconds, and every time the clock looks with --readout ms. Some
+changes as often as it is precise: ten times a second by default (once in
+iTerm2), once with --readout seconds, and every time the clock looks with
+--readout ms. Some
 terminals charge for every update whatever it contains, so that is the cost
 to choose by. --fps sets how often the clock looks at all, hands and readout
 together, and CLOCK_FPS sets it once per terminal rather than every time, the
@@ -136,11 +137,12 @@ flag winning if both are given. Any gap that is a multiple of 10ms leaves the
 milliseconds' last digit sitting on 0, which is why the default gap is 19ms
 and not 20.
 
-Space holds the frame still, for a screenshot, h or ? opens the key list, and
-r resizes and aligns the clocks while they run. S saves those sizes and the
-zones on screen to ~/.config/clock/config, which every clock reads at startup;
-CLOCK_CONFIG points somewhere else, and set but empty means no file at all.
-Press q or Ctrl+C to quit.
+Space holds the frame still, for a screenshot, h or ? opens the key list, r
+resizes and aligns the clocks while they run, and s sets the readout, the rate,
+the colour and the weekday. S saves all of those and the zones on screen to
+~/.config/clock/config, which every clock reads at startup; CLOCK_CONFIG points
+somewhere else, and set but empty means no file at all. Press q or Ctrl+C to
+quit.
 
 examples:
   clock
@@ -184,7 +186,8 @@ var hotkeys = []struct{ key, what string }{
 	{"space", "hold the frame"},
 	{"h ?", "toggle this list"},
 	{"r", "resize and align the clocks"},
-	{"S", "save these sizes and zones"},
+	{"s", "settings: readout, fps, colour, day"},
+	{"S", "save these sizes, settings and zones"},
 	{"q", "quit, or Ctrl+C"},
 }
 
@@ -204,6 +207,14 @@ var tunables = []struct{ name, takes string }{
 	{"per-row", "auto, or a count like 3"},
 	{"scale", "auto, or a number like 1.5"},
 	{"cell-ratio", "a number like 2.1"},
+	// The settings page, which s puts up: what the clocks say and how often,
+	// rather than where they sit. The same table, so S saves them with the
+	// layout, the tuner steps and types them the same way, and the line the
+	// tuner leaves behind names them too.
+	{"readout", "ms, tenths or seconds"},
+	{"fps", "how often to look, 1 to 1000"},
+	{"color", "always, auto or never"},
+	{"day", "always, auto or never"},
 }
 
 // Which tunable is which, and how many there are. The frame loop holds the
@@ -220,8 +231,54 @@ const (
 	tunePerRow
 	tuneScale
 	tuneCellRatio
+	tuneReadout
+	tuneFps
+	tuneColor
+	tuneDay
 	numTunes
 )
+
+// The two pages of tunables: r shows the layout, s the settings. A page is a
+// run of the table, so a knob is the same index whichever page shows it.
+const (
+	layoutPage = iota
+	settingsPage
+)
+
+func pageSpan(page int) (lo, hi int) {
+	if page == settingsPage {
+		return tuneReadout, numTunes
+	}
+	return 0, tuneReadout
+}
+
+// colorWords is what the settings page offers for colour: --color's own words,
+// less "off", which it takes as a synonym and the tuner writes down as never.
+var colorWords = []string{"always", "auto", "never"}
+
+// fpsLadder is where left and right step the rate: the rates worth having,
+// rather than one frame at a time from 1 to 1000. 52 is the default tick's
+// rate, so stepping back to it lands exactly on an untouched clock.
+var fpsLadder = []int{1, 2, 5, 10, 15, 20, 30, 52, 60}
+
+// pinnedClock says this run is a still of one instant, which changes one
+// default: a pinned clock puts the weekday under every face, since an undated
+// still records half of when it is. Set at the top of run(), before anything
+// asks defaultTunes.
+var pinnedClock bool
+
+// defaultReadout is the readout an untouched clock starts with in this
+// terminal. Tenths everywhere but iTerm2, which charges for each screen update
+// almost whatever it contains -- measured, a clock at tenths cost it 29% of a
+// core where seconds cost 18% and its idle 5% -- so there it starts at
+// seconds. A flag, the preferences file or the settings page says otherwise;
+// TERM_PROGRAM is what iTerm2 sets in every session it starts.
+func defaultReadout() string {
+	if os.Getenv("TERM_PROGRAM") == "iTerm.app" {
+		return "seconds"
+	}
+	return "tenths"
+}
 
 // tuneCol is where the values start, past the longest name plus a gutter.
 const tuneCol = 12
@@ -288,9 +345,11 @@ func tickFor(fps int) time.Duration {
 	return time.Duration((1000+fps/2)/fps) * time.Millisecond
 }
 
-// defaultTunes is the six knobs as an untouched clock has them: the flag
-// defaults, with CLOCK_CELL_RATIO standing in for the ratio where it is
-// usable. Unlike --cell-ratio, an environment variable might be stale or set
+// defaultTunes is every knob as an untouched clock has them in this terminal:
+// the flag defaults, with CLOCK_CELL_RATIO standing in for the ratio and
+// CLOCK_FPS for the rate where they are usable, and the readout as
+// defaultReadout has it. What S compares against, so it saves what was changed
+// and not what this terminal would have started with anyway. Unlike --cell-ratio, an environment variable might be stale or set
 // for some other program, so a bad value there is not a user error -- it is
 // simply ignored, the same way an unset one is.
 func defaultTunes() [numTunes]string {
@@ -302,11 +361,27 @@ func defaultTunes() [numTunes]string {
 		tunePerRow:    "auto",
 		tuneScale:     "auto",
 		tuneCellRatio: defaultCellRatioText,
+		tuneReadout:   defaultReadout(),
+		tuneFps:       "52",
+		tuneColor:     "auto",
+		tuneDay:       "auto",
 	}
 	if v := os.Getenv("CLOCK_CELL_RATIO"); v != "" {
 		if _, ok := positiveFloat(v); ok {
 			vals[tuneCellRatio] = v
 		}
+	}
+	// Like CLOCK_CELL_RATIO, and unlike the harness's variables: this one is
+	// meant to be set once per terminal and left there, where it can go stale
+	// or be meant for something else entirely, so a value that does not parse
+	// is ignored rather than refused. --fps says the same thing and wins.
+	if v := os.Getenv("CLOCK_FPS"); v != "" {
+		if n, err := parseCount(v, "CLOCK_FPS", maxFPS); err == nil {
+			vals[tuneFps] = strconv.Itoa(n)
+		}
+	}
+	if pinnedClock {
+		vals[tuneDay] = "always"
 	}
 	return vals
 }
@@ -1352,7 +1427,7 @@ type geometry struct {
 	hpad, vpad     int
 }
 
-// settings is the six tunables parsed: what the frame loop actually lays out
+// settings is the tunables parsed: what the frame loop actually lays out
 // with. Read back from the text with readTunes whenever the text changes --
 // at startup, and after every value the tuner takes.
 type settings struct {
@@ -1362,6 +1437,10 @@ type settings struct {
 	rows       int // the face height a fixed --scale asks for; unused when scaleAuto
 	perRow     int // the cap an explicit -n asks for; unused when perRowAuto
 	perRowAuto bool
+	readout    string        // how finely the readout shows the time
+	gap        time.Duration // how long the loop waits between looks
+	colorWhen  string        // always, auto or never
+	dayWhen    string        // always, auto or never
 }
 
 // rowsForScale turns a --scale into a face height, and refuses one that would
@@ -1409,6 +1488,18 @@ func checkTune(i int, val string) error {
 		}
 		_, err = rowsForScale(s)
 		return err
+	case tuneReadout:
+		_, err := parseChoice("readout", val, readouts)
+		return err
+	case tuneFps:
+		_, err := parseCount(val, "--fps", maxFPS)
+		return err
+	case tuneColor:
+		_, err := parseChoice("color", val, colorWhens)
+		return err
+	case tuneDay:
+		_, err := parseChoice("day", val, whens)
+		return err
 	default:
 		_, err := parseRatio(val)
 		return err
@@ -1437,11 +1528,19 @@ func canonTune(i int, val string) string {
 			return val
 		}
 		return strconv.Itoa(n)
+	case tuneFps:
+		if n, err := parseCount(val, "--fps", maxFPS); err == nil {
+			return strconv.Itoa(n)
+		}
+	case tuneColor:
+		if val == "off" {
+			return "never"
+		}
 	}
 	return val
 }
 
-// readTunes parses the six back into a settings. Every value has been through
+// readTunes parses the knobs back into a settings. Every value has been through
 // checkTune, so nothing here can fail; anything that did would be a value
 // stored without being checked, which is a bug rather than a bad input.
 func readTunes(vals [numTunes]string) settings {
@@ -1452,6 +1551,12 @@ func readTunes(vals [numTunes]string) settings {
 		perRow:     defaultPerRow,
 		perRowAuto: true,
 	}
+	set.readout = vals[tuneReadout]
+	set.gap = tick
+	if n, err := parseCount(vals[tuneFps], "--fps", maxFPS); err == nil {
+		set.gap = tickFor(n)
+	}
+	set.colorWhen, set.dayWhen = vals[tuneColor], vals[tuneDay]
 	set.geo.halign = vals[tuneHalign]
 	set.geo.valign = vals[tuneValign]
 	set.geo.hpad, _ = parsePad("hpad", vals[tuneHpad])
@@ -1477,6 +1582,7 @@ func readTunes(vals [numTunes]string) settings {
 // scale sizes the face here and for good; --scale auto leaves rowsN to the
 // per-frame search, which reads cellRatio itself.
 func (set settings) apply() {
+	readout, paintEvery = set.readout, set.gap
 	cellRatio = set.cellRatio
 	if !set.scaleAuto {
 		rowsN = set.rows
@@ -1499,40 +1605,18 @@ func trimFloat(v float64) string {
 // whole of "the file is the front of your command line" -- last wins, with no
 // second set of rules to keep in step with the first.
 type options struct {
-	zoneList  string
-	colorWhen string
-	dayWhen   string
-	quiet     bool
-	// Repaints per second, or zero for the tick. Not one of the six knobs
-	// below: those are the layout, which the tuner changes and S saves, and
-	// this changes nothing anyone can see in a still frame.
-	fps int
-	// How finely the readout shows the time: one of readouts. Not a knob for
-	// the tuner either, for the same reason --day is not: it changes what a
-	// readout says, not where anything sits.
-	readout string
-	vals    [numTunes]string
+	zoneList string
+	quiet    bool
+	// The knobs, layout and settings both, as text: --readout, --fps,
+	// --color and --day land here along with the layout flags, so the
+	// settings page shows what they said and S saves what changed.
+	vals [numTunes]string
 }
 
 // defaultOptions is a clock nobody has told anything: the flag defaults, and
 // the six knobs as defaultTunes has them.
 func defaultOptions() options {
-	out := options{
-		colorWhen: "auto",
-		dayWhen:   "", // unset: run() picks it, since a pinned clock differs
-		readout:   "tenths",
-		vals:      defaultTunes(),
-	}
-	// Like CLOCK_CELL_RATIO, and unlike the harness's variables: this one is
-	// meant to be set once per terminal and left there, where it can go stale
-	// or be meant for something else entirely, so a value that does not parse
-	// is ignored rather than refused. --fps says the same thing and wins.
-	if v := os.Getenv("CLOCK_FPS"); v != "" {
-		if n, err := parseCount(v, "CLOCK_FPS", maxFPS); err == nil {
-			out.fps = n
-		}
-	}
-	return out
+	return options{vals: defaultTunes()}
 }
 
 // configPath is where S saves and startup reads. CLOCK_CONFIG names it
@@ -1673,7 +1757,7 @@ func parseArgs(argv []string, opt options) (out options, err error) {
 					}
 					val = argv[i]
 				}
-				if out.readout, err = parseChoice("readout", val, readouts); err != nil {
+				if out.vals[tuneReadout], err = parseChoice("readout", val, readouts); err != nil {
 					return
 				}
 			case "fps":
@@ -1685,25 +1769,29 @@ func parseArgs(argv []string, opt options) (out options, err error) {
 					}
 					val = argv[i]
 				}
-				if out.fps, err = parseCount(val, "--fps", maxFPS); err != nil {
+				var n int
+				if n, err = parseCount(val, "--fps", maxFPS); err != nil {
 					return
 				}
+				out.vals[tuneFps] = strconv.Itoa(n)
 			case "color":
 				// Bare --color means always, and takes no separate argument:
 				// "clock --color ET" names a zone list, exactly as ls and git
 				// read the same flag. The value only ever follows an "=".
-				out.colorWhen = "always"
+				out.vals[tuneColor] = "always"
 				if haveVal {
-					if out.colorWhen, err = parseChoice("color", val, colorWhens); err != nil {
+					var w string
+					if w, err = parseChoice("color", val, colorWhens); err != nil {
 						return
 					}
+					out.vals[tuneColor] = canonTune(tuneColor, w)
 				}
 			case "no-color":
 				if haveVal {
 					err = errors.New("--no-color takes no value")
 					return
 				}
-				out.colorWhen = "never"
+				out.vals[tuneColor] = "never"
 			case "version":
 				// Read where it is found, like --help: everything before it on
 				// the command line still has to parse, everything after it is
@@ -1715,9 +1803,9 @@ func parseArgs(argv []string, opt options) (out options, err error) {
 				err = errVersion
 				return
 			case "day":
-				out.dayWhen = "always"
+				out.vals[tuneDay] = "always"
 				if haveVal {
-					if out.dayWhen, err = parseChoice("day", val, whens); err != nil {
+					if out.vals[tuneDay], err = parseChoice("day", val, whens); err != nil {
 						return
 					}
 				}
@@ -1726,7 +1814,7 @@ func parseArgs(argv []string, opt options) (out options, err error) {
 					err = errors.New("--no-day takes no value")
 					return
 				}
-				out.dayWhen = "never"
+				out.vals[tuneDay] = "never"
 			case "quiet":
 				if haveVal {
 					err = errors.New("--quiet takes no value")
@@ -2939,13 +3027,14 @@ func helpRows() []string {
 	return rows
 }
 
-// tuner is what r puts up: the six knobs, one of them picked, and whatever is
-// being typed into it. It holds no values of its own -- the text it shows is
+// tuner is what r and s put up: one page of knobs, one of them picked, and
+// whatever is being typed into it. It holds no values of its own -- the text it shows is
 // the same text the frame loop lays out from, so what is on screen is always
 // what is in effect.
 type tuner struct {
 	open    bool
-	sel     int    // which of the six is picked
+	page    int    // layoutPage or settingsPage
+	sel     int    // which knob is picked, as its index in tunables
 	edit    string // what has been typed into it, once typing has started
 	editing bool
 	err     string // the last refusal, in the flag's own words
@@ -2960,6 +3049,12 @@ func tuneOptions(i int) []string {
 		return haligns
 	case tuneValign:
 		return valigns
+	case tuneReadout:
+		return readouts
+	case tuneColor:
+		return colorWords
+	case tuneDay:
+		return whens
 	}
 	return nil
 }
@@ -3015,6 +3110,29 @@ func tuneStep(i int, val string, delta int, wrap bool) string {
 			return val
 		}
 		return opts[next]
+	}
+
+	if i == tuneFps {
+		// Along the ladder rather than a frame at a time: to the next rate
+		// on it past this one, whatever this one is, and nowhere off its ends.
+		n, err := parseCount(val, "--fps", maxFPS)
+		if err != nil {
+			return val
+		}
+		if delta > 0 {
+			for _, r := range fpsLadder {
+				if r > n {
+					return strconv.Itoa(r)
+				}
+			}
+			return val
+		}
+		for k := len(fpsLadder) - 1; k >= 0; k-- {
+			if fpsLadder[k] < n {
+				return strconv.Itoa(fpsLadder[k])
+			}
+		}
+		return val
 	}
 
 	word := tuneWord(i)
@@ -3114,8 +3232,10 @@ func tuneShow(i int, val string) string {
 // The face height goes beside the scale, since that is the number --scale
 // auto is choosing and the one a reader wanting to pin it down needs.
 func tuneRows(t tuner, vals [numTunes]string) []string {
-	rows := make([]string, 0, len(tunables)+3)
-	for i, k := range tunables {
+	lo, hi := pageSpan(t.page)
+	rows := make([]string, 0, hi-lo+4)
+	for i := lo; i < hi; i++ {
+		k := tunables[i]
 		mark := "  "
 		if i == t.sel {
 			mark = "> "
@@ -3145,7 +3265,15 @@ func tuneFlags(vals [numTunes]string) []string {
 	def := defaultTunes()
 	var out []string
 	for i, k := range tunables {
-		if vals[i] != def[i] {
+		if vals[i] == def[i] {
+			continue
+		}
+		if i == tuneColor || i == tuneDay {
+			// One token, joined: bare --color and --day mean always and take
+			// no separate argument, so "--color", "never" would read the
+			// second as a zone list.
+			out = append(out, "--"+k.name+"="+vals[i])
+		} else {
 			out = append(out, "--"+k.name, vals[i])
 		}
 	}
@@ -3764,7 +3892,7 @@ func fitHeight(chunks, termRows, vgap int) error {
 // those few rows -- capped at symmetryWindow, so a face that never finds one
 // does not shrink indefinitely looking.
 func autoScale(wantPerRow, numFaces, cols, lines, hpad, vpad int) {
-	key := scaleKey{wantPerRow, numFaces, cols, lines, hpad, vpad, cellRatio}
+	key := scaleKey{wantPerRow, numFaces, cols, lines, hpad, vpad, cellRatio, readout}
 	if got, ok := scaleCache[key]; ok {
 		rowsN, colsN = got[0], got[1]
 		return
@@ -3784,6 +3912,7 @@ func autoScale(wantPerRow, numFaces, cols, lines, hpad, vpad int) {
 type scaleKey struct {
 	wantPerRow, numFaces, cols, lines, hpad, vpad int
 	cellRatio                                     float64
+	readout                                       string // it sets the narrowest cell
 }
 
 // The sizes autoScale settled on, by what it was asked. A handful of entries
@@ -3979,6 +4108,7 @@ var leftWith string
 // cursor is hidden or cbreak mode is on.
 func run() error {
 	frozen, pinned, err := freeze()
+	pinnedClock = pinned
 	if err != nil {
 		return err
 	}
@@ -4013,13 +4143,6 @@ func run() error {
 	}
 	vals := opt.vals
 	zoneList, quiet := opt.zoneList, opt.quiet
-	color := useColor(opt.colorWhen)
-	// Before sequence() below, which takes its default step from the gap, and
-	// before the ticker that waits it out.
-	if opt.fps != 0 {
-		paintEvery = tickFor(opt.fps)
-	}
-	readout = opt.readout
 
 	// The six knobs, as text, are the whole of the layout state: --cell-ratio
 	// has already beaten CLOCK_CELL_RATIO in defaultTunes, and a fixed
@@ -4027,19 +4150,15 @@ func run() error {
 	// rowsN to the per-frame search. r re-runs exactly this, which is why it
 	// can change any of them without the loop knowing where a value came
 	// from.
+	//
+	// The settings ride the same way: the readout, the gap the loop waits --
+	// before sequence() below, which takes its default step from it -- and
+	// the colour and weekday rules, which s can change while it runs too. A
+	// pinned clock's weekday defaults to always, which defaultTunes has seen
+	// to: an undated still records half of when it is.
 	set := readTunes(vals)
 	set.apply()
-
-	// A pinned clock is a still of one instant, and an undated still records
-	// half of it, so the weekday goes under every face unless --day says
-	// otherwise. Live, auto keeps it for the clocks that actually disagree.
-	dayWhen := opt.dayWhen
-	if dayWhen == "" {
-		dayWhen = "auto"
-		if pinned {
-			dayWhen = "always"
-		}
-	}
+	color, dayWhen := useColor(set.colorWhen), set.dayWhen
 
 	startedAt := time.Now()
 	if pinned {
@@ -4407,6 +4526,10 @@ func run() error {
 		}
 		if vals != prevVals {
 			leftWith = tuneCommand(vals, zoneList)
+			// What the settings page may have moved: the ticker waits out
+			// whatever gap is now in force from the next tick on.
+			color, dayWhen = useColor(set.colorWhen), set.dayWhen
+			t.Reset(paintEvery)
 		}
 		if wasTuning && !tune.open {
 			// Closing the tuner says what it would take to start the clock
@@ -4434,11 +4557,12 @@ func pressed(key string, tune *tuner, vals *[numTunes]string, set *settings,
 	if tune.open {
 		switch key {
 		case keyUp, keyDown:
+			lo, hi := pageSpan(tune.page)
 			step := 1
 			if key == keyUp {
-				step = len(tunables) - 1
+				step = hi - lo - 1
 			}
-			tune.sel = (tune.sel + step) % len(tunables)
+			tune.sel = lo + (tune.sel-lo+step)%(hi-lo)
 			tune.edit, tune.editing, tune.err = "", false, ""
 		case keyLeft, keyRight, " ":
 			// Straight onto the clocks: every value stepping can reach has
@@ -4502,10 +4626,14 @@ func pressed(key string, tune *tuner, vals *[numTunes]string, set *settings,
 	case "r", "R":
 		*tune = tuner{open: true}
 		*helpOn = false
+	case "s":
+		// Lowercase only: the capital saves, and the two are a shift apart on
+		// purpose -- looking at the settings is free, writing a file is not.
+		*tune = tuner{open: true, page: settingsPage, sel: tuneReadout}
+		*helpOn = false
 	case "S":
 		// Capitalised on purpose: it overwrites a file, and a shift is enough
-		// to keep an elbow from doing it. Lowercase s is not taken, so a miss
-		// does nothing at all.
+		// to keep an elbow from doing it.
 		*note = save()
 		*helpOn = false
 	}

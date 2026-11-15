@@ -89,8 +89,12 @@ def pump(master, out, seconds):
     the caller is timing out on purpose.
     """
     end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        ready, _, _ = select.select([master], [], [], 0.02)
+    while (left := end - time.monotonic()) > 0:
+        # Never past the end: a wait asked for in milliseconds, which is what
+        # a split keystroke's gap is, used to last a 20ms select at least --
+        # 60ms and more on a macOS runner, past any grace the clock gives a
+        # half-read key, so the split arrived as an Esc and a stray "[C".
+        ready, _, _ = select.select([master], [], [], min(0.02, left))
         if not ready:
             continue
         try:
@@ -132,6 +136,10 @@ def open_pty(echo=False):
     mode[1] &= ~termios.OPOST  # oflag
     termios.tcsetattr(slave, termios.TCSANOW, mode)
     return master, slave
+
+
+# Every short gap run() was asked for, as it turned out: see run().
+SHORT_GAPS = []
 
 
 def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None, marks=None, env=None):
@@ -195,6 +203,7 @@ def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None, marks=None, env=No
         if not drain(settle):
             break
 
+    short_since = None
     for key in keys:
         if proc.poll() is not None:
             break
@@ -207,6 +216,13 @@ def run(argv, keys, freeze=FROZEN, settle=SETTLE, sizes=None, marks=None, env=No
             os.write(master, key)
         except OSError:  # it quit between the poll above and this write
             break
+        # How long a gap asked for in milliseconds really was, write to write.
+        # A loaded machine can stretch it past the clock's grace, and then the
+        # run is not testing a split keystroke at all: see compare_tune.
+        now = time.monotonic()
+        if short_since is not None:
+            SHORT_GAPS.append(now - short_since)
+        short_since = now if wait < 0.02 else None
         if not drain(wait):
             if marks is not None:
                 marks.append(len(out))
@@ -415,6 +431,12 @@ def tune_walk(painted):
     return walk
 
 
+# The longest a split keystroke's gap may really have been for the run to
+# count: well inside the three frames, 57ms, the clock gives the rest of a
+# keystroke to arrive.
+SPLIT_GAP_LIMIT = 0.030
+
+
 def compare_tune(name, keys, expect=None, args=("-q", "UTC")):
     """Both implementations, same keys: the same walk through the tuner.
 
@@ -432,7 +454,20 @@ def compare_tune(name, keys, expect=None, args=("-q", "UTC")):
 
     seen = {}
     for impl, argv in IMPLS:
-        painted, status = run(argv + list(args), keys)
+        # A split keystroke is only split within the clock's grace if this
+        # harness wrote its halves close enough together, which a loaded
+        # machine does not promise: the 5ms gap below came out at 60ms on a
+        # macOS runner, longer than the grace. A run like that tests nothing,
+        # so it is run again rather than counted, a few times at most.
+        for _ in range(4):
+            SHORT_GAPS.clear()
+            painted, status = run(argv + list(args), keys)
+            if all(gap < SPLIT_GAP_LIMIT for gap in SHORT_GAPS):
+                break
+        else:
+            report(False, name, f"{impl}: could not write a split keystroke within "
+                                f"{SPLIT_GAP_LIMIT * 1000:.0f}ms in four tries")
+            return
         seen[impl] = (tune_walk(painted), status, painted)
 
     (go_walk, go_status, go_painted) = seen["go"]
@@ -1282,8 +1317,13 @@ def main():
         compare_tune("an arrow split across a read is still an arrow",
                      [b"r", DOWN, DOWN, (b"\x1b", 0.005), b"[C", ESC],
                      [0, 1, 1, 1, 1, 0])
-        compare_tune("and a lone esc is still an esc, one frame later",
-                     [b"r", b"\x1b", b"r", ESC], [0, 1, 0, 1, 0])
+        # The Esc's own settle is longer than the rest: the r after it must
+        # come after the grace is over, and grace is counted in frames, which
+        # a slow machine draws far apart -- a Python tuner frame took 110ms
+        # on a macOS runner, so three frames outlasted the usual quarter
+        # second and the Esc and the r were read as one keystroke.
+        compare_tune("and a lone esc is still an esc, a few frames later",
+                     [b"r", (b"\x1b", 0.8), b"r", ESC], [0, 1, 0, 1, 0])
         # per-row is a knob like the rest, and the only one that changes how
         # many clocks a row holds rather than how big they are.
         tuned_layout("stepping per-row draws what -n draws",

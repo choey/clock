@@ -440,11 +440,18 @@ for an Esc and far longer than bytes the terminal has already written need to
 arrive. Frames rather than a timer, so both ports answer on the same one.
 It was two frames until keys woke the clock: an ESC read on the beat after
 it arrived had two to three ticks for the rest of its arrow to follow, and
-an ESC read the instant it lands has only the two, which a loaded CI runner
-missed often enough to fail a run in either port. Go's watcher also asks
+an ESC read the instant it lands has only the two. Go's watcher also asks
 stdin again before ending a wait, since a "ready" it sent before a frame's
 read would otherwise end the next wait early, with nothing to read, and
 spend a frame of that grace.
+
+Frames are not a fixed length of time, which keytest has to allow for in
+both directions. Its split arrow's 5ms gap came out at 60ms on a macOS
+runner -- its waits were 20ms selects at the least -- so it now waits no
+longer than it was asked, and reruns a case whose gap still came out longer
+than 30ms instead of counting it. And a Python tuner frame there took
+110ms, so three frames of grace outlasted the quarter second between an Esc
+and the next key: the lone-Esc case leaves 0.8s.
 
 A read boundary can still fall inside a keystroke -- the terminal decides that,
 not the clock -- so `tools/keytest.py` does not compare how many frames the

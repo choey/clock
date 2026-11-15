@@ -17,11 +17,16 @@ jobs:
     # macOS is here to catch is the platform, not the version -- term_bsd.go
     # is compiled nowhere else, and termios, select and the pty are BSD's
     # rather than glibc's.
+    #
+    # The floor's runner is pinned rather than -latest: ubuntu-latest became
+    # 26.04 in October 2026, and setup-python has no 3.9 for it, so the floor
+    # job failed before it ran a test. 24.04 still has one. When it goes too,
+    # the floor goes with it -- that is the time to raise pyproject's.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             go: "1.21"
             python: "3.9"
           - os: ubuntu-latest

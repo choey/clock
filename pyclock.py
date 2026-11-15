@@ -4030,12 +4030,13 @@ def run(argv):
                 # answered keys draws the next at once; one holding half a
                 # keystroke waits no longer than the tick, since the grace for
                 # finishing it is counted in frames; and any wait ends early
-                # for a key or a signal, a resize among them. Otherwise a synced clock waits for the
-                # next point on its grid by the wall clock, rather than a beat
-                # on the monotonic one, which would keep whatever phase the
-                # clock started at -- asked afresh every frame, so a wake that
-                # ran late cannot push the ones after it late too. clock.go
-                # makes the same choices in the same order.
+                # for a key or a signal, a resize among them. Otherwise a
+                # synced clock waits for the next point on its grid by the wall
+                # clock, rather than a beat on the monotonic one, which would
+                # keep whatever phase the clock started at -- asked afresh
+                # every frame, so a wake that ran late cannot push the ones
+                # after it late too. clock.go makes the same choices in the
+                # same order.
                 if handled:
                     continue
                 if decoder.state:

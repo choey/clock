@@ -3421,9 +3421,13 @@ type keyDecoder struct {
 const keysPerFrame = 64
 
 // escGrace is how many frames a half-read keystroke is given to finish --
-// 38ms, which is nothing to wait for an Esc and more than enough for bytes
-// the terminal has already written.
-const escGrace = 2
+// 57ms, which is nothing to wait for an Esc and more than enough for bytes
+// the terminal has already written. Three rather than two since keys wake the
+// clock: an ESC used to be read on the beat after it arrived, so two frames
+// were up to three ticks after it, and read the instant it lands two frames
+// are two ticks -- short enough that a loaded machine took a held arrow for
+// an Esc.
+const escGrace = 3
 
 // feed reads one byte, returning the keys it completes -- none, one, or (an
 // ESC followed by an ordinary key) two.
@@ -4651,7 +4655,17 @@ func run() error {
 				waiting = false
 			case <-keyReady:
 				watch.armed = false
-				waiting = false
+				// The watcher said so before this frame's read, if the wait
+				// that frame ended with was the timer's: the keys it saw were
+				// read since, and an early frame with nothing in it is one of
+				// the frames a half-read keystroke's grace is counted in. So
+				// ask again, and wait on if there is nothing to read.
+				if ok, _ := selectRead(0); ok {
+					waiting = false
+				} else {
+					watch.arm <- struct{}{}
+					watch.armed = true
+				}
 			case <-winch:
 				waiting = false
 			case s := <-sigs:

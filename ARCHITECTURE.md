@@ -435,9 +435,16 @@ either a key of its own or the first byte of one. The usual answer is a few
 milliseconds' wait, which is not available to two ports compared frame for
 frame -- which frame an Esc landed in would become a question about the
 machine's speed. So a pending sequence waits `escGrace` frames with nothing
-following it before it is called a bare Esc: two frames, 38ms, nothing to wait
+following it before it is called a bare Esc: three frames, 57ms, nothing to wait
 for an Esc and far longer than bytes the terminal has already written need to
 arrive. Frames rather than a timer, so both ports answer on the same one.
+It was two frames until keys woke the clock: an ESC read on the beat after
+it arrived had two to three ticks for the rest of its arrow to follow, and
+an ESC read the instant it lands has only the two, which a loaded CI runner
+missed often enough to fail a run in either port. Go's watcher also asks
+stdin again before ending a wait, since a "ready" it sent before a frame's
+read would otherwise end the next wait early, with nothing to read, and
+spend a frame of that grace.
 
 A read boundary can still fall inside a keystroke -- the terminal decides that,
 not the clock -- so `tools/keytest.py` does not compare how many frames the

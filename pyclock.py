@@ -3379,10 +3379,10 @@ def pending_keys():
 # frame the other port never painted.
 KEYS_PER_FRAME = 64
 
-# How many frames a half-read keystroke is given to finish -- 38ms, which is
+# How many frames a half-read keystroke is given to finish -- 57ms, which is
 # nothing to wait for an Esc and more than enough for bytes the terminal has
-# already written.
-ESC_GRACE = 2
+# already written. Three, not two, for the reason clock.go's escGrace gives.
+ESC_GRACE = 3
 
 # Keys the tuner reads that are not one character: what KeyDecoder hands back
 # instead of a byte.

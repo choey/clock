@@ -367,6 +367,9 @@ the rest.
 | `S` | save those sizes, the settings and the zones on screen, for next time |
 | `q` | quit, as does Ctrl+C |
 
+Every key is answered the moment it is pressed, whatever `--fps` says: the
+rate is how often the clock looks at the time, not how often it listens.
+
 Ctrl+Z suspends it, like any other job. The clock hands the terminal back for
 the length of the stop and takes it again on `fg`; see [Terminal
 requirements](#terminal-requirements).
@@ -1028,7 +1031,17 @@ sample that lands in either says more about the terminal than the clock.
   one. Below a hand's own step rate the hand starts to skip dots rather than
   step through them, and any gap that is a multiple of 10ms parks the
   milliseconds' last digit on 0 under `--readout ms`, `--fps 100` as surely as
-  `--fps 10`. That is why the default gap is 19ms and not 20.
+  `--fps 10`. That is why the default gap is 19ms and not 20. It never slows
+  the keys: a key is answered when it is pressed, at any rate.
+
+Below 10 a second the clock keeps in step with the wall clock rather than with
+whenever it started. Each frame lands on the second or an even fraction of it
+— at `--fps 2`, on `.000` and `.500`; at `--fps 3`, on `.000`, `.333` and
+`.666` — and draws that very instant, so the second hand turns over on the
+second and the readout shows the point it landed on rather than how late the
+wait ended. A pinned clock's instant is moved onto the same grid. At 10 a
+second and above no frame is ever more than a tenth of a second late, and the
+clock runs free.
 
 They combine: `--readout seconds --fps 20` looks twenty times a second and
 repaints only when a hand steps or the second turns over.
@@ -1134,11 +1147,12 @@ tools/difftest.sh -v
 ```
 
 What none of that can see is a change that alters the picture in *both*
-implementations — which is how every change is made, in one pass. So nineteen
+implementations — which is how every change is made, in one pass. So twenty
 frames are kept as bytes in `tools/golden/`, one of each kind of picture the
-clock can draw — iTerm2's own default readout among them — and compared after the two are compared with each other.
+clock can draw — iTerm2's own default readout and a frame on the second's grid
+among them — and compared after the two are compared with each other.
 Shortening the second hand to 0.70 of the radius, in both, passes every
-differential case and fails every one of the 19 goldens.
+differential case and fails every one of the 20 goldens.
 
 ```sh
 BLESS=1 tools/difftest.sh    # accept the new rendering, deliberately

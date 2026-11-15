@@ -133,9 +133,13 @@ iTerm2), once with --readout seconds, and every time the clock looks with
 terminals charge for every update whatever it contains, so that is the cost
 to choose by. --fps sets how often the clock looks at all, hands and readout
 together, and CLOCK_FPS sets it once per terminal rather than every time, the
-flag winning if both are given. Any gap that is a multiple of 10ms leaves the
-milliseconds' last digit sitting on 0, which is why the default gap is 19ms
-and not 20.
+flag winning if both are given. It is never how soon a key is answered: that
+is at once, whatever the rate. Below 10 a second the clock keeps in step with
+the wall clock: each frame lands on the second or an even fraction of it and
+shows that very instant, so the second hand turns over on the second rather
+than whenever the clock happened to start. Any gap that is a multiple of 10ms
+leaves the milliseconds' last digit sitting on 0, which is why the default gap
+is 19ms and not 20.
 
 Space holds the frame still, for a screenshot, h or ? opens the key list, r
 resizes and aligns the clocks while they run, and s sets the readout, the rate,
@@ -334,6 +338,48 @@ var paintEvery = tick
 // time at the precision shown, so a still of a pinned clock still says
 // exactly when it is.
 var readout = "tenths"
+
+// syncBelow is the rate under which a clock keeps in step with the wall clock.
+// At ten frames a second or more, a frame is never more than a tenth late and
+// the eye cannot tell; below it, a clock free to start its ticks wherever it
+// started would turn its second hand over a large part of a second after the
+// second, every second.
+const syncBelow = 10
+
+// syncedFps is the rate a clock is keeping in step at, or 0 for one at or above
+// syncBelow, which runs free. Set by settings.apply, from --fps.
+var syncedFps int
+
+// gridIndex is which of n even points in t's second t has reached: the k for
+// which k*1000/n whole milliseconds past the second is the latest at or before
+// t. Whole numbers only, the same expression as pyclock.py's, so the two ports
+// put every frame on the same point. For n = 3 the points are 0, 333 and 666.
+func gridIndex(t time.Time, n int) int {
+	ms := t.Nanosecond() / 1000000
+	return ((ms+1)*n+999)/1000 - 1
+}
+
+// onGrid is t moved back to that point: the instant a synced frame draws, so
+// the readout shows .000 or .500 rather than whenever the wait happened to
+// end, and the hands stand where they stand on the second.
+func onGrid(t time.Time, n int) time.Time {
+	whole := t.Add(-time.Duration(t.Nanosecond()))
+	return whole.Add(time.Duration(gridIndex(t, n)*1000/n) * time.Millisecond)
+}
+
+// untilGrid is how long from t until the next point on the grid -- the next
+// fraction of this second, or the next second -- and a millisecond more, so a
+// wait that ends a hair early by the wall clock still lands past the point
+// rather than drawing the one before it again.
+func untilGrid(t time.Time, n int) time.Duration {
+	k := gridIndex(t, n)
+	whole := t.Add(-time.Duration(t.Nanosecond()))
+	next := whole.Add(time.Second)
+	if k+1 < n {
+		next = whole.Add(time.Duration((k+1)*1000/n) * time.Millisecond)
+	}
+	return next.Sub(t) + time.Millisecond
+}
 
 // tickFor is the gap between repaints at a given rate, to the nearest whole
 // millisecond.
@@ -1439,6 +1485,7 @@ type settings struct {
 	perRowAuto bool
 	readout    string        // how finely the readout shows the time
 	gap        time.Duration // how long the loop waits between looks
+	fps        int           // the rate that gap is for
 	colorWhen  string        // always, auto or never
 	dayWhen    string        // always, auto or never
 }
@@ -1552,9 +1599,9 @@ func readTunes(vals [numTunes]string) settings {
 		perRowAuto: true,
 	}
 	set.readout = vals[tuneReadout]
-	set.gap = tick
+	set.gap, set.fps = tick, 52
 	if n, err := parseCount(vals[tuneFps], "--fps", maxFPS); err == nil {
-		set.gap = tickFor(n)
+		set.gap, set.fps = tickFor(n), n
 	}
 	set.colorWhen, set.dayWhen = vals[tuneColor], vals[tuneDay]
 	set.geo.halign = vals[tuneHalign]
@@ -1583,6 +1630,10 @@ func readTunes(vals [numTunes]string) settings {
 // per-frame search, which reads cellRatio itself.
 func (set settings) apply() {
 	readout, paintEvery = set.readout, set.gap
+	syncedFps = 0
+	if set.fps < syncBelow {
+		syncedFps = set.fps
+	}
 	cellRatio = set.cellRatio
 	if !set.scaleAuto {
 		rowsN = set.rows
@@ -4074,6 +4125,47 @@ func suspend(restore, requiet func(), fullScreen bool) {
 	fmt.Print(hideCursor)
 }
 
+// keyWatch tells the frame loop that stdin has something to read, so a key is
+// answered the moment it is pressed instead of when the next frame comes
+// round -- which at --fps 1 is a second later. It never reads: the loop does
+// that, once a frame and in the same place pyclock.py does, which is the rule
+// that cost a release when a reader goroutine broke it. All this does is wait
+// for the descriptor to be ready, a fraction of a second at a time so EINTR
+// and the like are never more than a pause, and say so.
+type keyWatch struct {
+	arm   chan struct{} // the loop is about to wait: watch for a key
+	ready chan struct{} // a key is there to be read
+	armed bool
+}
+
+func newKeyWatch() *keyWatch {
+	w := &keyWatch{arm: make(chan struct{}, 1), ready: make(chan struct{}, 1)}
+	go func() {
+		for range w.arm {
+			for {
+				ok, err := selectRead(100 * time.Millisecond)
+				if ok {
+					w.ready <- struct{}{}
+					break
+				}
+				if err != nil && !errors.Is(err, syscall.EINTR) {
+					time.Sleep(100 * time.Millisecond) // a stdin gone bad: no busy loop
+				}
+			}
+		}
+	}()
+	return w
+}
+
+// rightAway is a wait that is already over: a frame with keys answered in it
+// draws the next one at once, so the key's effect is on screen now rather
+// than a gap later.
+var rightAway = func() <-chan time.Time {
+	c := make(chan time.Time)
+	close(c)
+	return c
+}()
+
 // pendingKeys is whatever is waiting on stdin, or nothing at all. Never
 // blocks, and assumes cbreak mode, where a key arrives without a Return
 // behind it.
@@ -4086,7 +4178,7 @@ func suspend(restore, requiet func(), fullScreen bool) {
 // gathered, never paints. That difference cost a release. This is the same
 // select-then-read pyclock.py does, in the same place in the loop.
 func pendingKeys(buf []byte) []byte {
-	ready, err := selectRead()
+	ready, err := selectRead(0)
 	if err != nil || !ready {
 		return nil
 	}
@@ -4187,6 +4279,13 @@ func run() error {
 	// pyclock.py asks the same question, of the same descriptor, for the same
 	// reason.
 	interactive := isTerminal(os.Stdin)
+	// Only a clock reading a terminal has keys to wake for: a redirected stdin
+	// -- /dev/null, a pipe at its end -- reads as ready for ever, and watching
+	// it would wake the loop as fast as it could go.
+	var watch *keyWatch
+	if interactive {
+		watch = newKeyWatch()
+	}
 	keyBuf := make([]byte, keysPerFrame)
 
 	// On a terminal, take the alternate screen and paint from its top corner.
@@ -4285,6 +4384,14 @@ func run() error {
 		}
 		if oneShot {
 			now = now.Add(time.Duration(drawn) * step)
+		}
+		// Below syncBelow a frame draws the instant on its grid, not the
+		// instant the wait ended: the second hand then turns over on the
+		// second, and the readout says .000 rather than how late the wake was.
+		// A pinned clock's instant is moved the same way, which is what lets
+		// difftest hold the two ports to it.
+		if syncedFps > 0 {
+			now = onGrid(now, syncedFps)
 		}
 		if holding {
 			now = held
@@ -4482,9 +4589,11 @@ func run() error {
 		// left to answer but signals.
 		wasTuning := tune.open
 		prevVals := vals
+		handled := 0
 		if interactive {
 			for _, b := range pendingKeys(keyBuf) {
 				for _, key := range dec.feed(b) {
+					handled++
 					if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now, save) {
 						return nil
 					}
@@ -4494,15 +4603,47 @@ func run() error {
 			// it is taken for something else. Decided here rather than on a
 			// timer: see keyDecoder.
 			for _, key := range dec.settle() {
+				handled++
 				if pressed(key, &tune, &vals, &set, &holding, &held, &helpOn, &note, now, save) {
 					return nil
 				}
 			}
 		}
 
+		// How long this wait may be. Keys come first, whatever the rate: the
+		// rate is how often the clock looks at the time, not how often it
+		// listens, and at --fps 1 a key answered on the next frame is a key
+		// answered a second late. So a frame that answered keys draws the
+		// next at once; one holding half a keystroke waits no longer than the
+		// tick, since the grace for finishing it is counted in frames; and
+		// any wait ends early for a key, through the watcher. Otherwise a
+		// synced clock waits for the next point on its grid by the wall
+		// clock, rather than a ticker's free-running beat, which would keep
+		// whatever phase the clock started at -- asked afresh every frame, so
+		// a wake that ran late cannot push the ones after it late too.
+		wake := t.C
+		switch {
+		case handled > 0:
+			wake = rightAway
+		case dec.state != 0:
+			wake = time.After(tick)
+		case syncedFps > 0:
+			wake = time.After(untilGrid(time.Now(), syncedFps))
+		}
+		var keyReady chan struct{}
+		if watch != nil {
+			if !watch.armed {
+				watch.arm <- struct{}{}
+				watch.armed = true
+			}
+			keyReady = watch.ready
+		}
 		for waiting := true; waiting; {
 			select {
-			case <-t.C:
+			case <-wake:
+				waiting = false
+			case <-keyReady:
+				watch.armed = false
 				waiting = false
 			case s := <-sigs:
 				switch s {

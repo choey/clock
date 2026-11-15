@@ -73,6 +73,13 @@ Return, shown on the next frame, and saved by `S` along with the sizes and the
 zones. `S` saves what differs from the defaults this clock started with in
 this terminal. The key list names it.
 
+**Below ten a second, frames land on the second.** A slow clock used to tick
+at whatever phase it started -- at `--fps 1`, every frame at .691 past the
+second. Now each frame lands on the second or an even fraction of it and shows
+that very instant, so the second hand turns over on the second and the readout
+says .000. And keys no longer wait for the next frame: at `--fps 1` a key took
+up to a second and a half to be answered, and now takes under a millisecond.
+
 **`--fps N`, and `CLOCK_FPS` beside it.** How often the clock looks at the
 frame at all -- hands and readout together, and the clock's own wakeups. It is
 the blunt knob where `--readout` is the targeted one: below a hand's step rate

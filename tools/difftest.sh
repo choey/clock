@@ -847,6 +847,25 @@ for rate in 1 2 3 7 20 53 60 144 999 1000; do
 done
 frames=
 
+# Below 10 a second a clock keeps in step with the wall clock: every frame is
+# drawn at the latest point at or before its instant on a grid of n points a
+# second, k*1000/n whole milliseconds past it. A pinned instant is moved the
+# same way, which is what lets the two ports be held to the same points --
+# including the uneven ones, 3 and 9 a second, where the division leaves a
+# remainder, and the instants that sit just either side of a point. Ten is
+# the first rate that runs free.
+echo "== frames on the second =="
+for rate in 1 2 3 5 7 9 10; do
+	for at in 2026-07-15T09:53:07.987654Z 2026-07-15T09:53:07.333000Z \
+		2026-07-15T09:53:07.332999Z 2026-07-15T09:53:07.000000Z \
+		1969-12-31T23:59:59.950000Z; do
+		check "$at" 80 24 --fps "$rate" --readout ms UTC
+	done
+	frames=13
+	check "$SUMMER" 80 24 --fps "$rate" --readout ms ET,UTC
+	frames=
+done
+
 # The rate refused. --fps is a flag, so a value it cannot read is a user error
 # and says so, in the same words from both.
 for odd in 0 -1 1.5 +1 " 1" 1001 1000000 abc "" 09 ٣ 1e3; do
@@ -1046,6 +1065,9 @@ golden winter            "$WINTER" 120 24 ET,PT,UTC
 termprog=iTerm.app
 golden iterm             "$SUMMER" 80 24 UTC
 termprog=
+# And one drawn on the grid: at two a second a pinned .987 is the .500 before
+# it. The ports agreeing with each other cannot see the floor gone from both.
+golden synced            2026-07-15T09:53:07.987654Z 80 24 --fps 2 --readout ms UTC
 # A state, a city from the table, a city off the end of an IANA zone, and a
 # place merged with an abbreviation; then a list of places too long for its cell.
 golden places            "$SUMMER" 120 24 "Arizona,Boise,New York,Seattle,MT"

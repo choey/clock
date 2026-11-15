@@ -126,9 +126,13 @@ iTerm2), once with --readout seconds, and every time the clock looks with
 terminals charge for every update whatever it contains, so that is the cost
 to choose by. --fps sets how often the clock looks at all, hands and readout
 together, and CLOCK_FPS sets it once per terminal rather than every time, the
-flag winning if both are given. Any gap that is a multiple of 10ms leaves the
-milliseconds' last digit sitting on 0, which is why the default gap is 19ms
-and not 20.
+flag winning if both are given. It is never how soon a key is answered: that
+is at once, whatever the rate. Below 10 a second the clock keeps in step with
+the wall clock: each frame lands on the second or an even fraction of it and
+shows that very instant, so the second hand turns over on the second rather
+than whenever the clock happened to start. Any gap that is a multiple of 10ms
+leaves the milliseconds' last digit sitting on 0, which is why the default gap
+is 19ms and not 20.
 
 Space holds the frame still, for a screenshot, h or ? opens the key list, r
 resizes and aligns the clocks while they run, and s sets the readout, the rate,
@@ -281,6 +285,55 @@ PAINT_EVERY = TICK
 # at the precision shown, so a still of a pinned clock still says exactly when
 # it is.
 READOUT = "tenths"
+
+
+# The rate under which a clock keeps in step with the wall clock. At ten frames
+# a second or more, a frame is never more than a tenth late and the eye cannot
+# tell; below it, a clock free to start its ticks wherever it started would
+# turn its second hand over a large part of a second after the second, every
+# second.
+SYNC_BELOW = 10
+
+# The rate a clock is keeping in step at, or 0 for one at or above SYNC_BELOW,
+# which runs free. Set by apply_settings, from --fps.
+SYNCED_FPS = 0
+
+
+def grid_index(t, n):
+    """Which of n even points in t's second t has reached.
+
+    The k for which k*1000//n whole milliseconds past the second is the latest
+    at or before t. Whole numbers only, the same expression as clock.go's, so
+    the two ports put every frame on the same point. For n = 3 the points are
+    0, 333 and 666.
+    """
+    ms = t.microsecond // 1000
+    return ((ms + 1) * n + 999) // 1000 - 1
+
+
+def on_grid(t, n):
+    """t moved back to that point: the instant a synced frame draws.
+
+    So the readout shows .000 or .500 rather than whenever the wait happened
+    to end, and the hands stand where they stand on the second.
+    """
+    return t.replace(microsecond=grid_index(t, n) * 1000 // n * 1000)
+
+
+def until_grid(t, n):
+    """Seconds from t until the next point on the grid, and a millisecond more.
+
+    The next fraction of this second, or the next second; the millisecond is so
+    a wait that ends a hair early by the wall clock still lands past the point
+    rather than drawing the one before it again.
+    """
+    k = grid_index(t, n)
+    whole = t.replace(microsecond=0)
+    if k + 1 < n:
+        nxt = whole.replace(microsecond=(k + 1) * 1000 // n * 1000)
+    else:
+        nxt = whole + timedelta(seconds=1)
+    return (nxt - t).total_seconds() + 0.001
 
 
 def tick_for(fps):
@@ -1264,7 +1317,7 @@ def parse_pad(flag, val):
 Settings = collections.namedtuple(
     "Settings",
     "halign valign hpad vpad cell_ratio scale_auto rows per_row per_row_auto"
-    " readout gap color_when day_when",
+    " readout gap fps color_when day_when",
 )
 
 
@@ -1376,6 +1429,7 @@ def read_tunes(vals):
         per_row_auto,
         vals[TUNE_READOUT],
         tick_for(parse_count(vals[TUNE_FPS], "--fps", MAX_FPS)),
+        parse_count(vals[TUNE_FPS], "--fps", MAX_FPS),
         vals[TUNE_COLOR],
         vals[TUNE_DAY],
     )
@@ -1387,8 +1441,9 @@ def apply_settings(settings):
     A fixed scale sizes the face here and for good; --scale auto leaves ROWS
     to the per-frame search, which reads CELL_RATIO itself.
     """
-    global ROWS, COLS, CELL_RATIO, READOUT, PAINT_EVERY
+    global ROWS, COLS, CELL_RATIO, READOUT, PAINT_EVERY, SYNCED_FPS
     READOUT, PAINT_EVERY = settings.readout, settings.gap
+    SYNCED_FPS = settings.fps if settings.fps < SYNC_BELOW else 0
     CELL_RATIO = settings.cell_ratio
     if not settings.scale_auto:
         ROWS = settings.rows
@@ -3285,6 +3340,25 @@ def quiet_terminal():
         termios.tcsetattr(fd, termios.TCSAFLUSH, saved)
 
 
+def wait_for_key(seconds, interactive, wake_r):
+    """Wait up to `seconds`, ending early for a key or a signal.
+
+    A key is not read here -- the loop reads once a frame, in the one place it
+    always has, and the Go port's watcher only waits likewise. Only a clock
+    reading a terminal watches stdin at all: a redirected one reads as ready
+    for ever, and would never wait. The signal pipe is drained, since a byte
+    left in it would end every wait after this one at once.
+    """
+    fds = [wake_r] + ([sys.stdin] if interactive else [])
+    ready, _, _ = select.select(fds, [], [], max(0.0, seconds))
+    if wake_r in ready:
+        try:
+            while os.read(wake_r, 64):
+                pass
+        except (BlockingIOError, OSError):
+            pass
+
+
 def pending_keys():
     """Whatever is waiting on stdin, or b"" if nothing is.
 
@@ -3645,6 +3719,15 @@ def run(argv):
 
     signal.signal(signal.SIGTERM, _terminate)
     signal.signal(signal.SIGTSTP, _suspend)
+    # A pipe a signal writes a byte to, so the wait between frames ends the
+    # moment Ctrl+Z (or any other signal) arrives rather than when it would
+    # have anyway -- which at --fps 1 was up to a second later. Under PEP 475 a
+    # select the handler interrupts is otherwise simply retried. clock.go's
+    # signals are a channel its wait already selects on.
+    wake_r, wake_w = os.pipe()
+    os.set_blocking(wake_r, False)
+    os.set_blocking(wake_w, False)
+    signal.set_wakeup_fd(wake_w)
 
     # On a terminal, take the alternate screen and paint from its top corner.
     # Relative rewind cannot survive a resize: the terminal rewraps the frame
@@ -3706,6 +3789,13 @@ def run(argv):
                 now = frozen if frozen is not None else datetime.now(timezone.utc)
                 if one_shot:
                     now += step * drawn
+                # Below SYNC_BELOW a frame draws the instant on its grid, not
+                # the instant the wait ended: the second hand then turns over
+                # on the second, and the readout says .000 rather than how late
+                # the wake was. A pinned clock's instant is moved the same way,
+                # which is what lets difftest hold the two ports to it.
+                if SYNCED_FPS:
+                    now = on_grid(now, SYNCED_FPS)
                 if held is not None:
                     now = held
 
@@ -3890,6 +3980,7 @@ def run(argv):
                     if drawn >= frames:
                         break
                     continue
+                handled = False
                 if interactive:
                     was_tuning, prev_vals = tune.open, list(vals)
                     keys = []
@@ -3901,6 +3992,7 @@ def run(argv):
                     # timer: see KeyDecoder.
                     keys += decoder.settle()
                     quitting = False
+                    handled = bool(keys)
                     for key in keys:
                         if pressed(key, now):
                             quitting = True
@@ -3926,7 +4018,28 @@ def run(argv):
                     # unknown length: the screen resumes blank, and the reader
                     # should not have to watch it stay that way.
                     continue
-                time.sleep(PAINT_EVERY - (time.monotonic() % PAINT_EVERY))
+                # How long this wait may be. Keys come first, whatever the
+                # rate: the rate is how often the clock looks at the time, not
+                # how often it listens, and at --fps 1 a key answered on the
+                # next frame is a key answered a second late. So a frame that
+                # answered keys draws the next at once; one holding half a
+                # keystroke waits no longer than the tick, since the grace for
+                # finishing it is counted in frames; and any wait ends early
+                # for a key or a signal. Otherwise a synced clock waits for the
+                # next point on its grid by the wall clock, rather than a beat
+                # on the monotonic one, which would keep whatever phase the
+                # clock started at -- asked afresh every frame, so a wake that
+                # ran late cannot push the ones after it late too. clock.go
+                # makes the same choices in the same order.
+                if handled:
+                    continue
+                if decoder.state:
+                    gap = TICK
+                elif SYNCED_FPS:
+                    gap = until_grid(datetime.now(timezone.utc), SYNCED_FPS)
+                else:
+                    gap = PAINT_EVERY - (time.monotonic() % PAINT_EVERY)
+                wait_for_key(gap, interactive, wake_r)
     except KeyboardInterrupt:
         pass
     finally:

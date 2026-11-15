@@ -2,7 +2,10 @@
 
 package main
 
-import "syscall"
+import (
+	"syscall"
+	"time"
+)
 
 // termios ioctl requests; see term_bsd.go for why only these three differ.
 //
@@ -18,12 +21,13 @@ const (
 	tcSetFlush = syscall.TCSETS + 2
 )
 
-// selectRead asks whether stdin has anything to read, without waiting; see
+// selectRead asks whether stdin has anything to read, waiting up to wait for it
+// (zero: not at all); see
 // term_bsd.go for why it is written three times.
-func selectRead() (bool, error) {
+func selectRead(wait time.Duration) (bool, error) {
 	var fds syscall.FdSet
 	fds.Bits[0] = 1 // fd 0 is the only one asked about
-	tv := syscall.Timeval{}
+	tv := syscall.NsecToTimeval(int64(wait))
 	n, err := syscall.Select(1, &fds, nil, nil, &tv)
 	if err != nil {
 		return false, err

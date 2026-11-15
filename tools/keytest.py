@@ -596,6 +596,84 @@ def saves_settings(name, keys, want_tokens, flags, env=None, args=("-q", "ET,PT,
     report(True, name)
 
 
+def key_lag(argv, key=b"h", mark=HELP_MARK, tries=4):
+    """How long, in ms, from a key written to its answer being on screen.
+
+    Pressed at a different phase of the clock's own beat each time, since a
+    clock that answers on its next frame answers some keys quickly by luck.
+    The key is pressed again afterwards to close what it opened.
+    """
+    master, slave = open_pty()
+    proc = subprocess.Popen(argv, cwd=ROOT, stdin=slave, stdout=slave, stderr=subprocess.DEVNULL,
+                            env=dict(os.environ, COLUMNS=str(COLS), LINES=str(LINES),
+                                     TERM="xterm-256color"))
+    os.close(slave)
+    lags = []
+    try:
+        pump(master, bytearray(), 1.2)
+        for i in range(tries):
+            time.sleep(0.137 * (i + 1))
+            got, sent = bytearray(), time.monotonic()
+            os.write(master, key)
+            while time.monotonic() - sent < 2.5 and mark not in got:
+                ready, _, _ = select.select([master], [], [], 0.002)
+                if ready:
+                    try:
+                        got.extend(os.read(master, 1 << 16))
+                    except OSError:
+                        break
+            lags.append((time.monotonic() - sent) * 1000 if mark in got else float("inf"))
+            os.write(master, key)
+            pump(master, bytearray(), 1.2)
+    finally:
+        os.write(master, b"q")
+        pump(master, bytearray(), SETTLE)
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        os.close(master)
+    return lags
+
+
+def on_the_second(argv, seconds=3.5):
+    """A live clock's readouts, as (ms past the second, ms it arrived after).
+
+    Read off a pty as they arrive, against the wall clock: the first second is
+    start-up and is skipped. The readout must be in milliseconds and in UTC,
+    so the time it shows is comparable with this machine's.
+    """
+    master, slave = open_pty()
+    proc = subprocess.Popen(argv, cwd=ROOT, stdin=slave, stdout=slave, stderr=subprocess.DEVNULL,
+                            env=dict(os.environ, COLUMNS=str(COLS), LINES=str(LINES),
+                                     TERM="xterm-256color"))
+    os.close(slave)
+    shown, start = [], time.monotonic()
+    try:
+        while time.monotonic() - start < seconds:
+            ready, _, _ = select.select([master], [], [], 0.02)
+            if not ready:
+                continue
+            try:
+                chunk = os.read(master, 1 << 16)
+            except OSError:
+                break
+            arrived = time.time() % 86400
+            if time.monotonic() - start < 1.0:
+                continue
+            for m in re.finditer(rb"(\d\d):(\d\d):(\d\d)\.(\d\d\d)", chunk):
+                h, mi, s, ms = (int(x) for x in m.groups())
+                at = h * 3600 + mi * 60 + s + ms / 1000
+                shown.append((ms, round(((arrived - at) % 86400) * 1000)))
+    finally:
+        os.write(master, b"q")
+        pump(master, bytearray(), SETTLE)
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        os.close(master)
+    return sorted(set(shown))
+
+
 def cannot_save(name):
     """A save that cannot happen says so, and the clock carries on.
 
@@ -1211,6 +1289,35 @@ def main():
                    f"printed {said!r}")
             painted, _ = run(argv + ["-q", "UTC"], [b"h"])
             report(b"settings: readout" in painted, f"{impl} lists s in the key list")
+
+        # Below 10 a second the clock keeps in step with the wall clock: each
+        # frame shows a point on the second's grid, and arrives just after it.
+        # Two halves, and either can go missing while the other still looks
+        # right -- frames floored to the grid but woken whenever, which show
+        # .000 a large part of a second late, or woken on time but not floored,
+        # which show .002 -- so both are checked, on a live clock.
+        print("== frames on the second ==")
+        for rate, points in ((1, {0}), (2, {0, 500})):
+            for impl, argv in IMPLS:
+                shown = on_the_second(argv + ["-q", "--fps", str(rate), "--readout", "ms", "UTC"])
+                off = sorted({ms for ms, _ in shown} - points)
+                lags = sorted(lag for _, lag in shown)
+                late = lags[len(lags) // 2] if lags else None
+                report(bool(shown) and not off and late is not None and late < 150,
+                       f"{impl} at --fps {rate} draws on the second, and on time",
+                       f"shown {sorted({ms for ms, _ in shown})} ms past the second, "
+                       f"median {late} ms after it")
+
+        # The rate is how often the clock looks at the time, not how often it
+        # listens. At --fps 1 a key answered on the next frame was a key
+        # answered a second or more late -- read at the end of one frame and
+        # drawn on the one after -- so a wait now ends the moment a key is
+        # there, and a frame that answered keys draws the next at once.
+        print("== keys at a slow rate ==")
+        for impl, argv in IMPLS:
+            lags = key_lag(argv + ["-q", "--fps", "1", "UTC"])
+            report(max(lags) < 300, f"{impl} at --fps 1 answers a key at once",
+                   f"the key list took {' '.join(f'{x:.0f}' for x in lags)} ms")
 
         print("== saving ==")
         saves("S writes the clock down, and both read the file back")

@@ -2,7 +2,10 @@
 
 package main
 
-import "syscall"
+import (
+	"syscall"
+	"time"
+)
 
 // termios ioctl requests; see term_bsd.go for why only these three differ.
 const (
@@ -11,17 +14,18 @@ const (
 	tcSetFlush = syscall.TIOCSETAF
 )
 
-// selectRead asks whether stdin has anything to read, without waiting.
+// selectRead asks whether stdin has anything to read, waiting up to wait for
+// it -- zero, not at all.
 //
 // Identical to term_bsd.go's but for the field name: FreeBSD's syscall.FdSet
 // calls it X__fds_bits where every other platform here says Bits, which is
 // the whole reason this file exists apart from that one. A cross-compile for
 // freebsd/amd64 is what said so, on a tag, with the other four targets
 // already built.
-func selectRead() (bool, error) {
+func selectRead(wait time.Duration) (bool, error) {
 	var fds syscall.FdSet
 	fds.X__fds_bits[0] = 1 // fd 0 is the only one asked about
-	tv := syscall.Timeval{}
+	tv := syscall.NsecToTimeval(int64(wait))
 	if err := syscall.Select(1, &fds, nil, nil, &tv); err != nil {
 		return false, err
 	}

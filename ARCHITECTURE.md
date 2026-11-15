@@ -80,6 +80,35 @@ what the targeted ones were -- the readout's milliseconds every frame, and,
 more surprisingly, the faces themselves 39 to 51 times a second while the
 second hand's tip moved four to eleven. Hence the next two.
 
+**On the second, below ten a second.** A slow clock left to its own beat ticks
+at whatever phase it started: at `--fps 1`, measured, every frame at .691 past
+the second, the hand turning over 691ms late. So below `syncBelow` (10) each
+frame is drawn at `onGrid`'s instant -- the latest of n even points in its
+second, k·1000/n whole milliseconds past it, in integer arithmetic both ports
+share -- and the wait is `untilGrid`'s, to the next such point by the wall
+clock and a millisecond past it, asked afresh each frame rather than left to a
+ticker. Either half alone looks right and is wrong: floored but woken
+whenever, the readout says .000 several hundred milliseconds late; woken on
+time but not floored, it says .002. keytest checks both on a live clock --
+what a frame shows, and how long after that instant it arrives, 2ms in Go and
+6ms in Python -- and fails each with the other half removed. A pinned instant
+is floored the same way, which is what lets difftest and a golden hold the
+ports to the same points, the uneven 3 and 9 a second included.
+
+**Keys are not on the beat.** A key used to be read at the end of a frame and
+drawn on the next, so at `--fps 1` it took between 0.9 and 1.5 seconds to be
+answered. Now the wait between frames ends the moment a key is there, and a
+frame that answered keys draws the next at once; a half-read keystroke caps
+the wait at the tick, since its grace is counted in frames. None of that moves
+where keys are read -- once a frame, all at once, in the same place in both
+ports, which is the rule that cost a release when a Go reader goroutine broke
+it. Go's `keyWatch` only waits for stdin to be readable, a select with a
+timeout, and says so on a channel; Python selects on stdin and on a signal
+wake-up pipe, which also ends the wait for Ctrl+Z, where a handler interrupting
+the select would otherwise just see it retried under PEP 475. Only a clock
+reading a terminal watches stdin: a redirected one reads as ready for ever.
+Measured, `h` at `--fps 1` now puts up the key list in under a millisecond.
+
 **Hands on steps.** A hand drawn at the exact instant re-rounds its dots one or
 two at a time as its angle creeps, so it flickered along its length forty or
 fifty times a second while its tip moved four -- and every flicker was a frame
@@ -286,7 +315,7 @@ itself is diffed along with everything else that only shows between frames.
 
 Comparing the two proves they agree, which is not the same as proving either
 is right: a mistake made in both — and both is how they are always changed —
-looks like agreement. `tools/golden/` is the other half, nineteen renderings
+looks like agreement. `tools/golden/` is the other half, twenty renderings
 kept as bytes and compared against what the clock draws today, and
 `tools/fitfuzz.py` is the generative version of the same idea: many window
 sizes, each checked against an invariant rather than against the other
@@ -516,7 +545,7 @@ nothing to fail.
 | harness | proves | blind to |
 |---|---|---|
 | `tools/difftest.sh` | the two implementations agree byte for byte — frames, sequences of frames, errors, exit status, and the tables they share; `--fps` and `CLOCK_FPS` through the sequence, where the gap they set is the step between frames; the hands' steps, over eight-minute sequences that cross hundreds of them; `--readout` at each precision, including the instants where truncating and rounding part company; which `TERM_PROGRAM` is iTerm2's, and that a flag or a saved setting beats it | anything wrong in both, which is how they are always changed; and what a rate does to a *live* clock, which no pinned case can see |
-| `tools/golden/` | what the clock actually draws, at nineteen sizes and settings, iTerm2's default among them | the size nobody thought to keep |
+| `tools/golden/` | what the clock actually draws, at twenty sizes and settings, iTerm2's default and a frame on the second's grid among them | the size nobody thought to keep |
 | `tools/fitfuzz.py` | invariants at arbitrary sizes: nothing overflows the window, every line ends at the default colour, no escape outside the eight it may write | whether the picture is *right*, only that it is well formed |
 | `tools/keytest.py` | keys, resize and the startup hint, under a pty, both implementations screen for screen -- the streams replayed onto `tools/termscreen.py`, since a repaint is a handful of rows and not a frame; the tuner, both its pages, by the states it walks through rather than the frames they took, and a tuned frame against a clock started with the same flags; that `S` writes the same bytes from either port and that both read them back, settings and all, and that in iTerm2 it does not write down the readout the terminal started with; Ctrl+C and Ctrl+Z under job control, down to what the terminal is left in while a clock is stopped; that a character device is not therefore a terminal, and what a reader walking away leaves behind | a real terminal emulator; signal timing, where it compares loosely on purpose; and how a keystroke's bytes are split across reads, which is the terminal's business and deliberately not compared -- a difference there cost three releases before the harness stopped asking the question |
 | `tools/painttest.py` | that the rows a terminal is actually sent add up to the screen the frames describe, at several sizes and frame counts, in colour and out of it; that a frame with nothing new in it is not painted again; and that a resize is repainted whole, against a model that wipes its screen when the window moves | a real terminal emulator's own answer to a resize, which is the thing being guarded against and cannot be asked here |
